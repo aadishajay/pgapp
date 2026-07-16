@@ -35,6 +35,7 @@ async fn main() -> anyhow::Result<()> {
     meta::ensure_schema(&pool).await?;
     meta::sync_app(&pool, &app_def).await?;
     let runtime_app = meta::load_app(&pool, &app_def.name).await?;
+    let runtime_js = meta::load_runtime_js(&pool, &app_def.name).await?;
 
     println!("pgapp: serving '{}' from {}", runtime_app.name, markup_path);
     println!(
@@ -68,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
         pool,
         app: runtime_app,
         theme,
+        runtime_js,
     });
     let router = server::build_router(state);
 

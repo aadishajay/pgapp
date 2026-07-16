@@ -3,13 +3,15 @@
 //! Grammar (informal):
 //!
 //! ```text
-//! app       := "app" String "{" (nav | header | footer | entity | page)* "}"
+//! app       := "app" String "{" (nav | header | footer | entity | page | query)* "}"
 //!
 //! nav       := "nav" "{" navitem* "}"
 //! navitem   := "item" String ( "->" "page" Ident | "{" navitem* "}" )
 //!
 //! header    := "header" "{" item* "}"
 //! footer    := "footer" "{" item* "}"
+//!
+//! query     := "query" Ident "{" "sql" ":" String "}"
 //!
 //! entity    := "entity" String "{" field* "}"
 //! field     := "field" Ident ":" Ident ("required")? ("default" Value)?
@@ -18,32 +20,41 @@
 //! pagekind  := "list" "of" Ident | "detail" "of" Ident | "static"
 //! pageprop  := "columns" ":" identlist
 //!            | "form" ":" identlist
-//!            | "link" ":" Ident "->" "page" Ident
+//!            | "source" ":" "query" Ident
+//!            | "link" ":" Ident "->" "page" Ident ( "(" paramlist ")" )?
 //!            | "items" "{" item* "}"
 //!            | "item" Ident "as" itemtype
+//!            | query
 //! itemtype  := "text" | "readonly" | "checkbox"
-//!            | "radio" "(" stringlist ")"
-//!            | "popup" "(" stringlist ")"
-//! item      := "text" String | "link" String "->" "page" Ident
+//!            | "radio" choicesource
+//!            | "popup" choicesource
+//! choicesource := "(" stringlist ")" | "from" "query" Ident
+//! item      := "text" String
+//!            | "link" String "->" "page" Ident
+//!            | "region" String "from" "query" Ident
 //!
 //! identlist  := Ident ("," Ident)*
 //! stringlist := String ("," String)*
+//! paramlist  := parammap ("," parammap)*
+//! parammap   := Ident ":" Ident
 //! value      := Ident | Number
 //! ```
 //!
 //! `Ident` tokens are restricted to `[A-Za-z_][A-Za-z0-9_]*`, which means
-//! every entity/field/page name that reaches the metadata layer is already
-//! safe to splice into SQL as an identifier. Page names themselves are
-//! string literals (so they can be arbitrary display text), but anything
-//! that *targets* a page — `nav` items, `link` page properties, `link`
-//! page items — takes an `Ident`, so link targets are restricted to the
-//! same safe charset.
+//! every entity/field/page/query name that reaches the metadata layer is
+//! already safe to splice into SQL as an identifier. Page names
+//! themselves are string literals (so they can be arbitrary display
+//! text), but anything that *targets* a page — `nav` items, `link` page
+//! properties, `link` page items — takes an `Ident`, so link targets are
+//! restricted to the same safe charset. A query's `sql` is a raw string,
+//! opaque to this parser — see `meta::compile_named_query` for how its
+//! `:name` bind markers get turned into safe positional parameters.
 
 use anyhow::{bail, Context, Result};
 
 use crate::model::{
-    AppDef, EntityDef, FieldDef, FieldItemType, FieldType, LinkColumn, NavItem, PageDef, PageItem,
-    PageKind,
+    AppDef, ChoiceSource, EntityDef, FieldDef, FieldItemType, FieldType, LinkColumn, NavItem,
+    PageDef, PageItem, PageKind, QueryDef,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -177,6 +188,7 @@ impl Parser {
         let mut nav = Vec::new();
         let mut header = Vec::new();
         let mut footer = Vec::new();
+        let mut queries = Vec::new();
         while !self.at_symbol('}') {
             if self.at_keyword("entity") {
                 entities.push(self.parse_entity()?);
@@ -188,9 +200,11 @@ impl Parser {
                 header = self.parse_item_block("header")?;
             } else if self.at_keyword("footer") {
                 footer = self.parse_item_block("footer")?;
+            } else if self.at_keyword("query") {
+                queries.push(self.parse_query()?);
             } else {
                 bail!(
-                    "expected 'entity', 'page', 'nav', 'header', or 'footer' block, found {:?}",
+                    "expected 'entity', 'page', 'nav', 'header', 'footer', or 'query' block, found {:?}",
                     self.peek()
                 );
             }
@@ -204,7 +218,20 @@ impl Parser {
             nav,
             header,
             footer,
+            queries,
         })
+    }
+
+    /// Parses `"query" Ident "{" "sql" ":" String "}"`.
+    fn parse_query(&mut self) -> Result<QueryDef> {
+        self.expect_keyword("query")?;
+        let name = self.expect_ident()?;
+        self.expect_symbol('{')?;
+        self.expect_keyword("sql")?;
+        self.expect_symbol(':')?;
+        let sql = self.expect_string()?;
+        self.expect_symbol('}')?;
+        Ok(QueryDef { name, sql })
     }
 
     fn parse_nav(&mut self) -> Result<Vec<NavItem>> {
@@ -330,6 +357,8 @@ impl Parser {
         let mut link_column = None;
         let mut items = Vec::new();
         let mut item_types = std::collections::HashMap::new();
+        let mut queries = Vec::new();
+        let mut source_query = None;
         while !self.at_symbol('}') {
             if self.at_keyword("items") {
                 self.advance()?;
@@ -345,16 +374,33 @@ impl Parser {
                 item_types.insert(field, item_type);
                 continue;
             }
+            if self.at_keyword("query") {
+                queries.push(self.parse_query()?);
+                continue;
+            }
 
             let prop = self.expect_ident()?;
             self.expect_symbol(':')?;
             match prop.as_str() {
                 "columns" => columns = self.parse_ident_list()?,
                 "form" => form = self.parse_ident_list()?,
+                "source" => {
+                    self.expect_keyword("query")?;
+                    source_query = Some(self.expect_ident()?);
+                }
                 "link" => {
                     let field = self.expect_ident()?;
                     let target_page = self.parse_page_target()?;
-                    link_column = Some(LinkColumn { field, target_page });
+                    let extra_params = if self.at_symbol('(') {
+                        self.parse_param_list()?
+                    } else {
+                        Vec::new()
+                    };
+                    link_column = Some(LinkColumn {
+                        field,
+                        target_page,
+                        extra_params,
+                    });
                 }
                 other => bail!("unknown page property '{other}'"),
             }
@@ -370,6 +416,8 @@ impl Parser {
             link_column,
             items,
             item_types,
+            queries,
+            source_query,
         })
     }
 
@@ -390,10 +438,10 @@ impl Parser {
             FieldItemType::Checkbox
         } else if self.at_keyword("radio") {
             self.advance()?;
-            FieldItemType::Radio(self.parse_choice_list()?)
+            FieldItemType::Radio(self.parse_choice_source()?)
         } else if self.at_keyword("popup") {
             self.advance()?;
-            FieldItemType::Popup(self.parse_choice_list()?)
+            FieldItemType::Popup(self.parse_choice_source()?)
         } else {
             bail!(
                 "expected 'text', 'readonly', 'checkbox', 'radio', or 'popup' item type, found {:?}",
@@ -402,6 +450,18 @@ impl Parser {
         };
 
         Ok((field, item_type))
+    }
+
+    /// Parses a Radio/Popup choice source: either a literal `(...)` list
+    /// or `from query <Ident>`.
+    fn parse_choice_source(&mut self) -> Result<ChoiceSource> {
+        if self.at_keyword("from") {
+            self.advance()?;
+            self.expect_keyword("query")?;
+            Ok(ChoiceSource::Query(self.expect_ident()?))
+        } else {
+            Ok(ChoiceSource::Static(self.parse_choice_list()?))
+        }
     }
 
     fn parse_choice_list(&mut self) -> Result<Vec<String>> {
@@ -415,6 +475,26 @@ impl Parser {
         Ok(out)
     }
 
+    /// Parses `"(" Ident ":" Ident ("," Ident ":" Ident)* ")"` — the
+    /// optional extra parameters on a `link:` page property.
+    fn parse_param_list(&mut self) -> Result<Vec<(String, String)>> {
+        self.expect_symbol('(')?;
+        let mut out = vec![self.parse_param_pair()?];
+        while self.at_symbol(',') {
+            self.advance()?;
+            out.push(self.parse_param_pair()?);
+        }
+        self.expect_symbol(')')?;
+        Ok(out)
+    }
+
+    fn parse_param_pair(&mut self) -> Result<(String, String)> {
+        let field = self.expect_ident()?;
+        self.expect_symbol(':')?;
+        let param = self.expect_ident()?;
+        Ok((field, param))
+    }
+
     fn parse_page_item(&mut self) -> Result<PageItem> {
         if self.at_keyword("text") {
             self.advance()?;
@@ -424,8 +504,18 @@ impl Parser {
             let label = self.expect_string()?;
             let target_page = self.parse_page_target()?;
             Ok(PageItem::Link { label, target_page })
+        } else if self.at_keyword("region") {
+            self.advance()?;
+            let label = self.expect_string()?;
+            self.expect_keyword("from")?;
+            self.expect_keyword("query")?;
+            let query = self.expect_ident()?;
+            Ok(PageItem::Region { label, query })
         } else {
-            bail!("expected 'text' or 'link' page item, found {:?}", self.peek());
+            bail!(
+                "expected 'text', 'link', or 'region' page item, found {:?}",
+                self.peek()
+            );
         }
     }
 
@@ -471,7 +561,10 @@ mod tests {
         assert!(matches!(&app.footer[0], PageItem::Text(_)));
         assert!(matches!(&app.footer[1], PageItem::Link { .. }));
 
-        assert_eq!(app.pages.len(), 3);
+        assert_eq!(app.queries.len(), 1);
+        assert_eq!(app.queries[0].name, "assignees");
+
+        assert_eq!(app.pages.len(), 4);
         let list_page = app.pages.iter().find(|p| p.name == "Tasks").unwrap();
         assert_eq!(list_page.kind, PageKind::List);
         assert_eq!(
@@ -485,6 +578,7 @@ mod tests {
         let link = list_page.link_column.as_ref().unwrap();
         assert_eq!(link.field, "title");
         assert_eq!(link.target_page, "TaskDetail");
+        assert_eq!(link.extra_params, vec![("priority".to_string(), "priority".to_string())]);
 
         assert!(matches!(
             list_page.item_types.get("priority"),
@@ -500,16 +594,36 @@ mod tests {
         ));
         assert!(list_page.item_types.get("title").is_none());
         assert!(list_page.item_types.get("done").is_none());
-        if let Some(FieldItemType::Radio(choices)) = list_page.item_types.get("priority") {
+        if let Some(FieldItemType::Radio(ChoiceSource::Static(choices))) =
+            list_page.item_types.get("priority")
+        {
             assert_eq!(choices, &vec!["Low", "Medium", "High"]);
+        } else {
+            panic!("expected a static radio choice list for 'priority'");
         }
-        if let Some(FieldItemType::Popup(choices)) = list_page.item_types.get("assignee") {
-            assert_eq!(choices, &vec!["Alice", "Bob", "Carol"]);
-        }
+        assert!(matches!(
+            list_page.item_types.get("assignee"),
+            Some(FieldItemType::Popup(ChoiceSource::Query(name))) if name == "assignees"
+        ));
+
+        assert_eq!(list_page.queries.len(), 1);
+        assert_eq!(list_page.queries[0].name, "recent");
+        assert!(list_page
+            .items
+            .iter()
+            .any(|item| matches!(item, PageItem::Region { query, .. } if query == "recent")));
 
         let detail_page = app.pages.iter().find(|p| p.name == "TaskDetail").unwrap();
         assert_eq!(detail_page.kind, PageKind::Detail);
         assert_eq!(detail_page.entity.as_deref(), Some("tasks"));
+        assert_eq!(detail_page.queries.len(), 1);
+        assert_eq!(detail_page.queries[0].name, "siblings");
+
+        let open_tasks = app.pages.iter().find(|p| p.name == "OpenTasks").unwrap();
+        assert_eq!(open_tasks.kind, PageKind::List);
+        assert_eq!(open_tasks.source_query.as_deref(), Some("open"));
+        assert_eq!(open_tasks.queries.len(), 1);
+        assert_eq!(open_tasks.queries[0].name, "open");
 
         let about_page = app.pages.iter().find(|p| p.name == "About").unwrap();
         assert_eq!(about_page.kind, PageKind::Static);
@@ -518,12 +632,64 @@ mod tests {
         assert!(matches!(&about_page.items[0], PageItem::Text(_)));
         assert!(matches!(&about_page.items[1], PageItem::Link { .. }));
 
-        assert_eq!(app.nav.len(), 2);
+        assert_eq!(app.nav.len(), 3);
         assert_eq!(app.nav[0].label, "Tasks");
         assert_eq!(app.nav[0].target_page.as_deref(), Some("Tasks"));
-        assert_eq!(app.nav[1].label, "More");
-        assert!(app.nav[1].target_page.is_none());
-        assert_eq!(app.nav[1].children.len(), 1);
-        assert_eq!(app.nav[1].children[0].label, "About");
+        assert_eq!(app.nav[1].label, "Open");
+        assert_eq!(app.nav[2].label, "More");
+        assert!(app.nav[2].target_page.is_none());
+        assert_eq!(app.nav[2].children.len(), 1);
+        assert_eq!(app.nav[2].children[0].label, "About");
+    }
+
+    #[test]
+    fn parses_named_queries_and_regions() {
+        let src = r#"
+            app "Demo" {
+                query assignees {
+                    sql: "select name as value from people"
+                }
+
+                entity "tasks" {
+                    field id: id
+                    field title: text required
+                    field assignee: text
+                }
+
+                page "Tasks" as list of tasks {
+                    columns: title
+                    form: title, assignee
+                    item assignee as popup from query assignees
+                    query recent {
+                        sql: "select id as value, title as label from pgapp_data.demo_tasks order by id desc limit 5"
+                    }
+                    items {
+                        region "Recently added" from query recent
+                    }
+                }
+
+                page "ProjectTasks" as list of tasks {
+                    source: query assignees
+                    link: title -> page ProjectTasks (assignee: owner)
+                }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+        assert_eq!(app.queries.len(), 1);
+        assert_eq!(app.queries[0].name, "assignees");
+
+        let tasks_page = app.pages.iter().find(|p| p.name == "Tasks").unwrap();
+        assert_eq!(tasks_page.queries.len(), 1);
+        assert_eq!(tasks_page.queries[0].name, "recent");
+        assert!(matches!(
+            tasks_page.item_types.get("assignee"),
+            Some(FieldItemType::Popup(ChoiceSource::Query(name))) if name == "assignees"
+        ));
+        assert!(matches!(&tasks_page.items[0], PageItem::Region { query, .. } if query == "recent"));
+
+        let project_tasks = app.pages.iter().find(|p| p.name == "ProjectTasks").unwrap();
+        assert_eq!(project_tasks.source_query.as_deref(), Some("assignees"));
+        let link = project_tasks.link_column.as_ref().unwrap();
+        assert_eq!(link.extra_params, vec![("assignee".to_string(), "owner".to_string())]);
     }
 }

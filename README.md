@@ -19,6 +19,13 @@ Postgres, written in Rust.
   of `.pgapp-*` classes; a swappable `theme.css` (see "Theming" below)
   gives them their actual look. `assets/app.css`/`app.js` still exist as
   a per-app override layer on top of whatever theme is active.
+- **Named queries**: reusable SQL, declared once (app-wide or scoped to
+  one page) and referenced by name from LOVs, regions, and a list page's
+  row source — see "Named queries" below.
+- **A DB-stored JS runtime**: `/runtime.js` isn't a static file — it's a
+  row in `pgapp_meta`, seeded from a built-in default and editable from
+  there afterward. It exposes `pgapp.getItem`/`pgapp.setItem` so item
+  values are captured/set by a method call, not ad hoc DOM lookups.
 - **Rust instead of PostgREST**: rather than fronting Postgres with
   PostgREST, pgapp's own Axum server owns routing directly, using the
   metadata to build parameterized SQL on the fly.
@@ -47,9 +54,15 @@ app "Todo" {
 
   nav {
     item "Tasks" -> page Tasks
+    item "Open" -> page OpenTasks
     item "More" {
       item "About" -> page About
     }
+  }
+
+  # App-scoped: visible from every page's LOVs/regions.
+  query assignees {
+    sql: "select distinct assignee as value from pgapp_data.todo_tasks where assignee is not null order by 1"
   }
 
   entity "tasks" {
@@ -65,16 +78,40 @@ app "Todo" {
   page "Tasks" as list of tasks {
     columns: title, priority, done, created_at
     form: title, priority, done, assignee, notes
-    link: title -> page TaskDetail
+    link: title -> page TaskDetail (priority: priority)
     item priority as radio ("Low", "Medium", "High")
-    item assignee as popup ("Alice", "Bob", "Carol")
+    item assignee as popup from query assignees
     item notes as readonly
+
+    # Page-scoped: only this page's items/LOVs can see "recent".
+    query recent {
+      sql: "select id, title, priority, done from pgapp_data.todo_tasks order by id desc limit 5"
+    }
     items {
       text "Manage your tasks below. Click a title to see its detail page."
+      region "Recently added" from query recent
     }
   }
 
   page "TaskDetail" as detail of tasks {
+    query siblings {
+      sql: "select id, title from pgapp_data.todo_tasks
+            where priority = :priority::text and id != :id::integer
+            order by id"
+    }
+    items {
+      region "Other tasks with the same priority" from query siblings
+    }
+  }
+
+  page "OpenTasks" as list of tasks {
+    query open {
+      sql: "select id, title, priority, assignee from pgapp_data.todo_tasks
+            where done = false order by id"
+    }
+    source: query open
+    columns: title, priority, assignee
+    form: title, priority, done, assignee, notes
   }
 
   page "About" as static {
@@ -87,8 +124,9 @@ app "Todo" {
 ```
 
 - `header { }` / `footer { }` (optional, top-level) declare app-wide
-  chrome shown on every page — the same `text`/`link` items as page
-  `items` (below), just scoped to the whole app instead of one page.
+  chrome shown on every page — the same `text`/`link`/`region` items as
+  page `items` (below), just scoped to the whole app instead of one
+  page.
 - `nav { }` (optional, top-level) declares the app's navigation bar.
   Each `item "Label"` is either a leaf (`-> page <Name>`) or a group
   (`{ ... }` of nested items) — nesting groups gives you a multi-level
@@ -105,11 +143,13 @@ app "Todo" {
     selected via `?id=` on its URL. Shows every field on the entity.
   - `page ... as static` — no entity at all, just `items`.
 - `link: <field> -> page <Name>` (list pages only) turns that report
-  column into a link to another page, passing the row's id as `?id=` —
-  the classic "click a row to see its detail" pattern.
-- `items { }` (any page kind) adds `text "..."` (static copy) and/or
-  `link "Label" -> page <Name>` (a link to another page) to the page
-  body — content that isn't tied to the entity's table/form.
+  column into a link to another page, passing the row's id as `?id=`,
+  optionally forwarding other columns as extra query parameters via
+  `(field: param, ...)` — see "Named queries" for what those parameters
+  are *for*.
+- `items { }` (any page kind) adds `text "..."`, `link "Label" -> page
+  <Name>`, and/or `region "Label" from query <name>` to the page body —
+  content that isn't tied to the entity's table/form.
 - `item <field> as <type>` (list pages only) picks how a form field is
   presented — a "page item type" in APEX terms. Types:
   - `text` — a plain input (the default for text/integer/timestamp).
@@ -120,20 +160,74 @@ app "Todo" {
     show or resubmit yet).
   - `checkbox` — a real `<input type=checkbox>` (the default for
     boolean fields, replacing the old true/false dropdown).
-  - `radio ("A", "B", ...)` — a radio button group over a fixed,
-    markup-declared list of choices (a "static LOV").
-  - `popup ("A", "B", ...)` — a "Pop Up LOV": a button that opens a
-    native `<dialog>` listing the same kind of static choice list.
+  - `radio (...)` / `popup (...)` — a radio group / a "Pop Up LOV" (a
+    button opening a native `<dialog>`), each sourced from either a
+    fixed `("A", "B", ...)` list or `from query <name>` (see below).
   - Fields left undeclared get `FieldItemType::default_for` their
     column type (see `src/model.rs`) — `id` fields default to
-    `readonly`. There's no dynamic LOV (choices from another entity)
-    yet; see the roadmap.
+    `readonly`.
 - Anything that targets a page by name (`nav` items, `link:`, `link`
   items) uses a bare identifier, not a quoted string — restricting link
-  targets to the same safe charset as SQL identifiers.
+  targets to the same safe charset as SQL identifiers. Query names are
+  the same way.
 
 See `src/markup.rs` for the full grammar and `examples/todo.app` for a
 working example.
+
+## Named queries
+
+A `query <name> { sql: "..." }` block is reusable SQL, referenced by
+name from a `radio`/`popup` item type (`from query <name>`), a page
+`region` item, or a list page's `source: query <name>`. Two scopes:
+
+- Declared at the top of `app { }`: visible from every page.
+- Declared inside a `page { }` block: visible only there, shadowing an
+  app-scoped query of the same name.
+
+`sql` can contain `:name` bind markers (a literal `::` Postgres cast is
+left alone, so ordinary casts in hand-written SQL are never mistaken for
+one). Every marker becomes a genuine bind parameter — never string
+interpolation — always cast as `$N::text`, so a query comparing against
+a non-text column needs its own trailing cast: `where project_id =
+:project_id::integer`. Bind values come from a page's incoming
+query-string parameters, plus — when editing/viewing one row — that
+row's own field values (query-string wins on conflict). That's also how
+a value on one page reaches a query on another: `link: <field> -> page
+<Name> (field: param)` forwards a row's column as `?param=...` on the
+target page's URL, where its named queries can read it as `:param`. The
+"other tasks with the same priority" region above demonstrates this —
+try changing the forwarded `?priority=` in the URL and the region's
+results change with it, independent of the row actually being viewed.
+
+`radio`/`popup` queries must alias their columns `value` and, optionally,
+`label` (defaulting to `value` if omitted) — e.g. `select distinct
+assignee as value from ...`. A list page's `source: query <name>` needs
+an `id` column plus whatever the page's `columns`/`form` reference by
+name; writes (create/update/delete) still always target the underlying
+entity by id, regardless of what the report itself selects. A `region`
+item has no column requirements — it renders whatever the query returns.
+
+Query SQL isn't translated from logical entity names — it references
+the entity's real physical table (`pgapp_data.<app slug>_<entity
+slug>`, printed at startup for each page). This also means query results
+are decoded generically (via Postgres's `to_jsonb`) rather than through
+the same typed pipeline as entity-bound CRUD, so there's no column-type
+checking on a query's own SELECT list beyond what Postgres itself
+enforces.
+
+## Runtime JS
+
+`GET /runtime.js` isn't a static file: it's a row in
+`pgapp_meta.app_runtime_js`, seeded from a built-in default (`src/runtime.js`)
+the first time an app is synced and left alone after that — so it's
+metadata like everything else, editable in the database without
+touching the binary. It's auto-linked into every rendered page and
+defines `window.pgapp.getItem(name)` / `.setItem(name, value)`, which
+work the same way regardless of whether `name` is a plain input, a
+checkbox, a radio group, or a popup LOV's hidden input. The popup LOV's
+"pick a value" buttons call `pgapp.setItem(...)` rather than touching
+the DOM directly — capturing/setting an item's value by a method call is
+the point, so any future custom action code has one consistent API.
 
 ## Architecture
 
@@ -173,10 +267,10 @@ of a fixed set of classes — `pgapp-nav`, `pgapp-link`, `pgapp-title`,
 `pgapp-navbar-submenu`), `pgapp-items`, `pgapp-text`, `pgapp-header`,
 `pgapp-footer`, `pgapp-checkbox`, `pgapp-readonly`, `pgapp-radio-group`
 (+ `pgapp-radio-option`), `pgapp-popup` (+ `pgapp-popup-dialog` /
-`pgapp-popup-list`) — and nothing else. A **theme** is what gives those
-classes an actual appearance. This is the whole contract; anything that
-satisfies it is a valid theme, regardless of what design system it's
-built on.
+`pgapp-popup-list`), `pgapp-region` (+ `pgapp-region-title`) — and
+nothing else. A **theme** is what gives those classes an actual
+appearance. This is the whole contract; anything that satisfies it is a
+valid theme, regardless of what design system it's built on.
 
 ### The contract
 
@@ -229,18 +323,21 @@ On startup it prints the URL for each page, e.g. `http://127.0.0.1:8080/Tasks`.
 - `POST /:page/:id/update`        — update a row (`list` pages only)
 - `POST /:page/:id/delete`        — delete a row (`list` pages only)
 - `GET  /api/:entity`             — JSON list for that entity
+- `GET  /runtime.js`              — the DB-stored `pgapp` JS runtime
 
 ## Roadmap (not in this slice)
 
 - Multi-app routing (`/:app/:page`) instead of one app per process
-- More field types, relationships (foreign keys, lookups) — including a
-  *dynamic* LOV (popup/radio choices queried from another entity, not
-  just a static markup-declared list)
+- More field types and real relationships (foreign keys) — named
+  queries cover ad hoc joins/filters today, but there's no schema-level
+  concept of one entity referencing another yet
 - A real drag-and-drop builder UI that edits the markup/metadata
 - `action`/`flow` blocks in the markup for pluggable server-side logic
-  (theming, the CSS/JS asset hooks, and now nav/page items/linking/item
-  types are the pluggable extension points so far; actions and flows
-  are next)
+  (theming, the CSS/JS asset hooks, nav/page items/linking/item types,
+  and now named queries + the JS runtime are the pluggable extension
+  points so far; actions and flows are next — likely built as a second
+  runtime.js convention plus a way to declare which item/event triggers
+  which named query or action)
 - Auth/roles at the page and field level
 - Migrating existing data tables when field definitions change beyond
   adding a column: `ensure_data_table` now runs `ADD COLUMN IF NOT
@@ -249,3 +346,10 @@ On startup it prints the URL for each page, e.g. `http://127.0.0.1:8080/Tasks`.
   changes, or drops
 - Separate field lists for create vs. edit forms, so e.g. a `readonly`
   field with a meaningful default doesn't get nulled out on create
+- Region/LOV resolution shares one `RegionRows` map per request keyed
+  only by query name; a page-scoped query and an app-scoped one (used
+  by header/footer) that happen to share a name on the same request
+  would collide there — rare, and documented rather than guarded against
+- No compile-time or startup-time validation of a named query's SQL
+  beyond the bind-marker scan — a typo in `sql` surfaces as a runtime
+  error the first time that query actually runs

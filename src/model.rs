@@ -99,34 +99,57 @@ impl PageKind {
     }
 }
 
+/// A named, reusable SQL query. Declared at app scope (visible to every
+/// page) or nested inside one `page { }` block (visible only there,
+/// shadowing an app-scoped query of the same name). `sql` may contain
+/// `:name` bind markers — see `meta::compile_named_query` for how those
+/// get turned into safe positional parameters.
+#[derive(Debug, Clone)]
+pub struct QueryDef {
+    pub name: String,
+    pub sql: String,
+}
+
 /// A page item: content placed on a page beyond its entity-bound
 /// table/form. `Link` is how pages reference each other outside of the
-/// global nav bar.
+/// global nav bar; `Region` renders a named query's rows as a table.
 #[derive(Debug, Clone)]
 pub enum PageItem {
     Text(String),
     Link { label: String, target_page: String },
+    Region { label: String, query: String },
 }
 
 /// Turns one report column into a link to another page, passing the
-/// row's id as a `?id=` query parameter — the common "click a row to
-/// see its detail page" pattern.
+/// row's id as a `?id=` query parameter (the common "click a row to see
+/// its detail page" pattern) plus, optionally, other columns from the
+/// same row forwarded as additional named query parameters — this is
+/// how a value on one page reaches a named query on another page.
 #[derive(Debug, Clone)]
 pub struct LinkColumn {
     pub field: String,
     pub target_page: String,
+    pub extra_params: Vec<(String, String)>,
+}
+
+/// Where a Radio/Popup item's choices come from: a fixed list written
+/// directly in the markup, or the live result of a named query (which
+/// must alias its columns `value` and, optionally, `label`).
+#[derive(Debug, Clone)]
+pub enum ChoiceSource {
+    Static(Vec<String>),
+    Query(String),
 }
 
 /// How a form field is presented, independent of its Postgres column
-/// type. `Radio` and `Popup` carry a static list of choices (a "static
-/// LOV" in APEX terms — no lookup against another entity yet).
+/// type.
 #[derive(Debug, Clone)]
 pub enum FieldItemType {
     Text,
     ReadOnly,
     Checkbox,
-    Radio(Vec<String>),
-    Popup(Vec<String>),
+    Radio(ChoiceSource),
+    Popup(ChoiceSource),
 }
 
 impl FieldItemType {
@@ -150,19 +173,26 @@ impl FieldItemType {
         }
     }
 
-    pub fn choices(&self) -> &[String] {
+    pub fn choice_source(&self) -> Option<&ChoiceSource> {
         match self {
-            FieldItemType::Radio(choices) | FieldItemType::Popup(choices) => choices,
-            FieldItemType::Text | FieldItemType::ReadOnly | FieldItemType::Checkbox => &[],
+            FieldItemType::Radio(source) | FieldItemType::Popup(source) => Some(source),
+            FieldItemType::Text | FieldItemType::ReadOnly | FieldItemType::Checkbox => None,
         }
     }
 
-    pub fn from_parts(kind: &str, choices: Vec<String>) -> Self {
+    /// Reconstructs a resolved item type from `pgapp_meta.page_field_items`:
+    /// `choices` is the static list (empty when sourced from a query),
+    /// `choices_query` is the query name (empty when static).
+    pub fn from_parts(kind: &str, choices: Vec<String>, choices_query: Option<String>) -> Self {
+        let source = || match choices_query {
+            Some(name) if !name.is_empty() => ChoiceSource::Query(name),
+            _ => ChoiceSource::Static(choices),
+        };
         match kind {
             "readonly" => FieldItemType::ReadOnly,
             "checkbox" => FieldItemType::Checkbox,
-            "radio" => FieldItemType::Radio(choices),
-            "popup" => FieldItemType::Popup(choices),
+            "radio" => FieldItemType::Radio(source()),
+            "popup" => FieldItemType::Popup(source()),
             _ => FieldItemType::Text,
         }
     }
@@ -180,6 +210,13 @@ pub struct PageDef {
     /// Explicit `item <field> as <type>` overrides; fields not listed
     /// here get `FieldItemType::default_for` their column type.
     pub item_types: std::collections::HashMap<String, FieldItemType>,
+    /// Queries visible only within this page (in addition to the app's).
+    pub queries: Vec<QueryDef>,
+    /// `source: query <name>` — when set, a `list` page's rows come from
+    /// this named query instead of a flat `SELECT * FROM` the entity's
+    /// table. Create/update/delete are unaffected: they still write to
+    /// the underlying entity by id.
+    pub source_query: Option<String>,
 }
 
 /// One entry in the app's (possibly multi-level) navigation bar. A leaf
@@ -198,10 +235,13 @@ pub struct AppDef {
     pub pages: Vec<PageDef>,
     pub nav: Vec<NavItem>,
     /// Shown on every page, above the nav bar / below the footer
-    /// respectively. Reuses `PageItem` (text/link) — the same content
-    /// model as a page's `items`.
+    /// respectively. Reuses `PageItem` (text/link/region) — the same
+    /// content model as a page's `items`.
     pub header: Vec<PageItem>,
     pub footer: Vec<PageItem>,
+    /// Queries visible from every page (a page-scoped query of the same
+    /// name takes precedence).
+    pub queries: Vec<QueryDef>,
 }
 
 impl AppDef {

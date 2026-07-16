@@ -325,6 +325,22 @@ body {
   margin-bottom: 0;
 }
 
+/* A region: a named query's rows rendered inline wherever it's placed. */
+.pgapp-region {
+  margin: 0 0 1.25rem;
+  padding: 1rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+}
+.pgapp-region-title {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.pgapp-region .pgapp-table {
+  margin-bottom: 0;
+}
+
 .pgapp-alert {
   border-radius: var(--radius);
   padding: 0.75rem 1rem;

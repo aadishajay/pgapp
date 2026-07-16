@@ -5,11 +5,13 @@
 //! Markup here only ever uses the fixed `.pgapp-*` class names — the
 //! "Theme contract" documented in the README. All actual look-and-feel
 //! comes from `/theme.css` (the active theme, see src/theme.rs) plus any
-//! app-level override in assets/app.css.
+//! app-level override in assets/app.css. Item value capture (the popup
+//! LOV) goes through the DB-stored `pgapp.setItem(...)` runtime library
+//! (see `/runtime.js`, src/server.rs) rather than raw DOM calls.
 
-use crate::meta::{Chrome, NavNode, RuntimePage, RuntimePageItem};
-use crate::model::{FieldItemType, FieldType};
-use std::collections::BTreeMap;
+use crate::meta::{Chrome, NavNode, RegionRows, RuntimePage, RuntimePageItem};
+use crate::model::{ChoiceSource, FieldItemType, FieldType};
+use std::collections::{BTreeMap, HashMap};
 
 fn escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -23,6 +25,20 @@ fn escape(s: &str) -> String {
 /// it into an HTML attribute (see `render_popup`).
 fn js_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+/// Percent-encodes a query-string value. Used for anything forwarded
+/// across pages (row ids, `link:` extra params) so a value containing
+/// `&`/`=`/spaces can't corrupt the URL it's embedded in.
+fn url_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 /// Extra `<link>`/`<script>` tags for user-supplied assets, if present —
@@ -76,9 +92,10 @@ fn nav_node_html(node: &NavNode) -> String {
     html
 }
 
-/// Renders an item list (page `items`, or the app's header/footer) —
-/// static text and links to other pages.
-fn items_html(items: &[RuntimePageItem]) -> String {
+/// Renders an item list (page `items`, or the app's header/footer):
+/// static text, links to other pages, and regions rendering a named
+/// query's already-resolved rows (see `server::resolve_regions`).
+fn items_html(items: &[RuntimePageItem], regions: &RegionRows) -> String {
     if items.is_empty() {
         return String::new();
     }
@@ -95,7 +112,43 @@ fn items_html(items: &[RuntimePageItem]) -> String {
                     label = escape(label),
                 ));
             }
+            RuntimePageItem::Region { label, query } => {
+                html.push_str(&render_region(label, query, regions));
+            }
         }
+    }
+    html.push_str("</div>");
+    html
+}
+
+/// Renders one `Region` item: a named query's rows as a table, with
+/// column headers taken from the (already-resolved) row keys.
+fn render_region(label: &str, query: &str, regions: &RegionRows) -> String {
+    let mut html = format!(
+        r#"<div class="pgapp-region"><h3 class="pgapp-region-title">{}</h3>"#,
+        escape(label)
+    );
+    match regions.get(query).filter(|rows| !rows.is_empty()) {
+        Some(rows) => {
+            let mut cols: Vec<&String> = rows[0].keys().collect();
+            cols.sort();
+
+            html.push_str(r#"<table class="pgapp-table"><thead><tr>"#);
+            for c in &cols {
+                html.push_str(&format!("<th>{}</th>", escape(c)));
+            }
+            html.push_str("</tr></thead><tbody>");
+            for row in rows {
+                html.push_str("<tr>");
+                for c in &cols {
+                    let val = row.get(*c).and_then(|v| v.as_deref()).unwrap_or("");
+                    html.push_str(&format!("<td>{}</td>", escape(val)));
+                }
+                html.push_str("</tr>");
+            }
+            html.push_str("</tbody></table>");
+        }
+        None => html.push_str(r#"<p class="pgapp-text">No results.</p>"#),
     }
     html.push_str("</div>");
     html
@@ -107,7 +160,7 @@ fn layout(title: &str, chrome: Chrome, body: &str) -> String {
     } else {
         format!(
             r#"<header class="pgapp-header">{}</header>"#,
-            items_html(chrome.header)
+            items_html(chrome.header, chrome.regions)
         )
     };
     let footer = if chrome.footer.is_empty() {
@@ -115,7 +168,7 @@ fn layout(title: &str, chrome: Chrome, body: &str) -> String {
     } else {
         format!(
             r#"<footer class="pgapp-footer">{}</footer>"#,
-            items_html(chrome.footer)
+            items_html(chrome.footer, chrome.regions)
         )
     };
 
@@ -126,6 +179,7 @@ fn layout(title: &str, chrome: Chrome, body: &str) -> String {
 <meta charset="utf-8">
 <title>{title}</title>
 <link rel="stylesheet" href="/theme.css">
+<script src="/runtime.js" defer></script>
 {assets}
 </head>
 <body>
@@ -145,16 +199,18 @@ fn layout(title: &str, chrome: Chrome, body: &str) -> String {
 
 /// Renders a "Pop Up LOV": a hidden input holding the actual value, a
 /// button showing the current choice, and a native `<dialog>` listing
-/// every choice — no JS framework, just `showModal()`/`close()`.
-fn render_popup(field_name: &str, value: &str, choices: &[String]) -> String {
+/// every (value, label) choice. Picking one calls the pgapp runtime's
+/// `setItem(name, value)` — see `/runtime.js` — instead of touching the
+/// DOM directly, so any custom action code can capture/set the same
+/// item the same way.
+fn render_popup(field_name: &str, value: &str, choices: &[(String, String)]) -> String {
     let name = escape(field_name);
     let dialog_id = format!("pgapp-popup-dialog-{name}");
-    let value_id = format!("pgapp-popup-value-{name}");
     let display_id = format!("pgapp-popup-display-{name}");
 
     let mut html = format!(
         r#"<div class="pgapp-popup">
-<input type="hidden" id="{value_id}" name="{name}" value="{value}">
+<input type="hidden" name="{name}" value="{value}">
 <button type="button" class="pgapp-btn pgapp-btn-secondary" onclick="document.getElementById('{dialog_id}').showModal()">
 <span id="{display_id}">{display}</span>
 </button>
@@ -168,13 +224,13 @@ fn render_popup(field_name: &str, value: &str, choices: &[String]) -> String {
         },
     );
 
-    for choice in choices {
+    for (choice_value, choice_label) in choices {
         // JS-escape first (protects the single-quoted JS string), then
         // HTML-escape the result (protects the double-quoted attribute).
-        let js_choice = escape(&js_escape(choice));
+        let js_value = escape(&js_escape(choice_value));
         html.push_str(&format!(
-            r#"<li><button type="button" onclick="document.getElementById('{value_id}').value='{js_choice}'; document.getElementById('{display_id}').textContent='{js_choice}'; document.getElementById('{dialog_id}').close();">{label}</button></li>"#,
-            label = escape(choice),
+            r#"<li><button type="button" onclick="pgapp.setItem('{name}', '{js_value}'); document.getElementById('{dialog_id}').close();">{label}</button></li>"#,
+            label = escape(choice_label),
         ));
     }
 
@@ -184,7 +240,26 @@ fn render_popup(field_name: &str, value: &str, choices: &[String]) -> String {
     html
 }
 
-fn input_for_field(page: &RuntimePage, field_name: &str, value: Option<&str>) -> String {
+/// Turns a Radio/Popup choice source into concrete (value, label) pairs:
+/// a static list pairs each string with itself; a query-sourced one
+/// looks up the choices `server::resolve_field_choices` already fetched.
+fn choices_for(
+    source: &ChoiceSource,
+    field_name: &str,
+    resolved: &HashMap<String, Vec<(String, String)>>,
+) -> Vec<(String, String)> {
+    match source {
+        ChoiceSource::Static(list) => list.iter().map(|s| (s.clone(), s.clone())).collect(),
+        ChoiceSource::Query(_) => resolved.get(field_name).cloned().unwrap_or_default(),
+    }
+}
+
+fn input_for_field(
+    page: &RuntimePage,
+    field_name: &str,
+    value: Option<&str>,
+    resolved_choices: &HashMap<String, Vec<(String, String)>>,
+) -> String {
     let field = page
         .entity
         .as_ref()
@@ -207,20 +282,25 @@ fn input_for_field(page: &RuntimePage, field_name: &str, value: Option<&str>) ->
             name = escape(field_name),
             val = escape(value),
         ),
-        FieldItemType::Radio(choices) => {
+        FieldItemType::Radio(source) => {
+            let choices = choices_for(source, field_name, resolved_choices);
             let mut html = String::from(r#"<div class="pgapp-radio-group">"#);
-            for choice in choices {
-                let checked = if choice == value { " checked" } else { "" };
+            for (choice_value, choice_label) in &choices {
+                let checked = if choice_value == value { " checked" } else { "" };
                 html.push_str(&format!(
-                    r#"<label class="pgapp-radio-option"><input type="radio" name="{name}" value="{choice}"{checked}> {choice}</label>"#,
+                    r#"<label class="pgapp-radio-option"><input type="radio" name="{name}" value="{cv}"{checked}> {cl}</label>"#,
                     name = escape(field_name),
-                    choice = escape(choice),
+                    cv = escape(choice_value),
+                    cl = escape(choice_label),
                 ));
             }
             html.push_str("</div>");
             html
         }
-        FieldItemType::Popup(choices) => render_popup(field_name, value, choices),
+        FieldItemType::Popup(source) => {
+            let choices = choices_for(source, field_name, resolved_choices);
+            render_popup(field_name, value, &choices)
+        }
         FieldItemType::Text => match field.data_type {
             FieldType::Integer => format!(
                 r#"<input class="pgapp-input" type="number" name="{name}" value="{value}"{required}>"#,
@@ -251,6 +331,7 @@ pub fn list_page(
     rows: &[BTreeMap<String, Option<String>>],
     error: Option<&str>,
     chrome: Chrome,
+    resolved_choices: &HashMap<String, Vec<(String, String)>>,
 ) -> String {
     let mut body = String::new();
 
@@ -261,7 +342,7 @@ pub fn list_page(
         ));
     }
 
-    body.push_str(&items_html(&page.items));
+    body.push_str(&items_html(&page.items, chrome.regions));
 
     body.push_str(r#"<table class="pgapp-table"><thead><tr>"#);
     for col in &page.columns {
@@ -275,12 +356,14 @@ pub fn list_page(
         for col in &page.columns {
             let val = row.get(col).and_then(|v| v.as_deref()).unwrap_or("");
             let cell = match &page.link_column {
-                Some(lc) if lc.field == *col => format!(
-                    r#"<a class="pgapp-link" href="/{target}?id={id}">{val}</a>"#,
-                    target = escape(&lc.target_page),
-                    id = escape(id),
-                    val = escape(val),
-                ),
+                Some(lc) if lc.field == *col => {
+                    let mut href = format!("/{}?id={}", escape(&lc.target_page), url_encode(id));
+                    for (field, param) in &lc.extra_params {
+                        let pval = row.get(field).and_then(|v| v.as_deref()).unwrap_or("");
+                        href.push_str(&format!("&{}={}", escape(param), url_encode(pval)));
+                    }
+                    format!(r#"<a class="pgapp-link" href="{href}">{val}</a>"#, val = escape(val))
+                }
                 _ => escape(val),
             };
             body.push_str(&format!("<td>{cell}</td>"));
@@ -304,7 +387,7 @@ pub fn list_page(
         escape(&page.name)
     ));
     for field_name in &page.form {
-        body.push_str(&input_for_field(page, field_name, None));
+        body.push_str(&input_for_field(page, field_name, None, resolved_choices));
     }
     body.push_str(r#"<button class="pgapp-btn pgapp-btn-primary" type="submit">Create</button></form>"#);
 
@@ -317,6 +400,7 @@ pub fn edit_page(
     row: &BTreeMap<String, Option<String>>,
     error: Option<&str>,
     chrome: Chrome,
+    resolved_choices: &HashMap<String, Vec<(String, String)>>,
 ) -> String {
     let mut body = String::new();
     if let Some(err) = error {
@@ -332,7 +416,7 @@ pub fn edit_page(
     ));
     for field_name in &page.form {
         let value = row.get(field_name).and_then(|v| v.as_deref());
-        body.push_str(&input_for_field(page, field_name, value));
+        body.push_str(&input_for_field(page, field_name, value, resolved_choices));
     }
     body.push_str(r#"<button class="pgapp-btn pgapp-btn-primary" type="submit">Save</button></form>"#);
     body.push_str(&format!(
@@ -351,7 +435,7 @@ pub fn detail_page(page: &RuntimePage, row: &BTreeMap<String, Option<String>>, c
         .expect("detail page always has an entity");
 
     let mut body = String::new();
-    body.push_str(&items_html(&page.items));
+    body.push_str(&items_html(&page.items, chrome.regions));
     body.push_str(r#"<table class="pgapp-table"><tbody>"#);
     for field in &entity.fields {
         let val = row.get(&field.name).and_then(|v| v.as_deref()).unwrap_or("");
@@ -368,7 +452,7 @@ pub fn detail_page(page: &RuntimePage, row: &BTreeMap<String, Option<String>>, c
 
 /// A pure page-items page: no entity, no table/form, just `items`.
 pub fn static_page(page: &RuntimePage, chrome: Chrome) -> String {
-    let body = items_html(&page.items);
+    let body = items_html(&page.items, chrome.regions);
     layout(&page.name, chrome, &body)
 }
 

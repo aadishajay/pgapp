@@ -9,8 +9,8 @@ use axum::Router;
 use serde_json::json;
 use sqlx::{PgPool, Row};
 
-use crate::meta::{RuntimeApp, RuntimeEntity, RuntimePage};
-use crate::model::{FieldItemType, PageKind};
+use crate::meta::{RegionRows, RuntimeApp, RuntimeEntity, RuntimePage, RuntimePageItem, RuntimeQuery};
+use crate::model::{ChoiceSource, FieldItemType, PageKind};
 use crate::render;
 use crate::theme::Theme;
 
@@ -18,12 +18,14 @@ pub struct AppState {
     pub pool: PgPool,
     pub app: RuntimeApp,
     pub theme: Theme,
+    pub runtime_js: String,
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(index))
         .route("/theme.css", get(theme_css))
+        .route("/runtime.js", get(runtime_js))
         .route("/assets/*path", get(asset))
         .route("/api/:entity", get(api_list))
         .route("/:page", get(show).post(create))
@@ -116,6 +118,162 @@ async fn fetch_row(
     })
 }
 
+/// The rows a `list` page shows: either the plain entity table (the
+/// default), or — when the page declares `source: query <name>` — the
+/// live result of that named query instead. Create/update/delete are
+/// unaffected either way: they always write to the entity by id.
+async fn list_rows(
+    pool: &PgPool,
+    app: &RuntimeApp,
+    page: &RuntimePage,
+    entity: &RuntimeEntity,
+    ctx: &HashMap<String, String>,
+) -> anyhow::Result<Vec<BTreeMap<String, Option<String>>>> {
+    match &page.source_query {
+        None => fetch_rows(pool, entity).await,
+        Some(name) => {
+            let rq = page
+                .resolve_query(app, name)
+                .ok_or_else(|| anyhow::anyhow!("page '{}' sources from unknown query '{name}'", page.name))?;
+            run_named_query_rows(pool, rq, ctx).await
+        }
+    }
+}
+
+/// Turns a `to_jsonb` result value into the display string the rest of
+/// the generic rendering layer expects: `null` becomes "not set", other
+/// scalars are stringified (strings verbatim, numbers/bools via their
+/// JSON text).
+fn json_to_display(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(s) => Some(s.clone()),
+        other => Some(other.to_string()),
+    }
+}
+
+/// Runs a compiled named query, binding `rq.bind_names` from `ctx` (a
+/// name missing from `ctx` binds SQL NULL). The query is wrapped in
+/// `to_jsonb` so its result can be decoded generically regardless of
+/// what columns it selects or what Postgres types they are.
+async fn run_named_query(
+    pool: &PgPool,
+    rq: &RuntimeQuery,
+    ctx: &HashMap<String, String>,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    let wrapped = format!("select to_jsonb(t) as j from ({}) as t", rq.sql);
+    let mut query = sqlx::query_scalar::<_, serde_json::Value>(&wrapped);
+    for name in &rq.bind_names {
+        query = query.bind(ctx.get(name).map(|s| s.as_str()));
+    }
+    Ok(query.fetch_all(pool).await?)
+}
+
+async fn run_named_query_rows(
+    pool: &PgPool,
+    rq: &RuntimeQuery,
+    ctx: &HashMap<String, String>,
+) -> anyhow::Result<Vec<BTreeMap<String, Option<String>>>> {
+    let rows = run_named_query(pool, rq, ctx).await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| match row {
+            serde_json::Value::Object(map) => map
+                .into_iter()
+                .map(|(k, v)| (k, json_to_display(&v)))
+                .collect(),
+            _ => BTreeMap::new(),
+        })
+        .collect())
+}
+
+/// Resolves every `Region` item's rows across the current page's items
+/// plus the app's header/footer, keyed by query name. Page items may
+/// use a page-scoped query; header/footer can only see app-scoped ones
+/// (there's no single page to shadow through).
+async fn resolve_regions(
+    pool: &PgPool,
+    app: &RuntimeApp,
+    page_items: &[RuntimePageItem],
+    page: Option<&RuntimePage>,
+    ctx: &HashMap<String, String>,
+) -> anyhow::Result<RegionRows> {
+    let mut out = RegionRows::new();
+
+    for item in page_items.iter().chain(app.header.iter()).chain(app.footer.iter()) {
+        let RuntimePageItem::Region { query, .. } = item else {
+            continue;
+        };
+        if out.contains_key(query) {
+            continue;
+        }
+        let rq = page
+            .and_then(|p| p.resolve_query(app, query))
+            .or_else(|| app.queries.get(query))
+            .ok_or_else(|| anyhow::anyhow!("region references unknown query '{query}'"))?;
+        out.insert(query.clone(), run_named_query_rows(pool, rq, ctx).await?);
+    }
+
+    Ok(out)
+}
+
+/// Resolves live choices for every form field whose item type sources
+/// from a named query (`radio from query ...` / `popup from query
+/// ...`), keyed by field name. Static choice lists don't need this.
+async fn resolve_field_choices(
+    pool: &PgPool,
+    app: &RuntimeApp,
+    page: &RuntimePage,
+    ctx: &HashMap<String, String>,
+) -> anyhow::Result<HashMap<String, Vec<(String, String)>>> {
+    let mut out = HashMap::new();
+    for (field_name, item_type) in &page.item_types {
+        let Some(ChoiceSource::Query(query_name)) = item_type.choice_source() else {
+            continue;
+        };
+        let rq = page.resolve_query(app, query_name).ok_or_else(|| {
+            anyhow::anyhow!("field '{field_name}' references unknown query '{query_name}'")
+        })?;
+        let rows = run_named_query(pool, rq, ctx).await?;
+        let choices = rows
+            .into_iter()
+            .filter_map(|row| {
+                let value = row.get("value")?.as_str()?.to_string();
+                let label = row
+                    .get("label")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&value)
+                    .to_string();
+                Some((value, label))
+            })
+            .collect();
+        out.insert(field_name.clone(), choices);
+    }
+    Ok(out)
+}
+
+/// Bind context available to named queries on one request: the URL's
+/// query-string parameters, plus — when editing or viewing a specific
+/// row — that row's own field values, so e.g. a popup LOV can filter by
+/// another field on the same row. Query-string values win on conflict.
+fn bind_context(
+    query_params: &HashMap<String, String>,
+    row: Option<&BTreeMap<String, Option<String>>>,
+) -> HashMap<String, String> {
+    let mut ctx = HashMap::new();
+    if let Some(row) = row {
+        for (k, v) in row {
+            if let Some(v) = v {
+                ctx.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    for (k, v) in query_params {
+        ctx.insert(k.clone(), v.clone());
+    }
+    ctx
+}
+
 /// Builds (column names, value expressions, bind values) for a page's
 /// form fields. Empty, non-required values become SQL `NULL` literals
 /// directly (an empty string can't be cast to e.g. integer); everything
@@ -178,9 +336,13 @@ fn require_list_page<'a>(page: &'a RuntimePage) -> Result<&'a RuntimePage, AppEr
     Ok(page)
 }
 
-async fn index(State(state): State<Arc<AppState>>) -> Html<String> {
+async fn index(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
     let pages: Vec<String> = state.app.pages.iter().map(|p| p.name.clone()).collect();
-    Html(render::index_page(&state.app.name, &pages, state.app.chrome()))
+    let ctx = HashMap::new();
+    let regions = resolve_regions(&state.pool, &state.app, &[], None, &ctx)
+        .await
+        .map_err(err_response)?;
+    Ok(Html(render::index_page(&state.app.name, &pages, state.app.chrome(&regions))))
 }
 
 async fn theme_css(State(state): State<Arc<AppState>>) -> Response {
@@ -188,6 +350,17 @@ async fn theme_css(State(state): State<Arc<AppState>>) -> Response {
         Ok(bytes) => ([(header::CONTENT_TYPE, "text/css")], bytes).into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+/// The pgapp runtime JS library — stored in `pgapp_meta`, not a static
+/// file (see `AppState::runtime_js` / `main.rs`), so it's part of the
+/// same in-database metadata as everything else.
+async fn runtime_js(State(state): State<Arc<AppState>>) -> Response {
+    (
+        [(header::CONTENT_TYPE, "application/javascript")],
+        state.runtime_js.clone(),
+    )
+        .into_response()
 }
 
 async fn asset(Path(path): Path<String>) -> Response {
@@ -220,8 +393,23 @@ async fn show(
     match page.kind {
         PageKind::List => {
             let entity = entity_of(page)?;
-            let rows = fetch_rows(&state.pool, entity).await.map_err(err_response)?;
-            Ok(Html(render::list_page(page, &rows, None, state.app.chrome())))
+            let ctx = bind_context(&query, None);
+            let rows = list_rows(&state.pool, &state.app, page, entity, &ctx)
+                .await
+                .map_err(err_response)?;
+            let choices = resolve_field_choices(&state.pool, &state.app, page, &ctx)
+                .await
+                .map_err(err_response)?;
+            let regions = resolve_regions(&state.pool, &state.app, &page.items, Some(page), &ctx)
+                .await
+                .map_err(err_response)?;
+            Ok(Html(render::list_page(
+                page,
+                &rows,
+                None,
+                state.app.chrome(&regions),
+                &choices,
+            )))
         }
         PageKind::Detail => {
             let entity = entity_of(page)?;
@@ -235,15 +423,26 @@ async fn show(
                 .await
                 .map_err(err_response)?
                 .ok_or_else(|| (StatusCode::NOT_FOUND, "row not found".to_string()))?;
-            Ok(Html(render::detail_page(page, &row, state.app.chrome())))
+            let ctx = bind_context(&query, Some(&row));
+            let regions = resolve_regions(&state.pool, &state.app, &page.items, Some(page), &ctx)
+                .await
+                .map_err(err_response)?;
+            Ok(Html(render::detail_page(page, &row, state.app.chrome(&regions))))
         }
-        PageKind::Static => Ok(Html(render::static_page(page, state.app.chrome()))),
+        PageKind::Static => {
+            let ctx = bind_context(&query, None);
+            let regions = resolve_regions(&state.pool, &state.app, &page.items, Some(page), &ctx)
+                .await
+                .map_err(err_response)?;
+            Ok(Html(render::static_page(page, state.app.chrome(&regions))))
+        }
     }
 }
 
 async fn create(
     State(state): State<Arc<AppState>>,
     Path(page_name): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     let page = require_list_page(page_or_404(&state.app, &page_name)?)?;
@@ -253,12 +452,22 @@ async fn create(
     let (columns, exprs, binds) = match build {
         Ok(v) => v,
         Err(e) => {
-            let rows = fetch_rows(&state.pool, entity).await.map_err(err_response)?;
+            let ctx = bind_context(&query, None);
+            let rows = list_rows(&state.pool, &state.app, page, entity, &ctx)
+                .await
+                .map_err(err_response)?;
+            let choices = resolve_field_choices(&state.pool, &state.app, page, &ctx)
+                .await
+                .map_err(err_response)?;
+            let regions = resolve_regions(&state.pool, &state.app, &page.items, Some(page), &ctx)
+                .await
+                .map_err(err_response)?;
             return Ok(Html(render::list_page(
                 page,
                 &rows,
                 Some(&e.to_string()),
-                state.app.chrome(),
+                state.app.chrome(&regions),
+                &choices,
             ))
             .into_response());
         }
@@ -270,11 +479,11 @@ async fn create(
         columns.join(", "),
         exprs.join(", ")
     );
-    let mut query = sqlx::query(&sql);
+    let mut sql_query = sqlx::query(&sql);
     for b in &binds {
-        query = query.bind(b);
+        sql_query = sql_query.bind(b);
     }
-    query.execute(&state.pool).await.map_err(|e| {
+    sql_query.execute(&state.pool).await.map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
             format!("failed to create row: {e}"),
@@ -287,6 +496,7 @@ async fn create(
 async fn edit_form(
     State(state): State<Arc<AppState>>,
     Path((page_name, id)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
     let page = require_list_page(page_or_404(&state.app, &page_name)?)?;
     let entity = entity_of(page)?;
@@ -294,12 +504,27 @@ async fn edit_form(
         .await
         .map_err(err_response)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "row not found".to_string()))?;
-    Ok(Html(render::edit_page(page, &id, &row, None, state.app.chrome())))
+    let ctx = bind_context(&query, Some(&row));
+    let choices = resolve_field_choices(&state.pool, &state.app, page, &ctx)
+        .await
+        .map_err(err_response)?;
+    let regions = resolve_regions(&state.pool, &state.app, &page.items, Some(page), &ctx)
+        .await
+        .map_err(err_response)?;
+    Ok(Html(render::edit_page(
+        page,
+        &id,
+        &row,
+        None,
+        state.app.chrome(&regions),
+        &choices,
+    )))
 }
 
 async fn update(
     State(state): State<Arc<AppState>>,
     Path((page_name, id)): Path<(String, String)>,
+    Query(query): Query<HashMap<String, String>>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     let page = require_list_page(page_or_404(&state.app, &page_name)?)?;
@@ -313,12 +538,20 @@ async fn update(
                 .await
                 .map_err(err_response)?
                 .unwrap_or_default();
+            let ctx = bind_context(&query, Some(&row));
+            let choices = resolve_field_choices(&state.pool, &state.app, page, &ctx)
+                .await
+                .map_err(err_response)?;
+            let regions = resolve_regions(&state.pool, &state.app, &page.items, Some(page), &ctx)
+                .await
+                .map_err(err_response)?;
             return Ok(Html(render::edit_page(
                 page,
                 &id,
                 &row,
                 Some(&e.to_string()),
-                state.app.chrome(),
+                state.app.chrome(&regions),
+                &choices,
             ))
             .into_response());
         }
@@ -338,11 +571,11 @@ async fn update(
         "update pgapp_data.{} set {set_clause} where id = ${where_placeholder}::integer",
         entity.table_name
     );
-    let mut query = sqlx::query(&sql);
+    let mut sql_query = sqlx::query(&sql);
     for b in &binds {
-        query = query.bind(b);
+        sql_query = sql_query.bind(b);
     }
-    query.execute(&state.pool).await.map_err(|e| {
+    sql_query.execute(&state.pool).await.map_err(|e| {
         (
             StatusCode::BAD_REQUEST,
             format!("failed to update row: {e}"),

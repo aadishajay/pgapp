@@ -55,15 +55,17 @@ create table if not exists pgapp_meta.page_fields (
 );
 
 -- Content placed on a page beyond its entity-bound table/form: static
--- text, or a link to another page.
+-- text, a link to another page, or a region rendering a named query's
+-- rows (query_name, set only for kind = 'region').
 create table if not exists pgapp_meta.page_items (
     id              serial primary key,
     page_id         integer not null references pgapp_meta.pages(id) on delete cascade,
-    kind            text not null, -- 'text' | 'link'
+    kind            text not null, -- 'text' | 'link' | 'region'
     label           text not null,
     target_page_id  integer references pgapp_meta.pages(id),
     ordinal         integer not null default 0
 );
+alter table pgapp_meta.page_items add column if not exists query_name text;
 
 -- The app's (possibly multi-level) navigation bar. Self-referencing
 -- parent_id makes a leaf (target_page_id set) or a group (children,
@@ -82,28 +84,64 @@ create table if not exists pgapp_meta.nav_items (
 create table if not exists pgapp_meta.header_items (
     id              serial primary key,
     app_id          integer not null references pgapp_meta.apps(id) on delete cascade,
-    kind            text not null, -- 'text' | 'link'
+    kind            text not null, -- 'text' | 'link' | 'region'
     label           text not null,
     target_page_id  integer references pgapp_meta.pages(id),
     ordinal         integer not null default 0
 );
+alter table pgapp_meta.header_items add column if not exists query_name text;
 
 create table if not exists pgapp_meta.footer_items (
     id              serial primary key,
     app_id          integer not null references pgapp_meta.apps(id) on delete cascade,
-    kind            text not null, -- 'text' | 'link'
+    kind            text not null, -- 'text' | 'link' | 'region'
     label           text not null,
     target_page_id  integer references pgapp_meta.pages(id),
     ordinal         integer not null default 0
 );
+alter table pgapp_meta.footer_items add column if not exists query_name text;
 
 -- How each form field is presented: a "static LOV" of choices for
--- radio/popup, or nothing for text/readonly/checkbox.
+-- radio/popup, a named query supplying `value`/`label` columns instead,
+-- or nothing for text/readonly/checkbox.
 create table if not exists pgapp_meta.page_field_items (
-    id          serial primary key,
-    page_id     integer not null references pgapp_meta.pages(id) on delete cascade,
-    field_name  text not null,
-    item_type   text not null default 'text', -- 'text' | 'readonly' | 'checkbox' | 'radio' | 'popup'
-    choices     text[] not null default '{}',
+    id             serial primary key,
+    page_id        integer not null references pgapp_meta.pages(id) on delete cascade,
+    field_name     text not null,
+    item_type      text not null default 'text', -- 'text' | 'readonly' | 'checkbox' | 'radio' | 'popup'
+    choices        text[] not null default '{}',
     unique (page_id, field_name)
+);
+alter table pgapp_meta.page_field_items add column if not exists choices_query text;
+
+-- Named, reusable SQL queries. page_id null = app-scoped (visible from
+-- every page); page_id set = visible only within that page, shadowing
+-- an app-scoped query of the same name. sql_text may contain `:name`
+-- bind markers (see meta::compile_named_query).
+create table if not exists pgapp_meta.named_queries (
+    id       serial primary key,
+    app_id   integer not null references pgapp_meta.apps(id) on delete cascade,
+    page_id  integer references pgapp_meta.pages(id) on delete cascade,
+    name     text not null,
+    sql_text text not null
+);
+create unique index if not exists named_queries_scope_name_idx
+    on pgapp_meta.named_queries (app_id, coalesce(page_id, 0), name);
+
+-- `list` pages normally report on `select * from` their entity table;
+-- source_query_name overrides that with a named query instead (writes
+-- still go to the entity by id). link_params carries the row-link
+-- column's extra forwarded parameters as [{"field": "...", "param":
+-- "..."}], since they don't reference another table by id.
+alter table pgapp_meta.pages add column if not exists source_query_name text;
+alter table pgapp_meta.pages add column if not exists link_params jsonb not null default '[]';
+
+-- The pgapp runtime JS library (item value capture, etc.) lives here,
+-- not as a static file: seeded from a built-in default the first time
+-- an app is synced (ON CONFLICT DO NOTHING), then freely editable in
+-- place afterward without touching the binary.
+create table if not exists pgapp_meta.app_runtime_js (
+    app_id     integer primary key references pgapp_meta.apps(id) on delete cascade,
+    content    text not null,
+    updated_at timestamptz not null default now()
 );
