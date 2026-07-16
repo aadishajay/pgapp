@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldType {
     Id,
@@ -71,34 +73,6 @@ pub struct EntityDef {
     pub fields: Vec<FieldDef>,
 }
 
-/// What a page is backed by. `List` and `Detail` pages read/write an
-/// entity's data table; `Static` pages are pure composition of page
-/// items (text, links) with no entity behind them at all.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PageKind {
-    List,
-    Detail,
-    Static,
-}
-
-impl PageKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            PageKind::List => "list",
-            PageKind::Detail => "detail",
-            PageKind::Static => "static",
-        }
-    }
-
-    pub fn from_str_lossy(s: &str) -> Self {
-        match s {
-            "detail" => PageKind::Detail,
-            "static" => PageKind::Static,
-            _ => PageKind::List,
-        }
-    }
-}
-
 /// A named, reusable SQL query. Declared at app scope (visible to every
 /// page) or nested inside one `page { }` block (visible only there,
 /// shadowing an app-scoped query of the same name). `sql` may contain
@@ -110,21 +84,11 @@ pub struct QueryDef {
     pub sql: String,
 }
 
-/// A page item: content placed on a page beyond its entity-bound
-/// table/form. `Link` is how pages reference each other outside of the
-/// global nav bar; `Region` renders a named query's rows as a table.
-#[derive(Debug, Clone)]
-pub enum PageItem {
-    Text(String),
-    Link { label: String, target_page: String },
-    Region { label: String, query: String },
-}
-
-/// Turns one report column into a link to another page, passing the
-/// row's id as a `?id=` query parameter (the common "click a row to see
-/// its detail page" pattern) plus, optionally, other columns from the
-/// same row forwarded as additional named query parameters — this is
-/// how a value on one page reaches a named query on another page.
+/// Turns a report's linked column into a link to another page, passing
+/// the row's id as a `?id=` query parameter (the common "click a row to
+/// see its detail page" pattern) plus, optionally, other columns from
+/// the same row forwarded as additional named query parameters — this
+/// is how a value on one page reaches a named query on another page.
 #[derive(Debug, Clone)]
 pub struct LinkColumn {
     pub field: String,
@@ -132,39 +96,93 @@ pub struct LinkColumn {
     pub extra_params: Vec<(String, String)>,
 }
 
-/// How a form field is presented: `kind` names a registered component
-/// (see `src/item_types.rs`, e.g. "text", "radio", "slider"), and
-/// `config` is whatever that component wants — a generic JSON blob so
-/// new item types never need a change here or in the markup grammar.
-/// Two config keys are reserved by convention (not enforced here):
-/// `choices` (a fixed list, for Radio/Popup) and `query` (a named
-/// query's rows instead — see `server::query_engine::resolve_field_choices`).
+/// How a form/editable-table field is presented: `kind` names a
+/// registered component (see `src/item_types.rs`, e.g. "text", "radio",
+/// "slider"), and `config` is whatever that component wants — a generic
+/// JSON blob so new item types never need a change here or in the
+/// markup grammar. Two config keys are reserved by convention (not
+/// enforced here): `choices` (a fixed list, for Radio/Popup) and
+/// `query` (a named query's rows instead — see
+/// `server::query_engine::resolve_field_choices`).
 #[derive(Debug, Clone)]
 pub struct FieldItem {
     pub kind: String,
     pub config: serde_json::Value,
 }
 
+/// One independently-rendered piece of a page, or of the app-wide
+/// header/footer chrome (which reuses the same component kinds, though
+/// in practice only `Text`/`Link`/`Region` make sense there — enforced
+/// at sync time, see `meta::sync_app`).
+///
+/// A page is simply an ordered list of these — there is no longer a
+/// fixed page "kind": a page can carry a `Report` and a `Form` side by
+/// side (the classic list+edit CRUD pattern), an `EditableTable` on its
+/// own, a dashboard of `Chart`s, or any other combination.
+#[derive(Debug, Clone)]
+pub enum ComponentDef {
+    /// A read-only, paginated table. Rows come from the entity's data
+    /// table by default, or from `source_query` when set. `link_column`
+    /// makes one column a link to another page (forwarding the row's id
+    /// plus any extra parameters). Edit/delete actions appear on each
+    /// row automatically when the same page also has a `Form` bound to
+    /// the same entity (see `server.rs`'s `sibling_form`).
+    Report {
+        title: String,
+        entity: String,
+        columns: Vec<String>,
+        source_query: Option<String>,
+        link_column: Option<LinkColumn>,
+        page_size: i64,
+    },
+    /// A create/edit form for one entity. Renders blank (create mode) by
+    /// default; switches to edit mode for one row when the page is
+    /// requested with `?edit_<n>=<id>` (`<n>` = this component's index
+    /// on the page).
+    Form {
+        title: String,
+        entity: String,
+        fields: Vec<String>,
+        item_types: HashMap<String, FieldItem>,
+    },
+    /// Every row rendered inline-editable (one `<form>` per row), plus
+    /// an "add new" row form — no separate list/edit split.
+    EditableTable {
+        title: String,
+        entity: String,
+        columns: Vec<String>,
+        item_types: HashMap<String, FieldItem>,
+    },
+    /// Renders `query`'s rows as a chart; `chart_type` is "bar" or
+    /// "line", `x`/`y` name the columns used for each axis. See
+    /// `src/chart_lib.rs` for the pluggable rendering backend.
+    Chart {
+        title: String,
+        query: String,
+        chart_type: String,
+        x: String,
+        y: String,
+    },
+    Text(String),
+    Link {
+        label: String,
+        target_page: String,
+    },
+    /// Renders a named query's rows as a plain (non-paginated) table —
+    /// sugar for a small, fixed-shape `Report` without entity/pagination
+    /// machinery.
+    Region {
+        label: String,
+        query: String,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct PageDef {
     pub name: String,
-    pub kind: PageKind,
-    pub entity: Option<String>,
-    pub columns: Vec<String>,
-    pub form: Vec<String>,
-    pub link_column: Option<LinkColumn>,
-    pub items: Vec<PageItem>,
-    /// Explicit `item <field> as <kind>` overrides; fields not listed
-    /// here get `item_types::default_kind_for` their column type (with
-    /// an empty config).
-    pub item_types: std::collections::HashMap<String, FieldItem>,
+    pub components: Vec<ComponentDef>,
     /// Queries visible only within this page (in addition to the app's).
     pub queries: Vec<QueryDef>,
-    /// `source: query <name>` — when set, a `list` page's rows come from
-    /// this named query instead of a flat `SELECT * FROM` the entity's
-    /// table. Create/update/delete are unaffected: they still write to
-    /// the underlying entity by id.
-    pub source_query: Option<String>,
 }
 
 /// One entry in the app's (possibly multi-level) navigation bar. A leaf
@@ -183,10 +201,10 @@ pub struct AppDef {
     pub pages: Vec<PageDef>,
     pub nav: Vec<NavItem>,
     /// Shown on every page, above the nav bar / below the footer
-    /// respectively. Reuses `PageItem` (text/link/region) — the same
-    /// content model as a page's `items`.
-    pub header: Vec<PageItem>,
-    pub footer: Vec<PageItem>,
+    /// respectively. Reuses `ComponentDef` — restricted in practice (and
+    /// validated at sync time) to `Text`/`Link`/`Region`.
+    pub header: Vec<ComponentDef>,
+    pub footer: Vec<ComponentDef>,
     /// Queries visible from every page (a page-scoped query of the same
     /// name takes precedence).
     pub queries: Vec<QueryDef>,

@@ -1,5 +1,5 @@
 //! Minimal, dependency-free HTML rendering. Every page is metadata-driven:
-//! the field/item/nav lists come from `RuntimePage`/`RuntimeApp`, not
+//! a page's component list comes from `RuntimePage`/`RuntimeApp`, not
 //! from a per-app template.
 //!
 //! Markup here only ever uses the fixed `.pgapp-*` class names — the
@@ -9,10 +9,15 @@
 //! never built here — `input_for_field` just hands off to whatever
 //! component is registered for that field's item type (see
 //! `src/item_types.rs`), so adding a new one never touches this file.
+//! Component *data fetching* (rows, pagination, resolved choices) is
+//! `server.rs`'s job; this module only ever formats what it's handed.
 
+use crate::chart_lib::ChartLib;
 use crate::html::{escape, url_encode};
+use crate::icons::Icons;
 use crate::item_types::{self, RenderArgs};
-use crate::meta::{Chrome, NavNode, RegionRows, RuntimePage, RuntimePageItem};
+use crate::meta::{Chrome, LinkColumn, NavNode, RegionRows, RuntimeComponent, RuntimeEntity};
+use crate::model::FieldItem;
 use std::collections::{BTreeMap, HashMap};
 
 /// Extra `<link>`/`<script>` tags for user-supplied assets, if present —
@@ -66,39 +71,21 @@ fn nav_node_html(node: &NavNode) -> String {
     html
 }
 
-/// Renders an item list (page `items`, or the app's header/footer):
-/// static text, links to other pages, and regions rendering a named
-/// query's already-resolved rows (see
-/// `server::query_engine::resolve_regions`).
-fn items_html(items: &[RuntimePageItem], regions: &RegionRows) -> String {
-    if items.is_empty() {
-        return String::new();
-    }
-    let mut html = String::from(r#"<div class="pgapp-items">"#);
-    for item in items {
-        match item {
-            RuntimePageItem::Text(text) => {
-                html.push_str(&format!(r#"<p class="pgapp-text">{}</p>"#, escape(text)));
-            }
-            RuntimePageItem::Link { label, target_page } => {
-                html.push_str(&format!(
-                    r#"<p><a class="pgapp-link" href="/{target}">{label}</a></p>"#,
-                    target = escape(target_page),
-                    label = escape(label),
-                ));
-            }
-            RuntimePageItem::Region { label, query } => {
-                html.push_str(&render_region(label, query, regions));
-            }
-        }
-    }
-    html.push_str("</div>");
-    html
+pub fn text_html(text: &str) -> String {
+    format!(r#"<p class="pgapp-text">{}</p>"#, escape(text))
 }
 
-/// Renders one `Region` item: a named query's rows as a table, with
-/// column headers taken from the (already-resolved) row keys.
-fn render_region(label: &str, query: &str, regions: &RegionRows) -> String {
+pub fn link_html(label: &str, target_page: &str) -> String {
+    format!(
+        r#"<p><a class="pgapp-link" href="/{target}">{label}</a></p>"#,
+        target = escape(target_page),
+        label = escape(label),
+    )
+}
+
+/// Renders one `Region` component: a named query's (already-resolved)
+/// rows as a plain table, with column headers taken from the row keys.
+pub fn region_html(label: &str, query: &str, regions: &RegionRows) -> String {
     let mut html = format!(
         r#"<div class="pgapp-region"><h3 class="pgapp-region-title">{}</h3>"#,
         escape(label)
@@ -129,13 +116,134 @@ fn render_region(label: &str, query: &str, regions: &RegionRows) -> String {
     html
 }
 
-fn layout(title: &str, chrome: Chrome, body: &str) -> String {
+/// Renders a header/footer chrome list — restricted at sync time to
+/// Text/Link/Region, so those are the only variants handled here.
+fn chrome_items_html(items: &[RuntimeComponent], regions: &RegionRows) -> String {
+    if items.is_empty() {
+        return String::new();
+    }
+    let mut html = String::from(r#"<div class="pgapp-items">"#);
+    for item in items {
+        match item {
+            RuntimeComponent::Text(text) => html.push_str(&text_html(text)),
+            RuntimeComponent::Link { label, target_page } => html.push_str(&link_html(label, target_page)),
+            RuntimeComponent::Region { label, query } => html.push_str(&region_html(label, query, regions)),
+            _ => {}
+        }
+    }
+    html.push_str("</div>");
+    html
+}
+
+/// A dependency-free bar/line chart rendered straight to inline SVG —
+/// the built-in `PGAPP_CHART_LIB=inline` backend (see
+/// `src/chart_lib.rs`). No JS, no network fetch.
+fn inline_svg_chart(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTreeMap<String, Option<String>>]) -> String {
+    let (width, height, pad) = (480.0_f64, 220.0_f64, 30.0_f64);
+    let values: Vec<f64> = rows
+        .iter()
+        .map(|r| r.get(y).and_then(|v| v.as_deref()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0))
+        .collect();
+    let labels: Vec<String> = rows.iter().map(|r| r.get(x).and_then(|v| v.as_deref()).unwrap_or("").to_string()).collect();
+    let max = values.iter().cloned().fold(1.0_f64, f64::max).max(1.0);
+    let n = (values.len().max(1)) as f64;
+    let bar_w = (width - pad * 2.0) / n;
+    let baseline = height - pad;
+
+    let mut svg = format!(
+        r#"<svg class="pgapp-chart-svg" viewBox="0 0 {width} {height}" role="img" aria-label="{}">"#,
+        escape(title)
+    );
+    svg.push_str(&format!(
+        r#"<line x1="{pad}" y1="{baseline}" x2="{}" y2="{baseline}" stroke="currentColor" stroke-opacity="0.3"/>"#,
+        width - pad
+    ));
+
+    if chart_type == "line" {
+        let points: Vec<String> = values
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let px = pad + bar_w * (i as f64 + 0.5);
+                let py = baseline - (v / max) * (height - pad * 2.0);
+                format!("{px:.1},{py:.1}")
+            })
+            .collect();
+        svg.push_str(&format!(
+            r#"<polyline points="{}" fill="none" stroke="currentColor" stroke-width="2"/>"#,
+            points.join(" ")
+        ));
+        for (i, v) in values.iter().enumerate() {
+            let px = pad + bar_w * (i as f64 + 0.5);
+            let py = baseline - (v / max) * (height - pad * 2.0);
+            svg.push_str(&format!(r#"<circle cx="{px:.1}" cy="{py:.1}" r="3" fill="currentColor"/>"#));
+        }
+    } else {
+        for (i, v) in values.iter().enumerate() {
+            let bar_h = (v / max) * (height - pad * 2.0);
+            let bx = pad + bar_w * (i as f64) + 2.0;
+            let by = baseline - bar_h;
+            svg.push_str(&format!(
+                r#"<rect x="{bx:.1}" y="{by:.1}" width="{:.1}" height="{bar_h:.1}" fill="currentColor"/>"#,
+                (bar_w - 4.0).max(1.0)
+            ));
+        }
+    }
+
+    for (i, label) in labels.iter().enumerate() {
+        let px = pad + bar_w * (i as f64 + 0.5);
+        svg.push_str(&format!(
+            r#"<text x="{px:.1}" y="{:.1}" font-size="9" text-anchor="middle">{}</text>"#,
+            baseline + 12.0,
+            escape(label)
+        ));
+    }
+    svg.push_str("</svg>");
+    format!(
+        r#"<div class="pgapp-chart"><h3 class="pgapp-region-title">{}</h3>{svg}</div>"#,
+        escape(title)
+    )
+}
+
+/// A JSON-in-`<script>` placeholder for a pluggable chart library (see
+/// `src/chart_lib.rs`): the library's JS (served at `/chart-lib.js`)
+/// reads this data and renders into the surrounding `.pgapp-chart` div
+/// however it likes.
+fn pluggable_chart_placeholder(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTreeMap<String, Option<String>>]) -> String {
+    let json_rows: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            serde_json::Value::Object(
+                r.iter()
+                    .map(|(k, v)| (k.clone(), v.clone().map(serde_json::Value::String).unwrap_or(serde_json::Value::Null)))
+                    .collect(),
+            )
+        })
+        .collect();
+    let data = serde_json::json!({ "rows": json_rows, "x": x, "y": y, "type": chart_type });
+    // `</` can't appear literally inside a <script> body without ending
+    // it early, regardless of the script's declared type.
+    let safe_json = data.to_string().replace("</", "<\\/");
+    format!(
+        r#"<div class="pgapp-chart"><h3 class="pgapp-region-title">{}</h3><script type="application/json" class="pgapp-chart-data">{safe_json}</script></div>"#,
+        escape(title)
+    )
+}
+
+pub fn chart_html(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTreeMap<String, Option<String>>], chart_lib: &ChartLib) -> String {
+    match &chart_lib.js_path {
+        None => inline_svg_chart(title, chart_type, x, y, rows),
+        Some(_) => pluggable_chart_placeholder(title, chart_type, x, y, rows),
+    }
+}
+
+fn layout(title: &str, chrome: Chrome, icons: &Icons, chart_lib: &ChartLib, body: &str) -> String {
     let header = if chrome.header.is_empty() {
         String::new()
     } else {
         format!(
             r#"<header class="pgapp-header">{}</header>"#,
-            items_html(chrome.header, chrome.regions)
+            chrome_items_html(chrome.header, chrome.regions)
         )
     };
     let footer = if chrome.footer.is_empty() {
@@ -143,7 +251,7 @@ fn layout(title: &str, chrome: Chrome, body: &str) -> String {
     } else {
         format!(
             r#"<footer class="pgapp-footer">{}</footer>"#,
-            items_html(chrome.footer, chrome.regions)
+            chrome_items_html(chrome.footer, chrome.regions)
         )
     };
 
@@ -154,7 +262,9 @@ fn layout(title: &str, chrome: Chrome, body: &str) -> String {
 <meta charset="utf-8">
 <title>{title}</title>
 <link rel="stylesheet" href="/theme.css">
+{icons_stylesheet}
 <script src="/runtime.js" defer></script>
+{chart_lib_script}
 {assets}
 </head>
 <body>
@@ -166,6 +276,12 @@ fn layout(title: &str, chrome: Chrome, body: &str) -> String {
 </body>
 </html>"#,
         title = escape(title),
+        icons_stylesheet = icons.stylesheet_tag(),
+        chart_lib_script = chart_lib
+            .js_path
+            .as_ref()
+            .map(|_| r#"<script src="/chart-lib.js" defer></script>"#)
+            .unwrap_or(""),
         assets = asset_tags(),
         navbar = nav_html(chrome.nav),
         body = body,
@@ -173,27 +289,22 @@ fn layout(title: &str, chrome: Chrome, body: &str) -> String {
 }
 
 /// Renders one field's input by looking up its registered item type
-/// (`page.item_types[field_name].kind`) and calling that component's
-/// `render`. `resolved_choices` carries whatever
-/// `query_engine::resolve_field_choices` already fetched for fields
-/// whose config uses the `choices`/`query` convention.
+/// and calling that component's `render`. `resolved_choices` carries
+/// whatever `query_engine::resolve_field_choices` already fetched for
+/// fields whose config uses the `choices`/`query` convention.
 fn input_for_field(
-    page: &RuntimePage,
+    entity: &RuntimeEntity,
+    item_types: &HashMap<String, FieldItem>,
     field_name: &str,
     value: Option<&str>,
     resolved_choices: &HashMap<String, Vec<(String, String)>>,
     registry: &item_types::Registry,
 ) -> String {
-    let field = page
-        .entity
-        .as_ref()
-        .and_then(|e| e.field(field_name))
-        .expect("form field must exist on entity");
+    let field = entity.field(field_name).expect("field must exist on entity");
     let value = value.unwrap_or("");
-    let field_item = page
-        .item_types
+    let field_item = item_types
         .get(field_name)
-        .expect("every form field has a resolved item type (see meta::sync_app)");
+        .expect("every declared field has a resolved item type (see meta::sync_app)");
     let component = registry
         .get(field_item.kind.as_str())
         .unwrap_or_else(|| panic!("unknown item type '{}' for field '{field_name}'", field_item.kind));
@@ -215,37 +326,38 @@ fn input_for_field(
     )
 }
 
-pub fn list_page(
-    page: &RuntimePage,
+/// A read-only, paginated table — the `Report` component. Edit/delete
+/// row actions appear only when `sibling_form_idx` is `Some` (a `Form`
+/// bound to the same entity exists on this page); `prev_href`/
+/// `next_href` are `None` at either end of the result set.
+#[allow(clippy::too_many_arguments)]
+pub fn report_html(
+    page_name: &str,
+    title: &str,
+    columns: &[String],
     rows: &[BTreeMap<String, Option<String>>],
-    error: Option<&str>,
-    chrome: Chrome,
-    resolved_choices: &HashMap<String, Vec<(String, String)>>,
-    registry: &item_types::Registry,
+    link_column: Option<&LinkColumn>,
+    prev_href: Option<&str>,
+    next_href: Option<&str>,
+    sibling_form_idx: Option<usize>,
+    icons: &Icons,
 ) -> String {
-    let mut body = String::new();
-
-    if let Some(err) = error {
-        body.push_str(&format!(
-            r#"<div class="pgapp-alert pgapp-alert-error"><strong>Error:</strong> {}</div>"#,
-            escape(err)
-        ));
-    }
-
-    body.push_str(&items_html(&page.items, chrome.regions));
-
+    let mut body = format!(r#"<div class="pgapp-report"><h2 class="pgapp-subtitle">{}</h2>"#, escape(title));
     body.push_str(r#"<table class="pgapp-table"><thead><tr>"#);
-    for col in &page.columns {
+    for col in columns {
         body.push_str(&format!("<th>{}</th>", escape(col)));
     }
-    body.push_str("<th></th></tr></thead><tbody>");
+    if sibling_form_idx.is_some() {
+        body.push_str("<th></th>");
+    }
+    body.push_str("</tr></thead><tbody>");
 
     for row in rows {
         body.push_str("<tr>");
         let id = row.get("id").and_then(|v| v.as_deref()).unwrap_or("");
-        for col in &page.columns {
+        for col in columns {
             let val = row.get(col).and_then(|v| v.as_deref()).unwrap_or("");
-            let cell = match &page.link_column {
+            let cell = match link_column {
                 Some(lc) if lc.field == *col => {
                     let mut href = format!("/{}?id={}", escape(&lc.target_page), url_encode(id));
                     for (field, param) in &lc.extra_params {
@@ -258,96 +370,178 @@ pub fn list_page(
             };
             body.push_str(&format!("<td>{cell}</td>"));
         }
-        body.push_str(&format!(
-            r#"<td>
-<a class="pgapp-link" href="/{page}/{id}/edit">Edit</a>
-<form class="pgapp-inline-form" method="post" action="/{page}/{id}/delete" onsubmit="return confirm('Delete this row?')">
-<button class="pgapp-btn pgapp-btn-destructive" type="submit">Delete</button>
+        if let Some(form_idx) = sibling_form_idx {
+            body.push_str(&format!(
+                r#"<td class="pgapp-row-actions">
+<a class="pgapp-link" href="/{page}?edit_{form_idx}={id}" title="Edit">{edit_icon}</a>
+<form class="pgapp-inline-form" method="post" action="/{page}/c/{form_idx}/delete/{id}" onsubmit="return confirm('Delete this row?')">
+<button class="pgapp-btn pgapp-btn-destructive" type="submit" title="Delete">{delete_icon}</button>
 </form>
 </td>"#,
-            page = escape(&page.name),
-            id = escape(id),
-        ));
+                page = escape(page_name),
+                form_idx = form_idx,
+                id = escape(id),
+                edit_icon = icons.render("edit"),
+                delete_icon = icons.render("delete"),
+            ));
+        }
         body.push_str("</tr>");
     }
     body.push_str("</tbody></table>");
 
-    body.push_str(&format!(
-        r#"<h2 class="pgapp-subtitle">Add new</h2><form class="pgapp-form" method="post" action="/{}">"#,
-        escape(&page.name)
-    ));
-    for field_name in &page.form {
-        body.push_str(&input_for_field(page, field_name, None, resolved_choices, registry));
+    if prev_href.is_some() || next_href.is_some() {
+        body.push_str(r#"<div class="pgapp-pagination">"#);
+        match prev_href {
+            Some(href) => body.push_str(&format!(
+                r#"<a class="pgapp-link pgapp-btn pgapp-btn-secondary" href="{}">&laquo; Prev</a>"#,
+                escape(href)
+            )),
+            None => body.push_str(r#"<span class="pgapp-btn pgapp-btn-secondary pgapp-btn-disabled">&laquo; Prev</span>"#),
+        }
+        match next_href {
+            Some(href) => body.push_str(&format!(
+                r#"<a class="pgapp-link pgapp-btn pgapp-btn-secondary" href="{}">Next &raquo;</a>"#,
+                escape(href)
+            )),
+            None => body.push_str(r#"<span class="pgapp-btn pgapp-btn-secondary pgapp-btn-disabled">Next &raquo;</span>"#),
+        }
+        body.push_str("</div>");
     }
-    body.push_str(r#"<button class="pgapp-btn pgapp-btn-primary" type="submit">Create</button></form>"#);
 
-    layout(&page.name, chrome, &body)
+    body.push_str("</div>");
+    body
 }
 
-pub fn edit_page(
-    page: &RuntimePage,
-    id: &str,
+/// A `Form` component: blank (create mode) when `edit_id` is `None`,
+/// pre-filled with `row` and carrying a Delete button when `Some`.
+#[allow(clippy::too_many_arguments)]
+pub fn form_html(
+    page_name: &str,
+    idx: usize,
+    title: &str,
+    fields: &[String],
+    entity: &RuntimeEntity,
     row: &BTreeMap<String, Option<String>>,
-    error: Option<&str>,
-    chrome: Chrome,
+    edit_id: Option<&str>,
     resolved_choices: &HashMap<String, Vec<(String, String)>>,
+    item_types: &HashMap<String, FieldItem>,
     registry: &item_types::Registry,
 ) -> String {
-    let mut body = String::new();
-    if let Some(err) = error {
+    let mut body = format!(r#"<div class="pgapp-form-panel"><h2 class="pgapp-subtitle">{}</h2>"#, escape(title));
+
+    let action = match edit_id {
+        Some(id) => format!("/{}/c/{idx}/update/{}", escape(page_name), escape(id)),
+        None => format!("/{}/c/{idx}/create", escape(page_name)),
+    };
+    body.push_str(&format!(r#"<form class="pgapp-form" method="post" action="{action}">"#));
+    for field_name in fields {
+        let value = row.get(field_name).and_then(|v| v.as_deref());
+        body.push_str(&input_for_field(entity, item_types, field_name, value, resolved_choices, registry));
+    }
+    let submit_label = if edit_id.is_some() { "Save" } else { "Create" };
+    body.push_str(&format!(
+        r#"<button class="pgapp-btn pgapp-btn-primary" type="submit">{submit_label}</button></form>"#
+    ));
+
+    if let Some(id) = edit_id {
         body.push_str(&format!(
+            r#"<form class="pgapp-inline-form" method="post" action="/{page}/c/{idx}/delete/{id}" onsubmit="return confirm('Delete this row?')">
+<button class="pgapp-btn pgapp-btn-destructive" type="submit">Delete</button></form>
+<a class="pgapp-link" href="/{page}">Cancel</a>"#,
+            page = escape(page_name),
+            idx = idx,
+            id = escape(id),
+        ));
+    }
+
+    body.push_str("</div>");
+    body
+}
+
+/// An `EditableTable` component: every row rendered as its own inline
+/// form (fields laid out horizontally via CSS to look table-like),
+/// plus an "add new" form at the bottom. Deliberately not a literal
+/// `<table>` — a `<form>` can't wrap `<tr>`/`<td>` — but styled to read
+/// as one.
+#[allow(clippy::too_many_arguments)]
+pub fn editable_table_html(
+    page_name: &str,
+    idx: usize,
+    title: &str,
+    columns: &[String],
+    entity: &RuntimeEntity,
+    rows: &[BTreeMap<String, Option<String>>],
+    resolved_choices: &HashMap<String, Vec<(String, String)>>,
+    item_types: &HashMap<String, FieldItem>,
+    registry: &item_types::Registry,
+    icons: &Icons,
+) -> String {
+    let mut body = format!(r#"<div class="pgapp-editable-table"><h2 class="pgapp-subtitle">{}</h2>"#, escape(title));
+
+    for row in rows {
+        let id = row.get("id").and_then(|v| v.as_deref()).unwrap_or("");
+        body.push_str(r#"<div class="pgapp-editable-row-wrap">"#);
+        body.push_str(&format!(
+            r#"<form class="pgapp-editable-row" method="post" action="/{page}/c/{idx}/update/{id}">"#,
+            page = escape(page_name),
+            idx = idx,
+            id = escape(id),
+        ));
+        for col in columns {
+            let value = row.get(col).and_then(|v| v.as_deref());
+            body.push_str(&input_for_field(entity, item_types, col, value, resolved_choices, registry));
+        }
+        body.push_str(&format!(
+            r#"<button class="pgapp-btn pgapp-btn-primary" type="submit" title="Save">{save_icon}</button></form>
+<form class="pgapp-inline-form" method="post" action="/{page}/c/{idx}/delete/{id}" onsubmit="return confirm('Delete this row?')">
+<button class="pgapp-btn pgapp-btn-destructive" type="submit" title="Delete">{delete_icon}</button></form>"#,
+            save_icon = icons.render("edit"),
+            delete_icon = icons.render("delete"),
+            page = escape(page_name),
+            idx = idx,
+            id = escape(id),
+        ));
+        body.push_str("</div>");
+    }
+
+    body.push_str(&format!(
+        r#"<h3 class="pgapp-region-title">Add new</h3><div class="pgapp-editable-row-wrap"><form class="pgapp-form pgapp-editable-row" method="post" action="/{page}/c/{idx}/create">"#,
+        page = escape(page_name),
+        idx = idx,
+    ));
+    for col in columns {
+        body.push_str(&input_for_field(entity, item_types, col, None, resolved_choices, registry));
+    }
+    body.push_str(r#"<button class="pgapp-btn pgapp-btn-primary" type="submit">Add</button></form></div>"#);
+
+    body.push_str("</div>");
+    body
+}
+
+/// Wraps a page's already-rendered component bodies in the standard
+/// layout, with an optional page-level error banner (surfaced via the
+/// `?error=` query parameter after a failed create/update — see
+/// `server.rs`).
+pub fn page_layout(
+    title: &str,
+    body: &str,
+    error: Option<&str>,
+    chrome: Chrome,
+    icons: &Icons,
+    chart_lib: &ChartLib,
+) -> String {
+    let mut full = String::new();
+    if let Some(err) = error {
+        full.push_str(&format!(
             r#"<div class="pgapp-alert pgapp-alert-error"><strong>Error:</strong> {}</div>"#,
             escape(err)
         ));
     }
-    body.push_str(&format!(
-        r#"<form class="pgapp-form" method="post" action="/{page}/{id}/update">"#,
-        page = escape(&page.name),
-        id = escape(id),
-    ));
-    for field_name in &page.form {
-        let value = row.get(field_name).and_then(|v| v.as_deref());
-        body.push_str(&input_for_field(page, field_name, value, resolved_choices, registry));
-    }
-    body.push_str(r#"<button class="pgapp-btn pgapp-btn-primary" type="submit">Save</button></form>"#);
-    body.push_str(&format!(
-        r#"<p><a class="pgapp-link" href="/{}">Back to list</a></p>"#,
-        escape(&page.name)
-    ));
-
-    layout(&format!("Edit {}", page.name), chrome, &body)
+    full.push_str(body);
+    layout(title, chrome, icons, chart_lib, &full)
 }
 
-/// A read-only single-row view for `Detail` pages, selected via `?id=`.
-pub fn detail_page(page: &RuntimePage, row: &BTreeMap<String, Option<String>>, chrome: Chrome) -> String {
-    let entity = page
-        .entity
-        .as_ref()
-        .expect("detail page always has an entity");
-
-    let mut body = String::new();
-    body.push_str(&items_html(&page.items, chrome.regions));
-    body.push_str(r#"<table class="pgapp-table"><tbody>"#);
-    for field in &entity.fields {
-        let val = row.get(&field.name).and_then(|v| v.as_deref()).unwrap_or("");
-        body.push_str(&format!(
-            "<tr><th>{name}</th><td>{val}</td></tr>",
-            name = escape(&field.name),
-            val = escape(val),
-        ));
-    }
-    body.push_str("</tbody></table>");
-
-    layout(&page.name, chrome, &body)
-}
-
-/// A pure page-items page: no entity, no table/form, just `items`.
-pub fn static_page(page: &RuntimePage, chrome: Chrome) -> String {
-    let body = items_html(&page.items, chrome.regions);
-    layout(&page.name, chrome, &body)
-}
-
-pub fn index_page(app_name: &str, pages: &[String], chrome: Chrome) -> String {
+pub fn index_page(app_name: &str, pages: &[String], chrome: Chrome, icons: &Icons, chart_lib: &ChartLib) -> String {
     let mut body = String::from(r#"<ul class="pgapp-list">"#);
     for p in pages {
         body.push_str(&format!(
@@ -356,5 +550,5 @@ pub fn index_page(app_name: &str, pages: &[String], chrome: Chrome) -> String {
         ));
     }
     body.push_str("</ul>");
-    layout(app_name, chrome, &body)
+    layout(app_name, chrome, icons, chart_lib, &body)
 }

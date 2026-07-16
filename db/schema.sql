@@ -1,6 +1,6 @@
--- In-database metadata for applications, entities, fields, pages, page
--- items, and navigation. Application data tables live in pgapp_data,
--- generated from this metadata.
+-- In-database metadata for applications, entities, fields, pages,
+-- components, and navigation. Application data tables live in
+-- pgapp_data, generated from this metadata.
 create schema if not exists pgapp_meta;
 create schema if not exists pgapp_data;
 
@@ -29,43 +29,54 @@ create table if not exists pgapp_meta.fields (
     unique (entity_id, name)
 );
 
--- entity_id is nullable: "static" pages (pure page items, no data) have
--- no backing entity at all.
+-- A page is just a name: what it's made of lives entirely in
+-- `components` below (an ordered list of report/form/editable_table/
+-- chart/text/link/region blocks).
 create table if not exists pgapp_meta.pages (
-    id         serial primary key,
-    app_id     integer not null references pgapp_meta.apps(id) on delete cascade,
-    entity_id  integer references pgapp_meta.entities(id) on delete cascade,
-    name       text not null,
-    page_type  text not null default 'list', -- 'list' | 'detail' | 'static'
+    id     serial primary key,
+    app_id integer not null references pgapp_meta.apps(id) on delete cascade,
+    name   text not null,
     unique (app_id, name)
 );
-alter table pgapp_meta.pages alter column entity_id drop not null;
-alter table pgapp_meta.pages add column if not exists link_field text;
-alter table pgapp_meta.pages
-    add column if not exists link_target_page_id integer references pgapp_meta.pages(id);
+-- Earlier schema versions had page-level entity/kind/link columns —
+-- superseded entirely by `components`.
+alter table pgapp_meta.pages drop column if exists entity_id;
+alter table pgapp_meta.pages drop column if exists page_type;
+alter table pgapp_meta.pages drop column if exists link_field;
+alter table pgapp_meta.pages drop column if exists link_target_page_id;
+alter table pgapp_meta.pages drop column if exists source_query_name;
+alter table pgapp_meta.pages drop column if exists link_params;
 
-create table if not exists pgapp_meta.page_fields (
-    id             serial primary key,
-    page_id        integer not null references pgapp_meta.pages(id) on delete cascade,
-    field_id       integer not null references pgapp_meta.fields(id) on delete cascade,
-    shown_in_list  boolean not null default false,
-    shown_in_form  boolean not null default false,
-    ordinal        integer not null default 0,
-    unique (page_id, field_id)
+-- One independently-rendered piece of a page (page_id set), or of the
+-- app-wide header/footer chrome (page_id null, slot = 'header' |
+-- 'footer'). `kind` names a component (report/form/editable_table/
+-- chart/text/link/region) and `config` is that component's entire
+-- definition as a generic JSON blob (title, entity, columns, item
+-- types, chart axes, link targets by page *name*, ...) — the same
+-- "generic config" pattern used for item types, extended up to the
+-- whole-component level so adding a new component kind never requires
+-- a schema change here. Page/entity/item-type references inside
+-- `config` are validated by name at sync time (see meta::sync_app),
+-- mirroring how item kinds are checked against the item type registry.
+create table if not exists pgapp_meta.components (
+    id      serial primary key,
+    app_id  integer not null references pgapp_meta.apps(id) on delete cascade,
+    page_id integer references pgapp_meta.pages(id) on delete cascade,
+    slot    text, -- null | 'header' | 'footer'
+    kind    text not null,
+    ordinal integer not null default 0,
+    config  jsonb not null default '{}'
 );
+create index if not exists components_page_idx on pgapp_meta.components (page_id, ordinal);
+create index if not exists components_app_slot_idx on pgapp_meta.components (app_id, slot, ordinal);
 
--- Content placed on a page beyond its entity-bound table/form: static
--- text, a link to another page, or a region rendering a named query's
--- rows (query_name, set only for kind = 'region').
-create table if not exists pgapp_meta.page_items (
-    id              serial primary key,
-    page_id         integer not null references pgapp_meta.pages(id) on delete cascade,
-    kind            text not null, -- 'text' | 'link' | 'region'
-    label           text not null,
-    target_page_id  integer references pgapp_meta.pages(id),
-    ordinal         integer not null default 0
-);
-alter table pgapp_meta.page_items add column if not exists query_name text;
+-- Earlier schema versions modeled page items / form fields as their
+-- own tables — all superseded by `components`.
+drop table if exists pgapp_meta.page_fields;
+drop table if exists pgapp_meta.page_items;
+drop table if exists pgapp_meta.page_field_items;
+drop table if exists pgapp_meta.header_items;
+drop table if exists pgapp_meta.footer_items;
 
 -- The app's (possibly multi-level) navigation bar. Self-referencing
 -- parent_id makes a leaf (target_page_id set) or a group (children,
@@ -78,46 +89,6 @@ create table if not exists pgapp_meta.nav_items (
     target_page_id  integer references pgapp_meta.pages(id),
     ordinal         integer not null default 0
 );
-
--- App-wide chrome shown on every page: same shape as page_items, just
--- scoped to the app rather than one page.
-create table if not exists pgapp_meta.header_items (
-    id              serial primary key,
-    app_id          integer not null references pgapp_meta.apps(id) on delete cascade,
-    kind            text not null, -- 'text' | 'link' | 'region'
-    label           text not null,
-    target_page_id  integer references pgapp_meta.pages(id),
-    ordinal         integer not null default 0
-);
-alter table pgapp_meta.header_items add column if not exists query_name text;
-
-create table if not exists pgapp_meta.footer_items (
-    id              serial primary key,
-    app_id          integer not null references pgapp_meta.apps(id) on delete cascade,
-    kind            text not null, -- 'text' | 'link' | 'region'
-    label           text not null,
-    target_page_id  integer references pgapp_meta.pages(id),
-    ordinal         integer not null default 0
-);
-alter table pgapp_meta.footer_items add column if not exists query_name text;
-
--- How each form field is presented: item_type names a component
--- registered in src/item_types.rs (open-ended — not a fixed set of
--- values), and config is whatever that component wants: e.g. a static
--- {"choices": [...]} list or {"query": "name"} for radio/popup, or
--- {"min": "0", "max": "40", "step": "1"} for a slider. Components read
--- their own keys out of this generically; adding a new item type never
--- requires a schema change here.
-create table if not exists pgapp_meta.page_field_items (
-    id             serial primary key,
-    page_id        integer not null references pgapp_meta.pages(id) on delete cascade,
-    field_name     text not null,
-    item_type      text not null default 'text',
-    unique (page_id, field_name)
-);
-alter table pgapp_meta.page_field_items add column if not exists config jsonb not null default '{}';
-alter table pgapp_meta.page_field_items drop column if exists choices;
-alter table pgapp_meta.page_field_items drop column if exists choices_query;
 
 -- Named, reusable SQL queries. page_id null = app-scoped (visible from
 -- every page); page_id set = visible only within that page, shadowing
@@ -132,14 +103,6 @@ create table if not exists pgapp_meta.named_queries (
 );
 create unique index if not exists named_queries_scope_name_idx
     on pgapp_meta.named_queries (app_id, coalesce(page_id, 0), name);
-
--- `list` pages normally report on `select * from` their entity table;
--- source_query_name overrides that with a named query instead (writes
--- still go to the entity by id). link_params carries the row-link
--- column's extra forwarded parameters as [{"field": "...", "param":
--- "..."}], since they don't reference another table by id.
-alter table pgapp_meta.pages add column if not exists source_query_name text;
-alter table pgapp_meta.pages add column if not exists link_params jsonb not null default '[]';
 
 -- The pgapp runtime JS library (item value capture, etc.) lives here,
 -- not as a static file: seeded from a built-in default the first time

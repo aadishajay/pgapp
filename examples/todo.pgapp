@@ -1,0 +1,140 @@
+# Example application definition in pgapp's markup language.
+# This one file is the single source of truth: it is parsed once at
+# startup and synced into the in-database metadata (pgapp_meta.*),
+# which is what actually drives routing and rendering afterwards.
+#
+# Named-query SQL below references pgapp_data.todo_tasks directly —
+# that's this entity's physical table name (<app slug>_<entity slug>),
+# printed at startup. A named query isn't translated from the logical
+# entity name, so it has to know the real table.
+
+app "Todo" {
+  header {
+    text "pgapp Todo Demo"
+  }
+
+  footer {
+    text "Built with pgapp - a Postgres-native no/low-code framework."
+    link "About" -> page About
+  }
+
+  nav {
+    item "Tasks" -> page Tasks
+    item "Open" -> page OpenTasks
+    item "Quick edit" -> page QuickEdit
+    item "More" {
+      item "About" -> page About
+    }
+  }
+
+  # App-scoped: visible from every page's LOVs/regions.
+  query assignees {
+    sql: "select distinct assignee as value from pgapp_data.todo_tasks where assignee is not null order by 1"
+  }
+
+  # Rows only open tasks — sourced by the OpenTasks report below instead
+  # of a flat `select * from` the entity table.
+  query open {
+    sql: "select id, title, priority, assignee from pgapp_data.todo_tasks
+          where done = false order by id"
+  }
+
+  # Powers the "Tasks by priority" chart on the About page.
+  query by_priority {
+    sql: "select priority as label, count(*) as value from pgapp_data.todo_tasks group by priority order by 1"
+  }
+
+  entity "tasks" {
+    field id: id
+    field title: text required
+    field priority: text default Medium
+    field done: boolean default false
+    field assignee: text
+    field notes: text
+    field estimate_hours: integer default 4
+    field created_at: timestamp default now
+  }
+
+  # A page can hold any number of components. Here a paginated,
+  # read-only Report sits next to a Form for the same entity: clicking
+  # a report row's edit icon switches the Form into edit mode for that
+  # row (see server.rs's sibling_form_idx) — the classic list+edit CRUD
+  # pattern, but as two independent, composable pieces rather than one
+  # fixed "list page" kind. page_size is deliberately small to make the
+  # keyset (`?r0_after=`/`?r0_before=`) pagination controls visible.
+  page "Tasks" {
+    report "Tasks" of tasks {
+      columns: title, priority, done, estimate_hours, created_at
+      link: title -> page TaskDetail (priority: priority)
+      page_size: 5
+    }
+
+    # Demonstrates every item type: title/done fall back to their
+    # default (text, checkbox); priority/assignee/notes declare one
+    # explicitly, with assignee's popup sourced from the app-scoped
+    # query above instead of a fixed list. estimate_hours uses
+    # "slider", a component that isn't built into the markup grammar at
+    # all — it's just another file under src/item_types/, registered
+    # like any other.
+    form "Add / edit task" of tasks {
+      fields: title, priority, done, assignee, notes, estimate_hours
+      item priority as radio ("Low", "Medium", "High")
+      item assignee as popup from query assignees
+      item notes as readonly
+      item estimate_hours as slider (min: "0", max: "40", step: "1")
+    }
+
+    text "Click a title to see its detail page, or a row's edit icon to update it above."
+
+    # Page-scoped: only this page's items/LOVs can see "recent".
+    query recent {
+      sql: "select id, title, priority, done from pgapp_data.todo_tasks order by id desc limit 5"
+    }
+    region "Recently added" from query recent
+  }
+
+  page "TaskDetail" {
+    # :priority binds from the current row by default, or from the
+    # ?priority= the Tasks report forwarded via its link: (...) — either
+    # way it's the same cross-page-parameter mechanism.
+    query siblings {
+      sql: "select id, title from pgapp_data.todo_tasks
+            where priority = :priority::text and id != :id::integer
+            order by id"
+    }
+    region "Other tasks with the same priority" from query siblings
+  }
+
+  # A Report whose rows come from a named query instead of the entity
+  # table directly — since an arbitrary query has no assumed sort key,
+  # this paginates by OFFSET (`?r0_page=`) rather than keyset, still
+  # with zero extra COUNT(*) query (see server::fetch_report_rows vs.
+  # query_engine::run_named_query_page). No Form on this page, so it's
+  # a pure read-only report.
+  page "OpenTasks" {
+    report "Open tasks" of tasks {
+      source: query open
+      columns: title, priority, assignee
+      page_size: 3
+    }
+  }
+
+  # An EditableTable: every row is inline-editable and there's no
+  # separate list/edit split — a good fit for a small table you want to
+  # bulk-tweak in place.
+  page "QuickEdit" {
+    editable_table "Quick edit" of tasks {
+      columns: title, priority, done
+    }
+  }
+
+  page "About" {
+    text "pgapp is an Oracle APEX-inspired no/low-code framework built on Postgres."
+    chart "Tasks by priority" from query by_priority {
+      type: bar
+      x: label
+      y: value
+    }
+    link "Back to tasks" -> page Tasks
+  }
+}

@@ -7,10 +7,10 @@ use sqlx::PgPool;
 use std::collections::HashMap;
 
 use super::types::{
-    LinkColumn, NavNode, RuntimeApp, RuntimeEntity, RuntimeField, RuntimePage, RuntimePageItem,
+    LinkColumn, NavNode, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimeField, RuntimePage,
     RuntimeQuery,
 };
-use crate::model::{FieldItem, FieldType, PageKind};
+use crate::model::{FieldItem, FieldType};
 
 /// Turns `sql` (which may contain `:name` bind markers) into Postgres
 /// positional-parameter SQL plus the ordered list of names each `$N`
@@ -68,18 +68,6 @@ pub async fn load_runtime_js(pool: &PgPool, app_name: &str) -> Result<String> {
     .with_context(|| format!("runtime.js not found for app '{app_name}'"))
 }
 
-#[derive(sqlx::FromRow)]
-struct PageRow {
-    id: i32,
-    name: String,
-    entity_id: Option<i32>,
-    page_type: String,
-    link_field: Option<String>,
-    link_target_page_id: Option<i32>,
-    source_query_name: Option<String>,
-    link_params: serde_json::Value,
-}
-
 pub async fn load_app(pool: &PgPool, app_name: &str) -> Result<RuntimeApp> {
     let app_id: i32 = sqlx::query_scalar("select id from pgapp_meta.apps where name = $1")
         .bind(app_name)
@@ -87,130 +75,25 @@ pub async fn load_app(pool: &PgPool, app_name: &str) -> Result<RuntimeApp> {
         .await
         .with_context(|| format!("app '{app_name}' not found in pgapp_meta"))?;
 
-    let page_rows: Vec<PageRow> = sqlx::query_as(
-        "select id, name, entity_id, page_type, link_field, link_target_page_id,
-                source_query_name, link_params
-           from pgapp_meta.pages where app_id = $1 order by id",
+    let entities = load_entities(pool, app_id).await?;
+
+    let page_rows: Vec<(i32, String)> = sqlx::query_as(
+        "select id, name from pgapp_meta.pages where app_id = $1 order by id",
     )
     .bind(app_id)
     .fetch_all(pool)
     .await?;
-
-    let page_names: HashMap<i32, String> = page_rows.iter().map(|r| (r.id, r.name.clone())).collect();
+    let page_names: HashMap<i32, String> = page_rows.iter().cloned().collect();
 
     let (app_queries, mut page_queries) = load_queries(pool, app_id).await?;
 
     let mut pages = Vec::new();
-    for row in &page_rows {
-        let entity = match row.entity_id {
-            None => None,
-            Some(entity_id) => {
-                let (entity_name, table_name): (String, String) = sqlx::query_as(
-                    "select name, table_name from pgapp_meta.entities where id = $1",
-                )
-                .bind(entity_id)
-                .fetch_one(pool)
-                .await?;
-
-                let field_rows: Vec<(String, String, bool)> = sqlx::query_as(
-                    "select name, data_type, is_required from pgapp_meta.fields
-                      where entity_id = $1 order by ordinal",
-                )
-                .bind(entity_id)
-                .fetch_all(pool)
-                .await?;
-
-                let fields = field_rows
-                    .into_iter()
-                    .map(|(name, data_type, required)| RuntimeField {
-                        name,
-                        data_type: FieldType::from_str_lossy(&data_type),
-                        required,
-                    })
-                    .collect();
-
-                Some(RuntimeEntity {
-                    name: entity_name,
-                    table_name,
-                    fields,
-                })
-            }
-        };
-
-        let (columns, form) = if entity.is_some() {
-            let pf_rows: Vec<(String, bool, bool)> = sqlx::query_as(
-                "select f.name, pf.shown_in_list, pf.shown_in_form
-                   from pgapp_meta.page_fields pf
-                   join pgapp_meta.fields f on f.id = pf.field_id
-                  where pf.page_id = $1
-                  order by pf.ordinal",
-            )
-            .bind(row.id)
-            .fetch_all(pool)
-            .await?;
-
-            let columns = pf_rows
-                .iter()
-                .filter(|(_, shown_in_list, _)| *shown_in_list)
-                .map(|(name, ..)| name.clone())
-                .collect();
-            let form = pf_rows
-                .iter()
-                .filter(|(_, _, shown_in_form)| *shown_in_form)
-                .map(|(name, ..)| name.clone())
-                .collect();
-            (columns, form)
-        } else {
-            (Vec::new(), Vec::new())
-        };
-
-        let link_column = match (&row.link_field, row.link_target_page_id) {
-            (Some(field), Some(target_id)) => {
-                let extra_params = row
-                    .link_params
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter_map(|v| {
-                        let field = v.get("field")?.as_str()?.to_string();
-                        let param = v.get("param")?.as_str()?.to_string();
-                        Some((field, param))
-                    })
-                    .collect();
-                Some(LinkColumn {
-                    field: field.clone(),
-                    target_page: page_names[&target_id].clone(),
-                    extra_params,
-                })
-            }
-            _ => None,
-        };
-
-        let item_type_rows: Vec<(String, String, serde_json::Value)> = sqlx::query_as(
-            "select field_name, item_type, config from pgapp_meta.page_field_items
-              where page_id = $1",
-        )
-        .bind(row.id)
-        .fetch_all(pool)
-        .await?;
-        let item_types = item_type_rows
-            .into_iter()
-            .map(|(field_name, kind, config)| (field_name, FieldItem { kind, config }))
-            .collect();
-
-        let items = load_items(pool, "pgapp_meta.page_items", "page_id", row.id, &page_names).await?;
-
+    for (page_id, name) in &page_rows {
+        let components = load_components(pool, "page_id", *page_id, &entities).await?;
         pages.push(RuntimePage {
-            name: row.name.clone(),
-            kind: PageKind::from_str_lossy(&row.page_type),
-            entity,
-            columns,
-            form,
-            link_column,
-            items,
-            item_types,
-            source_query: row.source_query_name.clone(),
-            queries: page_queries.remove(&row.id).unwrap_or_default(),
+            name: name.clone(),
+            components,
+            queries: page_queries.remove(page_id).unwrap_or_default(),
         });
     }
 
@@ -223,8 +106,8 @@ pub async fn load_app(pool: &PgPool, app_name: &str) -> Result<RuntimeApp> {
     .await?;
     let nav = build_nav_tree(&nav_rows, None, &page_names);
 
-    let header = load_items(pool, "pgapp_meta.header_items", "app_id", app_id, &page_names).await?;
-    let footer = load_items(pool, "pgapp_meta.footer_items", "app_id", app_id, &page_names).await?;
+    let header = load_chrome(pool, app_id, "header", &entities).await?;
+    let footer = load_chrome(pool, app_id, "footer", &entities).await?;
 
     Ok(RuntimeApp {
         name: app_name.to_string(),
@@ -234,6 +117,41 @@ pub async fn load_app(pool: &PgPool, app_name: &str) -> Result<RuntimeApp> {
         footer,
         queries: app_queries,
     })
+}
+
+/// Loads every entity for the app, keyed by name, so components can
+/// resolve their `entity` config field into a full [`RuntimeEntity`]
+/// without another round trip per component.
+async fn load_entities(pool: &PgPool, app_id: i32) -> Result<HashMap<String, RuntimeEntity>> {
+    let entity_rows: Vec<(i32, String, String)> = sqlx::query_as(
+        "select id, name, table_name from pgapp_meta.entities where app_id = $1",
+    )
+    .bind(app_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut entities = HashMap::new();
+    for (entity_id, name, table_name) in entity_rows {
+        let field_rows: Vec<(String, String, bool)> = sqlx::query_as(
+            "select name, data_type, is_required from pgapp_meta.fields
+              where entity_id = $1 order by ordinal",
+        )
+        .bind(entity_id)
+        .fetch_all(pool)
+        .await?;
+
+        let fields = field_rows
+            .into_iter()
+            .map(|(name, data_type, required)| RuntimeField {
+                name,
+                data_type: FieldType::from_str_lossy(&data_type),
+                required,
+            })
+            .collect();
+
+        entities.insert(name.clone(), RuntimeEntity { name, table_name, fields });
+    }
+    Ok(entities)
 }
 
 /// Loads and compiles every named query for the app, split into the
@@ -267,37 +185,152 @@ async fn load_queries(
     Ok((app_queries, page_queries))
 }
 
-/// Loads the text/link/region items owned by one row — shared by
-/// `page_items`, `header_items`, and `footer_items`.
-async fn load_items(
+/// Loads the components owned by one page, in order.
+async fn load_components(
     pool: &PgPool,
-    table: &str,
     owner_col: &str,
     owner_id: i32,
-    page_names: &HashMap<i32, String>,
-) -> Result<Vec<RuntimePageItem>> {
-    let rows: Vec<(String, String, Option<i32>, Option<String>)> = sqlx::query_as(&format!(
-        "select kind, label, target_page_id, query_name from {table}
-          where {owner_col} = $1 order by ordinal"
+    entities: &HashMap<String, RuntimeEntity>,
+) -> Result<Vec<RuntimeComponent>> {
+    let rows: Vec<(String, serde_json::Value)> = sqlx::query_as(&format!(
+        "select kind, config from pgapp_meta.components
+          where {owner_col} = $1 and slot is null order by ordinal"
     ))
     .bind(owner_id)
     .fetch_all(pool)
     .await?;
 
-    Ok(rows
+    rows.into_iter()
+        .map(|(kind, config)| decode_component(&kind, config, entities))
+        .collect()
+}
+
+/// Loads the app-wide header/footer chrome (`slot` = "header"/"footer",
+/// `page_id` null) — restricted to Text/Link/Region at sync time, but
+/// decoded through the same generic path as page components.
+async fn load_chrome(
+    pool: &PgPool,
+    app_id: i32,
+    slot: &str,
+    entities: &HashMap<String, RuntimeEntity>,
+) -> Result<Vec<RuntimeComponent>> {
+    let rows: Vec<(String, serde_json::Value)> = sqlx::query_as(
+        "select kind, config from pgapp_meta.components
+          where app_id = $1 and slot = $2 and page_id is null order by ordinal",
+    )
+    .bind(app_id)
+    .bind(slot)
+    .fetch_all(pool)
+    .await?;
+
+    rows.into_iter()
+        .map(|(kind, config)| decode_component(&kind, config, entities))
+        .collect()
+}
+
+fn json_strings(v: &serde_json::Value) -> Vec<String> {
+    v.as_array()
         .into_iter()
-        .map(|(kind, label, target_page_id, query_name)| match kind.as_str() {
-            "link" => RuntimePageItem::Link {
-                label,
-                target_page: page_names[&target_page_id.expect("link items always have a target page")].clone(),
-            },
-            "region" => RuntimePageItem::Region {
-                label,
-                query: query_name.expect("region items always have a query name"),
-            },
-            _ => RuntimePageItem::Text(label),
+        .flatten()
+        .filter_map(|x| x.as_str().map(|s| s.to_string()))
+        .collect()
+}
+
+fn json_str(v: &serde_json::Value, key: &str) -> String {
+    v.get(key).and_then(|x| x.as_str()).unwrap_or_default().to_string()
+}
+
+fn decode_item_types(v: &serde_json::Value) -> HashMap<String, FieldItem> {
+    v.as_object()
+        .into_iter()
+        .flatten()
+        .map(|(k, val)| {
+            let kind = val.get("kind").and_then(|x| x.as_str()).unwrap_or("text").to_string();
+            let config = val.get("config").cloned().unwrap_or(serde_json::json!({}));
+            (k.clone(), FieldItem { kind, config })
         })
-        .collect())
+        .collect()
+}
+
+fn resolve_entity(
+    entities: &HashMap<String, RuntimeEntity>,
+    name: &str,
+) -> Result<RuntimeEntity> {
+    entities
+        .get(name)
+        .cloned()
+        .with_context(|| format!("component references unknown entity '{name}'"))
+}
+
+/// Decodes one `(kind, config)` row back into a [`RuntimeComponent`].
+/// The inverse of `meta::sync::build_component_config`.
+fn decode_component(
+    kind: &str,
+    config: serde_json::Value,
+    entities: &HashMap<String, RuntimeEntity>,
+) -> Result<RuntimeComponent> {
+    match kind {
+        "report" => {
+            let entity = resolve_entity(entities, &json_str(&config, "entity"))?;
+            let link_column = match config.get("link") {
+                Some(v) if !v.is_null() => {
+                    let extra_params = v
+                        .get("extra_params")
+                        .and_then(|v| v.as_array())
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|pair| {
+                            let arr = pair.as_array()?;
+                            Some((arr.first()?.as_str()?.to_string(), arr.get(1)?.as_str()?.to_string()))
+                        })
+                        .collect();
+                    Some(LinkColumn {
+                        field: json_str(v, "field"),
+                        target_page: json_str(v, "target_page"),
+                        extra_params,
+                    })
+                }
+                _ => None,
+            };
+            Ok(RuntimeComponent::Report {
+                title: json_str(&config, "title"),
+                entity,
+                columns: json_strings(&config["columns"]),
+                source_query: config.get("source_query").and_then(|v| v.as_str()).map(String::from),
+                link_column,
+                page_size: config.get("page_size").and_then(|v| v.as_i64()).unwrap_or(20),
+            })
+        }
+        "form" => Ok(RuntimeComponent::Form {
+            title: json_str(&config, "title"),
+            entity: resolve_entity(entities, &json_str(&config, "entity"))?,
+            fields: json_strings(&config["fields"]),
+            item_types: decode_item_types(&config["item_types"]),
+        }),
+        "editable_table" => Ok(RuntimeComponent::EditableTable {
+            title: json_str(&config, "title"),
+            entity: resolve_entity(entities, &json_str(&config, "entity"))?,
+            columns: json_strings(&config["columns"]),
+            item_types: decode_item_types(&config["item_types"]),
+        }),
+        "chart" => Ok(RuntimeComponent::Chart {
+            title: json_str(&config, "title"),
+            query: json_str(&config, "query"),
+            chart_type: json_str(&config, "chart_type"),
+            x: json_str(&config, "x"),
+            y: json_str(&config, "y"),
+        }),
+        "text" => Ok(RuntimeComponent::Text(json_str(&config, "text"))),
+        "link" => Ok(RuntimeComponent::Link {
+            label: json_str(&config, "label"),
+            target_page: json_str(&config, "target_page"),
+        }),
+        "region" => Ok(RuntimeComponent::Region {
+            label: json_str(&config, "label"),
+            query: json_str(&config, "query"),
+        }),
+        other => anyhow::bail!("unknown component kind '{other}' in pgapp_meta.components"),
+    }
 }
 
 fn build_nav_tree(

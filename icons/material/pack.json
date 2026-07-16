@@ -1,0 +1,7 @@
+{
+  "stylesheet": "https://fonts.googleapis.com/icon?family=Material+Icons",
+  "icons": {
+    "edit": { "class": "material-icons", "content": "edit" },
+    "delete": { "class": "material-icons", "content": "delete" }
+  }
+}

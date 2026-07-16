@@ -1,21 +1,22 @@
 //! Upserts a parsed [`AppDef`] into `pgapp_meta.*` and makes sure the
 //! physical data table for each entity exists.
 //!
-//! Syncing happens in phases because pages, page items, link columns
-//! and nav items can all reference *other* pages by name, including
-//! ones declared later in the file: phase 1 creates entities/fields/
-//! tables, phase 2 creates a bare row for every page (so every page has
-//! an id), and phase 3 onward resolves everything that points at a page
-//! by name. Named queries don't need that phasing themselves (nothing
-//! references a query by anything but its plain name, resolved at
-//! request time), so they're synced right where they're declared.
+//! Syncing happens in phases because components (via `link:`/nav/
+//! header/footer) can reference *other* pages by name, including ones
+//! declared later in the file: phase 1 creates entities/fields/tables,
+//! phase 2 creates a bare row for every page (so every page has an id),
+//! and phase 3 onward resolves everything that points at a page or
+//! entity by name. Components are stored as `(kind, config jsonb)` —
+//! `config` embeds page/entity/query *names* directly (not ids), so
+//! nothing downstream needs another join to resolve them; sync's job is
+//! just to validate those names exist before writing them.
 
 use anyhow::{Context, Result};
 use sqlx::PgPool;
 use std::collections::HashMap;
 
 use crate::item_types::{self, Registry};
-use crate::model::{AppDef, EntityDef, FieldDef, FieldItem, FieldType, PageItem, PageKind, QueryDef};
+use crate::model::{AppDef, ComponentDef, EntityDef, FieldDef, FieldItem, FieldType, QueryDef};
 
 fn slug(s: &str) -> String {
     let mut out = String::new();
@@ -36,12 +37,13 @@ fn slug(s: &str) -> String {
 /// sync only — after that the database row is the one that's served.
 const DEFAULT_RUNTIME_JS: &str = include_str!("../runtime.js");
 
-/// Upserts the app/entity/field/page/item/nav/query metadata and makes
-/// sure the physical data table for each entity exists. `registry` is
-/// used only to validate that every `item ... as <kind>` names a
-/// component that actually exists, so a typo (or a kind whose file was
-/// never registered) fails at sync time with a clear message instead of
-/// silently rendering nothing later.
+/// Upserts the app/entity/field/page/component/nav/query metadata and
+/// makes sure the physical data table for each entity exists.
+/// `registry` is used to validate that every `item ... as <kind>` names
+/// a component that actually exists, and to fill in the default kind
+/// for fields that don't declare one — so a typo (or a kind whose file
+/// was never registered) fails at sync time with a clear message
+/// instead of silently rendering nothing later.
 pub async fn sync_app(pool: &PgPool, app: &AppDef, registry: &Registry) -> Result<()> {
     let app_id: i32 = sqlx::query_scalar(
         "insert into pgapp_meta.apps (name) values ($1)
@@ -110,153 +112,58 @@ pub async fn sync_app(pool: &PgPool, app: &AppDef, registry: &Registry) -> Resul
     // anything below tries to link to one by name.
     let mut page_ids: HashMap<String, i32> = HashMap::new();
     for page in &app.pages {
-        let entity_id = match &page.entity {
-            None => None,
-            Some(name) => Some(*entity_ids.get(name).with_context(|| {
-                format!("page '{}' references unknown entity '{name}'", page.name)
-            })?),
-        };
-
         let page_id: i32 = sqlx::query_scalar(
-            "insert into pgapp_meta.pages (app_id, entity_id, name, page_type)
-             values ($1, $2, $3, $4)
-             on conflict (app_id, name) do update set
-                entity_id = excluded.entity_id,
-                page_type = excluded.page_type
+            "insert into pgapp_meta.pages (app_id, name) values ($1, $2)
+             on conflict (app_id, name) do update set name = excluded.name
              returning id",
         )
         .bind(app_id)
-        .bind(entity_id)
         .bind(&page.name)
-        .bind(page.kind.as_str())
         .fetch_one(pool)
         .await?;
 
         page_ids.insert(page.name.clone(), page_id);
     }
 
-    // Phase 3: page-scoped queries, page fields, field item types, link
-    // columns, and page items — all of which may reference a page (or,
-    // for link columns, a query) by name.
+    // Phase 3: page-scoped queries and components — components may
+    // reference another page (link targets), an entity, or a query by
+    // name, all of which now have ids/known names to validate against.
     for page in &app.pages {
         let page_id = page_ids[&page.name];
 
         sync_queries(pool, app_id, Some(page_id), &page.queries).await?;
 
-        if page.kind == PageKind::List {
-            let entity_name = page.entity.as_ref().expect("list page always has an entity");
-            let entity_id = entity_ids[entity_name];
-            let entity = app.entity(entity_name).expect("resolved above");
+        sqlx::query("delete from pgapp_meta.components where page_id = $1")
+            .bind(page_id)
+            .execute(pool)
+            .await?;
 
-            for (ordinal, field_name) in entity.fields.iter().map(|f| &f.name).enumerate() {
-                let shown_in_list = page.columns.iter().any(|c| c == field_name);
-                let shown_in_form = page.form.iter().any(|c| c == field_name);
-                sqlx::query(
-                    "insert into pgapp_meta.page_fields
-                        (page_id, field_id, shown_in_list, shown_in_form, ordinal)
-                     select $1, f.id, $3, $4, $5
-                       from pgapp_meta.fields f
-                      where f.entity_id = $2 and f.name = $6
-                     on conflict (page_id, field_id) do update set
-                        shown_in_list = excluded.shown_in_list,
-                        shown_in_form = excluded.shown_in_form,
-                        ordinal = excluded.ordinal",
-                )
-                .bind(page_id)
-                .bind(entity_id)
-                .bind(shown_in_list)
-                .bind(shown_in_form)
-                .bind(ordinal as i32)
-                .bind(field_name)
-                .execute(pool)
-                .await?;
-            }
+        for (ordinal, component) in page.components.iter().enumerate() {
+            let known_query = |name: &str| {
+                page.queries.iter().any(|q| q.name == name) || app.queries.iter().any(|q| q.name == name)
+            };
+            let (kind, config) = build_component_config(
+                component,
+                app,
+                &entity_ids,
+                &page_ids,
+                registry,
+                &known_query,
+                &format!("page '{}'", page.name),
+            )?;
 
-            // Every form field gets an explicit, resolved item (kind +
-            // config), falling back to `item_types::default_kind_for`,
-            // so the runtime side never has to re-derive the default
-            // itself.
-            for field_name in &page.form {
-                let field = entity
-                    .fields
-                    .iter()
-                    .find(|f| &f.name == field_name)
-                    .with_context(|| format!("page '{}' form references unknown field '{field_name}'", page.name))?;
-                let field_item = page.item_types.get(field_name).cloned().unwrap_or_else(|| FieldItem {
-                    kind: item_types::default_kind_for(field.ty).to_string(),
-                    config: serde_json::json!({}),
-                });
-
-                if !registry.contains_key(field_item.kind.as_str()) {
-                    let known: Vec<&str> = registry.keys().copied().collect();
-                    anyhow::bail!(
-                        "page '{}' field '{field_name}' uses unknown item type '{}' (known: {})",
-                        page.name,
-                        field_item.kind,
-                        known.join(", "),
-                    );
-                }
-
-                sqlx::query(
-                    "insert into pgapp_meta.page_field_items (page_id, field_name, item_type, config)
-                     values ($1, $2, $3, $4)
-                     on conflict (page_id, field_name) do update set
-                        item_type = excluded.item_type,
-                        config = excluded.config",
-                )
-                .bind(page_id)
-                .bind(field_name)
-                .bind(&field_item.kind)
-                .bind(&field_item.config)
-                .execute(pool)
-                .await?;
-            }
+            sqlx::query(
+                "insert into pgapp_meta.components (app_id, page_id, slot, kind, ordinal, config)
+                 values ($1, $2, null, $3, $4, $5)",
+            )
+            .bind(app_id)
+            .bind(page_id)
+            .bind(kind)
+            .bind(ordinal as i32)
+            .bind(config)
+            .execute(pool)
+            .await?;
         }
-
-        let (link_field, link_target_id, link_params) = match &page.link_column {
-            None => (None, None, serde_json::Value::Array(Vec::new())),
-            Some(lc) => {
-                let target_id = *page_ids.get(&lc.target_page).with_context(|| {
-                    format!(
-                        "page '{}' links to unknown page '{}'",
-                        page.name, lc.target_page
-                    )
-                })?;
-                let params = lc
-                    .extra_params
-                    .iter()
-                    .map(|(field, param)| serde_json::json!({ "field": field, "param": param }))
-                    .collect();
-                (
-                    Some(lc.field.clone()),
-                    Some(target_id),
-                    serde_json::Value::Array(params),
-                )
-            }
-        };
-        sqlx::query(
-            "update pgapp_meta.pages set
-                link_field = $2, link_target_page_id = $3, link_params = $4, source_query_name = $5
-             where id = $1",
-        )
-        .bind(page_id)
-        .bind(link_field)
-        .bind(link_target_id)
-        .bind(link_params)
-        .bind(&page.source_query)
-        .execute(pool)
-        .await?;
-
-        sync_items(
-            pool,
-            "pgapp_meta.page_items",
-            "page_id",
-            page_id,
-            &page.items,
-            &page_ids,
-            &format!("page '{}'", page.name),
-        )
-        .await?;
     }
 
     // Phase 4: the nav tree, which can also reference any page by name.
@@ -268,29 +175,50 @@ pub async fn sync_app(pool: &PgPool, app: &AppDef, registry: &Registry) -> Resul
         sync_nav_item(pool, app_id, None, ordinal as i32, item, &page_ids).await?;
     }
 
-    // Phase 5: the app-wide header/footer chrome.
-    sync_items(
-        pool,
-        "pgapp_meta.header_items",
-        "app_id",
-        app_id,
-        &app.header,
-        &page_ids,
-        "app header",
-    )
-    .await?;
-    sync_items(
-        pool,
-        "pgapp_meta.footer_items",
-        "app_id",
-        app_id,
-        &app.footer,
-        &page_ids,
-        "app footer",
-    )
-    .await?;
+    // Phase 5: the app-wide header/footer chrome — restricted to
+    // Text/Link/Region, which is all "chrome" (content with no entity
+    // or pagination behind it) is meant to be.
+    sync_chrome(pool, app_id, "header", &app.header, &page_ids).await?;
+    sync_chrome(pool, app_id, "footer", &app.footer, &page_ids).await?;
 
     Ok(())
+}
+
+fn sync_nav_item<'a>(
+    pool: &'a PgPool,
+    app_id: i32,
+    parent_id: Option<i32>,
+    ordinal: i32,
+    item: &'a crate::model::NavItem,
+    page_ids: &'a HashMap<String, i32>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+    Box::pin(async move {
+        let target_id = match &item.target_page {
+            None => None,
+            Some(name) => Some(*page_ids.get(name).with_context(|| {
+                format!("nav item '{}' links to unknown page '{name}'", item.label)
+            })?),
+        };
+
+        let nav_id: i32 = sqlx::query_scalar(
+            "insert into pgapp_meta.nav_items (app_id, parent_id, label, target_page_id, ordinal)
+             values ($1, $2, $3, $4, $5)
+             returning id",
+        )
+        .bind(app_id)
+        .bind(parent_id)
+        .bind(&item.label)
+        .bind(target_id)
+        .bind(ordinal)
+        .fetch_one(pool)
+        .await?;
+
+        for (child_ordinal, child) in item.children.iter().enumerate() {
+            sync_nav_item(pool, app_id, Some(nav_id), child_ordinal as i32, child, page_ids).await?;
+        }
+
+        Ok(())
+    })
 }
 
 /// Replaces the named queries owned by an app (`page_id` null) or one
@@ -332,45 +260,51 @@ async fn sync_queries(
     Ok(())
 }
 
-/// Replaces the text/link/region items owned by one row (a page, or the
-/// app itself for header/footer) — shared by `page_items`,
-/// `header_items`, and `footer_items`, which only differ in table name
-/// and owning column.
-async fn sync_items(
+/// Replaces the app-wide header/footer chrome (`slot` = "header" or
+/// "footer", `page_id` null). Only Text/Link/Region components are
+/// allowed here — chrome has no pagination or per-request entity
+/// context to give a Report/Form/EditableTable/Chart anything
+/// meaningful to do.
+async fn sync_chrome(
     pool: &PgPool,
-    table: &str,
-    owner_col: &str,
-    owner_id: i32,
-    items: &[PageItem],
+    app_id: i32,
+    slot: &str,
+    components: &[ComponentDef],
     page_ids: &HashMap<String, i32>,
-    owner_label: &str,
 ) -> Result<()> {
-    sqlx::query(&format!("delete from {table} where {owner_col} = $1"))
-        .bind(owner_id)
+    sqlx::query("delete from pgapp_meta.components where app_id = $1 and slot = $2")
+        .bind(app_id)
+        .bind(slot)
         .execute(pool)
         .await?;
 
-    for (ordinal, item) in items.iter().enumerate() {
-        let (kind, label, target_id, query_name) = match item {
-            PageItem::Text(text) => ("text", text.clone(), None, None),
-            PageItem::Link { label, target_page } => {
-                let target_id = *page_ids
-                    .get(target_page)
-                    .with_context(|| format!("{owner_label} links to unknown page '{target_page}'"))?;
-                ("link", label.clone(), Some(target_id), None)
+    for (ordinal, component) in components.iter().enumerate() {
+        let (kind, config) = match component {
+            ComponentDef::Text(text) => ("text", serde_json::json!({ "text": text })),
+            ComponentDef::Link { label, target_page } => {
+                if !page_ids.contains_key(target_page) {
+                    anyhow::bail!("app {slot} links to unknown page '{target_page}'");
+                }
+                ("link", serde_json::json!({ "label": label, "target_page": target_page }))
             }
-            PageItem::Region { label, query } => ("region", label.clone(), None, Some(query.clone())),
+            ComponentDef::Region { label, query } => {
+                ("region", serde_json::json!({ "label": label, "query": query }))
+            }
+            other => anyhow::bail!(
+                "app {slot} may only contain text/link/region components, found {}",
+                component_kind_name(other)
+            ),
         };
-        sqlx::query(&format!(
-            "insert into {table} ({owner_col}, kind, label, target_page_id, query_name, ordinal)
-             values ($1, $2, $3, $4, $5, $6)"
-        ))
-        .bind(owner_id)
+
+        sqlx::query(
+            "insert into pgapp_meta.components (app_id, page_id, slot, kind, ordinal, config)
+             values ($1, null, $2, $3, $4, $5)",
+        )
+        .bind(app_id)
+        .bind(slot)
         .bind(kind)
-        .bind(label)
-        .bind(target_id)
-        .bind(query_name)
         .bind(ordinal as i32)
+        .bind(config)
         .execute(pool)
         .await?;
     }
@@ -378,41 +312,213 @@ async fn sync_items(
     Ok(())
 }
 
-fn sync_nav_item<'a>(
-    pool: &'a PgPool,
-    app_id: i32,
-    parent_id: Option<i32>,
-    ordinal: i32,
-    item: &'a crate::model::NavItem,
-    page_ids: &'a HashMap<String, i32>,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
-    Box::pin(async move {
-        let target_id = match &item.target_page {
-            None => None,
-            Some(name) => Some(*page_ids.get(name).with_context(|| {
-                format!("nav item '{}' links to unknown page '{name}'", item.label)
-            })?),
-        };
+fn component_kind_name(c: &ComponentDef) -> &'static str {
+    match c {
+        ComponentDef::Report { .. } => "report",
+        ComponentDef::Form { .. } => "form",
+        ComponentDef::EditableTable { .. } => "editable_table",
+        ComponentDef::Chart { .. } => "chart",
+        ComponentDef::Text(_) => "text",
+        ComponentDef::Link { .. } => "link",
+        ComponentDef::Region { .. } => "region",
+    }
+}
 
-        let nav_id: i32 = sqlx::query_scalar(
-            "insert into pgapp_meta.nav_items (app_id, parent_id, label, target_page_id, ordinal)
-             values ($1, $2, $3, $4, $5)
-             returning id",
-        )
-        .bind(app_id)
-        .bind(parent_id)
-        .bind(&item.label)
-        .bind(target_id)
-        .bind(ordinal)
-        .fetch_one(pool)
-        .await?;
+/// Resolves every field's item (kind + config), falling back to
+/// `item_types::default_kind_for`, and validates the kind against the
+/// registry and the field name against the entity — producing the
+/// `{field_name: {"kind": ..., "config": ...}}` blob stored in a Form's
+/// or EditableTable's component config.
+fn resolve_item_types(
+    entity: &EntityDef,
+    field_names: &[String],
+    item_types: &HashMap<String, FieldItem>,
+    registry: &Registry,
+    owner_label: &str,
+) -> Result<serde_json::Value> {
+    let mut map = serde_json::Map::new();
+    for field_name in field_names {
+        let field = entity
+            .fields
+            .iter()
+            .find(|f| &f.name == field_name)
+            .with_context(|| format!("{owner_label} references unknown field '{field_name}'"))?;
+        let field_item = item_types.get(field_name).cloned().unwrap_or_else(|| FieldItem {
+            kind: item_types::default_kind_for(field.ty).to_string(),
+            config: serde_json::json!({}),
+        });
 
-        for (child_ordinal, child) in item.children.iter().enumerate() {
-            sync_nav_item(pool, app_id, Some(nav_id), child_ordinal as i32, child, page_ids).await?;
+        if !registry.contains_key(field_item.kind.as_str()) {
+            let known: Vec<&str> = registry.keys().copied().collect();
+            anyhow::bail!(
+                "{owner_label} field '{field_name}' uses unknown item type '{}' (known: {})",
+                field_item.kind,
+                known.join(", "),
+            );
         }
 
-        Ok(())
-    })
+        map.insert(
+            field_name.clone(),
+            serde_json::json!({ "kind": field_item.kind, "config": field_item.config }),
+        );
+    }
+    Ok(serde_json::Value::Object(map))
+}
+
+/// Validates one page component and turns it into `(kind, config)` for
+/// storage. `known_query` reports whether a name is visible (page- or
+/// app-scoped) from the page this component lives on.
+fn build_component_config(
+    component: &ComponentDef,
+    app: &AppDef,
+    entity_ids: &HashMap<String, i32>,
+    page_ids: &HashMap<String, i32>,
+    registry: &Registry,
+    known_query: &impl Fn(&str) -> bool,
+    owner_label: &str,
+) -> Result<(&'static str, serde_json::Value)> {
+    match component {
+        ComponentDef::Report {
+            title,
+            entity,
+            columns,
+            source_query,
+            link_column,
+            page_size,
+        } => {
+            if !entity_ids.contains_key(entity) {
+                anyhow::bail!("{owner_label} report '{title}' references unknown entity '{entity}'");
+            }
+            let entity_def = app.entity(entity).expect("checked above");
+            for c in columns {
+                if entity_def.fields.iter().all(|f| &f.name != c) {
+                    anyhow::bail!("{owner_label} report '{title}' column '{c}' is not a field of '{entity}'");
+                }
+            }
+            if let Some(q) = source_query {
+                if !known_query(q) {
+                    anyhow::bail!("{owner_label} report '{title}' sources from unknown query '{q}'");
+                }
+            }
+            let link_json = match link_column {
+                None => serde_json::Value::Null,
+                Some(lc) => {
+                    if !page_ids.contains_key(&lc.target_page) {
+                        anyhow::bail!(
+                            "{owner_label} report '{title}' links to unknown page '{}'",
+                            lc.target_page
+                        );
+                    }
+                    serde_json::json!({
+                        "field": lc.field,
+                        "target_page": lc.target_page,
+                        "extra_params": lc.extra_params,
+                    })
+                }
+            };
+            Ok((
+                "report",
+                serde_json::json!({
+                    "title": title,
+                    "entity": entity,
+                    "columns": columns,
+                    "source_query": source_query,
+                    "link": link_json,
+                    "page_size": page_size,
+                }),
+            ))
+        }
+        ComponentDef::Form {
+            title,
+            entity,
+            fields,
+            item_types,
+        } => {
+            if !entity_ids.contains_key(entity) {
+                anyhow::bail!("{owner_label} form '{title}' references unknown entity '{entity}'");
+            }
+            let entity_def = app.entity(entity).expect("checked above");
+            let resolved = resolve_item_types(
+                entity_def,
+                fields,
+                item_types,
+                registry,
+                &format!("{owner_label} form '{title}'"),
+            )?;
+            Ok((
+                "form",
+                serde_json::json!({
+                    "title": title,
+                    "entity": entity,
+                    "fields": fields,
+                    "item_types": resolved,
+                }),
+            ))
+        }
+        ComponentDef::EditableTable {
+            title,
+            entity,
+            columns,
+            item_types,
+        } => {
+            if !entity_ids.contains_key(entity) {
+                anyhow::bail!(
+                    "{owner_label} editable_table '{title}' references unknown entity '{entity}'"
+                );
+            }
+            let entity_def = app.entity(entity).expect("checked above");
+            let resolved = resolve_item_types(
+                entity_def,
+                columns,
+                item_types,
+                registry,
+                &format!("{owner_label} editable_table '{title}'"),
+            )?;
+            Ok((
+                "editable_table",
+                serde_json::json!({
+                    "title": title,
+                    "entity": entity,
+                    "columns": columns,
+                    "item_types": resolved,
+                }),
+            ))
+        }
+        ComponentDef::Chart {
+            title,
+            query,
+            chart_type,
+            x,
+            y,
+        } => {
+            if !known_query(query) {
+                anyhow::bail!("{owner_label} chart '{title}' references unknown query '{query}'");
+            }
+            Ok((
+                "chart",
+                serde_json::json!({
+                    "title": title,
+                    "query": query,
+                    "chart_type": chart_type,
+                    "x": x,
+                    "y": y,
+                }),
+            ))
+        }
+        ComponentDef::Text(text) => Ok(("text", serde_json::json!({ "text": text }))),
+        ComponentDef::Link { label, target_page } => {
+            if !page_ids.contains_key(target_page) {
+                anyhow::bail!("{owner_label} links to unknown page '{target_page}'");
+            }
+            Ok(("link", serde_json::json!({ "label": label, "target_page": target_page })))
+        }
+        ComponentDef::Region { label, query } => {
+            if !known_query(query) {
+                anyhow::bail!("{owner_label} region '{label}' references unknown query '{query}'");
+            }
+            Ok(("region", serde_json::json!({ "label": label, "query": query })))
+        }
+    }
 }
 
 async fn ensure_data_table(pool: &PgPool, table_name: &str, entity: &EntityDef) -> Result<()> {

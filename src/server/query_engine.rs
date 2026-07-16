@@ -6,7 +6,8 @@ use std::collections::{BTreeMap, HashMap};
 
 use sqlx::PgPool;
 
-use crate::meta::{RegionRows, RuntimeApp, RuntimePage, RuntimePageItem, RuntimeQuery};
+use crate::meta::{RegionRows, RuntimeApp, RuntimeComponent, RuntimePage, RuntimeQuery};
+use crate::model::FieldItem;
 
 /// Turns a `to_jsonb` result value into the display string the rest of
 /// the generic rendering layer expects: `null` becomes absent, other
@@ -37,39 +38,72 @@ pub async fn run_named_query(
     Ok(query.fetch_all(pool).await?)
 }
 
+/// Like [`run_named_query`], but paginated with a zero-extra-query
+/// OFFSET window: fetches `page_size + 1` rows so the caller can tell
+/// whether there's a next page without a separate `COUNT(*)`.
+/// Query-sourced reports can't assume a stable sort key exists, so this
+/// (rather than keyset pagination) is what backs them — see
+/// `fetch_report_rows` for the keyset version used for entity-backed
+/// reports.
+pub async fn run_named_query_page(
+    pool: &PgPool,
+    rq: &RuntimeQuery,
+    ctx: &HashMap<String, String>,
+    page_size: i64,
+    page_num: i64,
+) -> anyhow::Result<(Vec<serde_json::Value>, bool)> {
+    let offset = (page_num - 1).max(0) * page_size;
+    let wrapped = format!(
+        "select to_jsonb(t) as j from ({}) as t limit {} offset {}",
+        rq.sql,
+        page_size + 1,
+        offset
+    );
+    let mut query = sqlx::query_scalar::<_, serde_json::Value>(&wrapped);
+    for name in &rq.bind_names {
+        query = query.bind(ctx.get(name).map(|s| s.as_str()));
+    }
+    let mut rows = query.fetch_all(pool).await?;
+    let has_next = rows.len() as i64 > page_size;
+    rows.truncate(page_size as usize);
+    Ok((rows, has_next))
+}
+
 pub async fn run_named_query_rows(
     pool: &PgPool,
     rq: &RuntimeQuery,
     ctx: &HashMap<String, String>,
 ) -> anyhow::Result<Vec<BTreeMap<String, Option<String>>>> {
     let rows = run_named_query(pool, rq, ctx).await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| match row {
-            serde_json::Value::Object(map) => map
-                .into_iter()
-                .map(|(k, v)| (k, json_to_display(&v)))
-                .collect(),
-            _ => BTreeMap::new(),
-        })
-        .collect())
+    Ok(rows.into_iter().map(json_row_to_map).collect())
 }
 
-/// Resolves every `Region` item's rows across the current page's items
-/// plus the app's header/footer, keyed by query name. Page items may
-/// use a page-scoped query; header/footer can only see app-scoped ones
+pub fn json_row_to_map(row: serde_json::Value) -> BTreeMap<String, Option<String>> {
+    match row {
+        serde_json::Value::Object(map) => map
+            .into_iter()
+            .map(|(k, v)| (k, json_to_display(&v)))
+            .collect(),
+        _ => BTreeMap::new(),
+    }
+}
+
+/// Resolves every `Region` component's rows across the current page's
+/// components (if any — the index page has none) plus the app's
+/// header/footer, keyed by query name. Page components may use a
+/// page-scoped query; header/footer can only see app-scoped ones
 /// (there's no single page to shadow through).
 pub async fn resolve_regions(
     pool: &PgPool,
     app: &RuntimeApp,
-    page_items: &[RuntimePageItem],
     page: Option<&RuntimePage>,
     ctx: &HashMap<String, String>,
 ) -> anyhow::Result<RegionRows> {
     let mut out = RegionRows::new();
 
-    for item in page_items.iter().chain(app.header.iter()).chain(app.footer.iter()) {
-        let RuntimePageItem::Region { query, .. } = item else {
+    let page_components = page.map(|p| p.components.as_slice()).unwrap_or(&[]);
+    for component in page_components.iter().chain(app.header.iter()).chain(app.footer.iter()) {
+        let RuntimeComponent::Region { query, .. } = component else {
             continue;
         };
         if out.contains_key(query) {
@@ -85,21 +119,22 @@ pub async fn resolve_regions(
     Ok(out)
 }
 
-/// Resolves live (value, label) choices for every form field, keyed by
-/// field name — generic over item *kind*: any field whose config has a
-/// `"query"` key gets its choices from that named query; a `"choices"`
-/// array is used as-is; anything else gets an empty list. This doesn't
-/// special-case Radio/Popup (or any other kind) at all — it just
-/// implements the two reserved config keys any component may choose to
-/// use.
+/// Resolves live (value, label) choices for every field in one Form's
+/// or EditableTable's `item_types`, keyed by field name — generic over
+/// item *kind*: any field whose config has a `"query"` key gets its
+/// choices from that named query; a `"choices"` array is used as-is;
+/// anything else gets an empty list. This doesn't special-case Radio/
+/// Popup (or any other kind) at all — it just implements the two
+/// reserved config keys any component may choose to use.
 pub async fn resolve_field_choices(
     pool: &PgPool,
     app: &RuntimeApp,
     page: &RuntimePage,
+    item_types: &HashMap<String, FieldItem>,
     ctx: &HashMap<String, String>,
 ) -> anyhow::Result<HashMap<String, Vec<(String, String)>>> {
     let mut out = HashMap::new();
-    for (field_name, field_item) in &page.item_types {
+    for (field_name, field_item) in item_types {
         let choices = if let Some(query_name) = field_item.config.get("query").and_then(|v| v.as_str()) {
             let rq = page.resolve_query(app, query_name).ok_or_else(|| {
                 anyhow::anyhow!("field '{field_name}' references unknown query '{query_name}'")

@@ -379,3 +379,89 @@ body {
   flex-direction: column;
   gap: 0.5rem;
 }
+
+/* Components: Report, Form, EditableTable, Chart. Each renders inside
+   its own panel so several can sit on one page without visually
+   running together. */
+.pgapp-report,
+.pgapp-form-panel,
+.pgapp-editable-table {
+  margin-bottom: 1.5rem;
+}
+.pgapp-report .pgapp-table,
+.pgapp-editable-table .pgapp-table {
+  margin-bottom: 0.75rem;
+}
+
+.pgapp-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+.pgapp-row-actions .pgapp-inline-form {
+  margin-left: 0;
+}
+.pgapp-icon {
+  width: 1rem;
+  height: 1rem;
+  vertical-align: -0.15em;
+  color: hsl(var(--muted-foreground));
+}
+a.pgapp-link:has(.pgapp-icon):hover .pgapp-icon {
+  color: hsl(var(--foreground));
+}
+.pgapp-row-actions .pgapp-btn-destructive .pgapp-icon {
+  color: hsl(var(--destructive-foreground));
+}
+
+.pgapp-pagination {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.pgapp-btn-disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* EditableTable: each row (and the "add new" row) is its own <form>,
+   since a <form> can't wrap <tr>/<td> — laid out horizontally via flex
+   so it still reads as a table. */
+.pgapp-editable-row-wrap {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.pgapp-editable-row-wrap .pgapp-inline-form {
+  margin-left: 0;
+}
+.pgapp-editable-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem;
+  max-width: none;
+}
+.pgapp-editable-row .pgapp-field {
+  margin-bottom: 0;
+  min-width: 7rem;
+}
+
+.pgapp-chart {
+  margin: 0 0 1.25rem;
+  padding: 1rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+}
+.pgapp-chart-svg {
+  width: 100%;
+  height: auto;
+  color: hsl(var(--primary));
+}
+.pgapp-chart canvas {
+  max-width: 100%;
+}

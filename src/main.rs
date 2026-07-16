@@ -1,4 +1,6 @@
+mod chart_lib;
 mod html;
+mod icons;
 mod item_types;
 mod markup;
 mod meta;
@@ -16,12 +18,16 @@ use sqlx::postgres::PgPoolOptions;
 async fn main() -> anyhow::Result<()> {
     let markup_path = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| "examples/todo.app".to_string());
+        .unwrap_or_else(|| "examples/todo.pgapp".to_string());
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/pgapp".to_string());
     let theme_name = std::env::var("PGAPP_THEME").unwrap_or_else(|_| "shadcn".to_string());
     let theme = theme::load(&theme_name)?;
+    let icons_name = std::env::var("PGAPP_ICONS").unwrap_or_else(|_| "builtin".to_string());
+    let icons = icons::load(&icons_name)?;
+    let chart_lib_name = std::env::var("PGAPP_CHART_LIB").unwrap_or_else(|_| "inline".to_string());
+    let chart_lib = chart_lib::load(&chart_lib_name)?;
 
     let src = std::fs::read_to_string(&markup_path)
         .with_context(|| format!("failed to read markup file '{markup_path}'"))?;
@@ -52,21 +58,23 @@ async fn main() -> anyhow::Result<()> {
         },
         theme.meta.description
     );
+    println!("  icons: {}", icons.name);
+    println!("  chart library: {}", chart_lib.name);
     for page in &runtime_app.pages {
-        match &page.entity {
-            Some(entity) => println!(
-                "  http://{bind_addr}/{}  ({}, entity: {}, table: pgapp_data.{})",
-                page.name,
-                page.kind.as_str(),
-                entity.name,
-                entity.table_name
-            ),
-            None => println!(
-                "  http://{bind_addr}/{}  ({})",
-                page.name,
-                page.kind.as_str()
-            ),
-        }
+        let kinds: Vec<&str> = page
+            .components
+            .iter()
+            .map(|c| match c {
+                crate::meta::RuntimeComponent::Report { .. } => "report",
+                crate::meta::RuntimeComponent::Form { .. } => "form",
+                crate::meta::RuntimeComponent::EditableTable { .. } => "editable_table",
+                crate::meta::RuntimeComponent::Chart { .. } => "chart",
+                crate::meta::RuntimeComponent::Text(_) => "text",
+                crate::meta::RuntimeComponent::Link { .. } => "link",
+                crate::meta::RuntimeComponent::Region { .. } => "region",
+            })
+            .collect();
+        println!("  http://{bind_addr}/{}  [{}]", page.name, kinds.join(", "));
     }
 
     let state = Arc::new(server::AppState {
@@ -75,6 +83,8 @@ async fn main() -> anyhow::Result<()> {
         theme,
         runtime_js,
         item_types,
+        icons,
+        chart_lib,
     });
     let router = server::build_router(state);
 

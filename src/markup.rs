@@ -8,31 +8,46 @@
 //! nav       := "nav" "{" navitem* "}"
 //! navitem   := "item" String ( "->" "page" Ident | "{" navitem* "}" )
 //!
-//! header    := "header" "{" item* "}"
-//! footer    := "footer" "{" item* "}"
+//! header    := "header" "{" component* "}"
+//! footer    := "footer" "{" component* "}"
 //!
 //! query     := "query" Ident "{" "sql" ":" String "}"
 //!
 //! entity    := "entity" String "{" field* "}"
 //! field     := "field" Ident ":" Ident ("required")? ("default" Value)?
 //!
-//! page      := "page" String "as" pagekind "{" pageprop* "}"
-//! pagekind  := "list" "of" Ident | "detail" "of" Ident | "static"
-//! pageprop  := "columns" ":" identlist
-//!            | "form" ":" identlist
-//!            | "source" ":" "query" Ident
-//!            | "link" ":" Ident "->" "page" Ident ( "(" paramlist ")" )?
-//!            | "items" "{" item* "}"
+//! page      := "page" String "{" (component | query)* "}"
+//!
+//! component := report | form | editable_table | chart | text | link | region
+//!
+//! report    := "report" String "of" Ident "{" reportprop* "}"
+//! reportprop := "columns" ":" identlist
+//!             | "source" ":" "query" Ident
+//!             | "link" ":" Ident "->" "page" Ident ( "(" paramlist ")" )?
+//!             | "page_size" ":" Number
+//!
+//! form      := "form" String "of" Ident "{" formprop* "}"
+//! formprop  := "fields" ":" identlist
 //!            | "item" Ident "as" fielditem
-//!            | query
-//! fielditem := Ident itemconfig?
+//!
+//! editable_table := "editable_table" String "of" Ident "{" etprop* "}"
+//! etprop    := "columns" ":" identlist
+//!            | "item" Ident "as" fielditem
+//!
+//! chart     := "chart" String "from" "query" Ident "{" chartprop* "}"
+//! chartprop := "type" ":" Ident       ("bar" | "line")
+//!            | "x" ":" Ident
+//!            | "y" ":" Ident
+//!
+//! text      := "text" String
+//! link      := "link" String "->" "page" Ident
+//! region    := "region" String "from" "query" Ident
+//!
+//! fielditem  := Ident itemconfig?
 //! itemconfig := "(" arglist ")" | "from" "query" Ident
-//! arglist   := String ("," String)*        (-> config = {"choices": [...]})
-//!            | namedarg ("," namedarg)*    (-> config = {key: value, ...})
-//! namedarg  := Ident ":" (String | Ident)
-//! item      := "text" String
-//!            | "link" String "->" "page" Ident
-//!            | "region" String "from" "query" Ident
+//! arglist    := String ("," String)*        (-> config = {"choices": [...]})
+//!             | namedarg ("," namedarg)*    (-> config = {key: value, ...})
+//! namedarg   := Ident ":" (String | Ident)
 //!
 //! identlist  := Ident ("," Ident)*
 //! paramlist  := parammap ("," parammap)*
@@ -44,11 +59,12 @@
 //! every entity/field/page/query name that reaches the metadata layer is
 //! already safe to splice into SQL as an identifier. Page names
 //! themselves are string literals (so they can be arbitrary display
-//! text), but anything that *targets* a page — `nav` items, `link` page
-//! properties, `link` page items — takes an `Ident`, so link targets are
-//! restricted to the same safe charset. A query's `sql` is a raw string,
-//! opaque to this parser — see `meta::compile_named_query` for how its
-//! `:name` bind markers get turned into safe positional parameters.
+//! text), but anything that *targets* a page — `nav` items, `link`
+//! report properties, `link` components — takes an `Ident`, so link
+//! targets are restricted to the same safe charset. A query's `sql` is a
+//! raw string, opaque to this parser — see `meta::compile_named_query`
+//! for how its `:name` bind markers get turned into safe positional
+//! parameters.
 //!
 //! A `fielditem`'s `Ident` (its "kind") isn't a fixed keyword set: it's
 //! whatever's registered in `src/item_types.rs` at the time the app is
@@ -56,12 +72,19 @@
 //! registry). `itemconfig` is deliberately generic (a plain JSON blob)
 //! so a brand new item type never needs a grammar change: it just reads
 //! whatever config keys it defines out of that blob itself.
+//!
+//! A page is simply an ordered list of components — there's no separate
+//! "page kind" anymore. `Report` + `Form` on the same page is the usual
+//! CRUD pattern (a paginated list plus a linked edit form); an
+//! `EditableTable` stands alone; any number of `Chart`s make a
+//! dashboard; `Text`/`Link`/`Region` compose freely with all of the
+//! above.
 
 use anyhow::{bail, Context, Result};
 
 use crate::model::{
-    AppDef, EntityDef, FieldDef, FieldItem, FieldType, LinkColumn, NavItem, PageDef, PageItem,
-    PageKind, QueryDef,
+    AppDef, ComponentDef, EntityDef, FieldDef, FieldItem, FieldType, LinkColumn, NavItem, PageDef,
+    QueryDef,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -177,8 +200,8 @@ impl Parser {
         matches!(self.peek(), Some(Token::Ident(s)) if s == word)
     }
 
-    /// Parses a `-> page <Ident>` link target, common to nav items, the
-    /// `link:` page property, and `link` page items.
+    /// Parses a `-> page <Ident>` link target, common to nav items,
+    /// report `link:` properties, and `link` components.
     fn parse_page_target(&mut self) -> Result<String> {
         self.expect_arrow()?;
         self.expect_keyword("page")?;
@@ -204,9 +227,9 @@ impl Parser {
             } else if self.at_keyword("nav") {
                 nav = self.parse_nav()?;
             } else if self.at_keyword("header") {
-                header = self.parse_item_block("header")?;
+                header = self.parse_component_block("header")?;
             } else if self.at_keyword("footer") {
-                footer = self.parse_item_block("footer")?;
+                footer = self.parse_component_block("footer")?;
             } else if self.at_keyword("query") {
                 queries.push(self.parse_query()?);
             } else {
@@ -278,13 +301,13 @@ impl Parser {
         }
     }
 
-    /// Parses `"header" "{" item* "}"` / `"footer" "{" item* "}"`.
-    fn parse_item_block(&mut self, keyword: &str) -> Result<Vec<PageItem>> {
+    /// Parses `"header" "{" component* "}"` / `"footer" "{" component* "}"`.
+    fn parse_component_block(&mut self, keyword: &str) -> Result<Vec<ComponentDef>> {
         self.expect_keyword(keyword)?;
         self.expect_symbol('{')?;
         let mut items = Vec::new();
         while !self.at_symbol('}') {
-            items.push(self.parse_page_item()?);
+            items.push(self.parse_component()?);
         }
         self.expect_symbol('}')?;
         Ok(items)
@@ -337,60 +360,75 @@ impl Parser {
     fn parse_page(&mut self) -> Result<PageDef> {
         self.expect_keyword("page")?;
         let name = self.expect_string()?;
-        self.expect_keyword("as")?;
+        self.expect_symbol('{')?;
 
-        let (kind, entity) = if self.at_keyword("list") {
+        let mut components = Vec::new();
+        let mut queries = Vec::new();
+        while !self.at_symbol('}') {
+            if self.at_keyword("query") {
+                queries.push(self.parse_query()?);
+            } else {
+                components.push(self.parse_component()?);
+            }
+        }
+        self.expect_symbol('}')?;
+
+        Ok(PageDef {
+            name,
+            components,
+            queries,
+        })
+    }
+
+    fn parse_component(&mut self) -> Result<ComponentDef> {
+        if self.at_keyword("report") {
+            self.parse_report()
+        } else if self.at_keyword("form") {
+            self.parse_form()
+        } else if self.at_keyword("editable_table") {
+            self.parse_editable_table()
+        } else if self.at_keyword("chart") {
+            self.parse_chart()
+        } else if self.at_keyword("text") {
             self.advance()?;
-            self.expect_keyword("of")?;
-            (PageKind::List, Some(self.expect_ident()?))
-        } else if self.at_keyword("detail") {
+            Ok(ComponentDef::Text(self.expect_string()?))
+        } else if self.at_keyword("link") {
             self.advance()?;
-            self.expect_keyword("of")?;
-            (PageKind::Detail, Some(self.expect_ident()?))
-        } else if self.at_keyword("static") {
+            let label = self.expect_string()?;
+            let target_page = self.parse_page_target()?;
+            Ok(ComponentDef::Link { label, target_page })
+        } else if self.at_keyword("region") {
             self.advance()?;
-            (PageKind::Static, None)
+            let label = self.expect_string()?;
+            self.expect_keyword("from")?;
+            self.expect_keyword("query")?;
+            let query = self.expect_ident()?;
+            Ok(ComponentDef::Region { label, query })
         } else {
             bail!(
-                "expected 'list', 'detail', or 'static' page kind, found {:?}",
+                "expected a component ('report', 'form', 'editable_table', 'chart', 'text', \
+                 'link', or 'region'), found {:?}",
                 self.peek()
             );
-        };
+        }
+    }
 
+    fn parse_report(&mut self) -> Result<ComponentDef> {
+        self.expect_keyword("report")?;
+        let title = self.expect_string()?;
+        self.expect_keyword("of")?;
+        let entity = self.expect_ident()?;
         self.expect_symbol('{')?;
 
         let mut columns = Vec::new();
-        let mut form = Vec::new();
-        let mut link_column = None;
-        let mut items = Vec::new();
-        let mut item_types = std::collections::HashMap::new();
-        let mut queries = Vec::new();
         let mut source_query = None;
+        let mut link_column = None;
+        let mut page_size: i64 = 20;
         while !self.at_symbol('}') {
-            if self.at_keyword("items") {
-                self.advance()?;
-                self.expect_symbol('{')?;
-                while !self.at_symbol('}') {
-                    items.push(self.parse_page_item()?);
-                }
-                self.expect_symbol('}')?;
-                continue;
-            }
-            if self.at_keyword("item") {
-                let (field, field_item) = self.parse_field_item()?;
-                item_types.insert(field, field_item);
-                continue;
-            }
-            if self.at_keyword("query") {
-                queries.push(self.parse_query()?);
-                continue;
-            }
-
             let prop = self.expect_ident()?;
             self.expect_symbol(':')?;
             match prop.as_str() {
                 "columns" => columns = self.parse_ident_list()?,
-                "form" => form = self.parse_ident_list()?,
                 "source" => {
                     self.expect_keyword("query")?;
                     source_query = Some(self.expect_ident()?);
@@ -409,22 +447,124 @@ impl Parser {
                         extra_params,
                     });
                 }
-                other => bail!("unknown page property '{other}'"),
+                "page_size" => {
+                    let n = self.expect_ident()?;
+                    page_size = n
+                        .parse()
+                        .with_context(|| format!("invalid page_size '{n}' on report '{title}'"))?;
+                }
+                other => bail!("unknown report property '{other}'"),
             }
         }
         self.expect_symbol('}')?;
 
-        Ok(PageDef {
-            name,
-            kind,
+        Ok(ComponentDef::Report {
+            title,
             entity,
             columns,
-            form,
-            link_column,
-            items,
-            item_types,
-            queries,
             source_query,
+            link_column,
+            page_size,
+        })
+    }
+
+    fn parse_form(&mut self) -> Result<ComponentDef> {
+        self.expect_keyword("form")?;
+        let title = self.expect_string()?;
+        self.expect_keyword("of")?;
+        let entity = self.expect_ident()?;
+        self.expect_symbol('{')?;
+
+        let mut fields = Vec::new();
+        let mut item_types = std::collections::HashMap::new();
+        while !self.at_symbol('}') {
+            if self.at_keyword("item") {
+                let (field, field_item) = self.parse_field_item()?;
+                item_types.insert(field, field_item);
+                continue;
+            }
+            let prop = self.expect_ident()?;
+            self.expect_symbol(':')?;
+            match prop.as_str() {
+                "fields" => fields = self.parse_ident_list()?,
+                other => bail!("unknown form property '{other}'"),
+            }
+        }
+        self.expect_symbol('}')?;
+
+        Ok(ComponentDef::Form {
+            title,
+            entity,
+            fields,
+            item_types,
+        })
+    }
+
+    fn parse_editable_table(&mut self) -> Result<ComponentDef> {
+        self.expect_keyword("editable_table")?;
+        let title = self.expect_string()?;
+        self.expect_keyword("of")?;
+        let entity = self.expect_ident()?;
+        self.expect_symbol('{')?;
+
+        let mut columns = Vec::new();
+        let mut item_types = std::collections::HashMap::new();
+        while !self.at_symbol('}') {
+            if self.at_keyword("item") {
+                let (field, field_item) = self.parse_field_item()?;
+                item_types.insert(field, field_item);
+                continue;
+            }
+            let prop = self.expect_ident()?;
+            self.expect_symbol(':')?;
+            match prop.as_str() {
+                "columns" => columns = self.parse_ident_list()?,
+                other => bail!("unknown editable_table property '{other}'"),
+            }
+        }
+        self.expect_symbol('}')?;
+
+        Ok(ComponentDef::EditableTable {
+            title,
+            entity,
+            columns,
+            item_types,
+        })
+    }
+
+    fn parse_chart(&mut self) -> Result<ComponentDef> {
+        self.expect_keyword("chart")?;
+        let title = self.expect_string()?;
+        self.expect_keyword("from")?;
+        self.expect_keyword("query")?;
+        let query = self.expect_ident()?;
+        self.expect_symbol('{')?;
+
+        let mut chart_type = "bar".to_string();
+        let mut x = String::new();
+        let mut y = String::new();
+        while !self.at_symbol('}') {
+            let prop = self.expect_ident()?;
+            self.expect_symbol(':')?;
+            match prop.as_str() {
+                "type" => chart_type = self.expect_ident()?,
+                "x" => x = self.expect_ident()?,
+                "y" => y = self.expect_ident()?,
+                other => bail!("unknown chart property '{other}'"),
+            }
+        }
+        self.expect_symbol('}')?;
+
+        if x.is_empty() || y.is_empty() {
+            bail!("chart '{title}' requires both 'x' and 'y' properties");
+        }
+
+        Ok(ComponentDef::Chart {
+            title,
+            query,
+            chart_type,
+            x,
+            y,
         })
     }
 
@@ -502,7 +642,7 @@ impl Parser {
     }
 
     /// Parses `"(" Ident ":" Ident ("," Ident ":" Ident)* ")"` — the
-    /// optional extra parameters on a `link:` page property.
+    /// optional extra parameters on a report `link:` property.
     fn parse_param_list(&mut self) -> Result<Vec<(String, String)>> {
         self.expect_symbol('(')?;
         let mut out = vec![self.parse_param_pair()?];
@@ -519,30 +659,6 @@ impl Parser {
         self.expect_symbol(':')?;
         let param = self.expect_ident()?;
         Ok((field, param))
-    }
-
-    fn parse_page_item(&mut self) -> Result<PageItem> {
-        if self.at_keyword("text") {
-            self.advance()?;
-            Ok(PageItem::Text(self.expect_string()?))
-        } else if self.at_keyword("link") {
-            self.advance()?;
-            let label = self.expect_string()?;
-            let target_page = self.parse_page_target()?;
-            Ok(PageItem::Link { label, target_page })
-        } else if self.at_keyword("region") {
-            self.advance()?;
-            let label = self.expect_string()?;
-            self.expect_keyword("from")?;
-            self.expect_keyword("query")?;
-            let query = self.expect_ident()?;
-            Ok(PageItem::Region { label, query })
-        } else {
-            bail!(
-                "expected 'text', 'link', or 'region' page item, found {:?}",
-                self.peek()
-            );
-        }
     }
 
     fn parse_ident_list(&mut self) -> Result<Vec<String>> {
@@ -568,11 +684,10 @@ pub fn parse_app(src: &str) -> Result<AppDef> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::PageItem;
 
     #[test]
     fn parses_todo_example() {
-        let src = include_str!("../examples/todo.app");
+        let src = include_str!("../examples/todo.pgapp");
         let app = parse_app(src).unwrap();
         assert_eq!(app.name, "Todo");
 
@@ -582,87 +697,114 @@ mod tests {
         assert_eq!(tasks.fields.len(), 8);
 
         assert_eq!(app.header.len(), 1);
-        assert!(matches!(&app.header[0], PageItem::Text(_)));
+        assert!(matches!(&app.header[0], ComponentDef::Text(_)));
         assert_eq!(app.footer.len(), 2);
-        assert!(matches!(&app.footer[0], PageItem::Text(_)));
-        assert!(matches!(&app.footer[1], PageItem::Link { .. }));
+        assert!(matches!(&app.footer[0], ComponentDef::Text(_)));
+        assert!(matches!(&app.footer[1], ComponentDef::Link { .. }));
 
-        assert_eq!(app.queries.len(), 1);
-        assert_eq!(app.queries[0].name, "assignees");
+        assert_eq!(app.queries.len(), 3);
+        assert!(app.queries.iter().any(|q| q.name == "assignees"));
+        assert!(app.queries.iter().any(|q| q.name == "open"));
+        assert!(app.queries.iter().any(|q| q.name == "by_priority"));
 
-        assert_eq!(app.pages.len(), 4);
-        let list_page = app.pages.iter().find(|p| p.name == "Tasks").unwrap();
-        assert_eq!(list_page.kind, PageKind::List);
+        assert_eq!(app.pages.len(), 5);
+
+        let tasks_page = app.pages.iter().find(|p| p.name == "Tasks").unwrap();
+        assert_eq!(tasks_page.components.len(), 4); // report, form, text, region
+        let report = tasks_page
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Report { columns, link_column, page_size, .. } => {
+                    Some((columns, link_column, page_size))
+                }
+                _ => None,
+            })
+            .unwrap();
         assert_eq!(
-            list_page.columns,
+            *report.0,
             vec!["title", "priority", "done", "estimate_hours", "created_at"]
         );
-        assert_eq!(
-            list_page.form,
-            vec!["title", "priority", "done", "assignee", "notes", "estimate_hours"]
-        );
-        let link = list_page.link_column.as_ref().unwrap();
+        let link = report.1.as_ref().unwrap();
         assert_eq!(link.field, "title");
         assert_eq!(link.target_page, "TaskDetail");
         assert_eq!(link.extra_params, vec![("priority".to_string(), "priority".to_string())]);
+        assert_eq!(*report.2, 5);
 
-        let priority = list_page.item_types.get("priority").unwrap();
-        assert_eq!(priority.kind, "radio");
+        let form = tasks_page
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Form { fields, item_types, .. } => Some((fields, item_types)),
+                _ => None,
+            })
+            .unwrap();
         assert_eq!(
-            priority.config["choices"],
-            serde_json::json!(["Low", "Medium", "High"])
+            *form.0,
+            vec!["title", "priority", "done", "assignee", "notes", "estimate_hours"]
         );
-
-        let assignee = list_page.item_types.get("assignee").unwrap();
+        let priority = form.1.get("priority").unwrap();
+        assert_eq!(priority.kind, "radio");
+        assert_eq!(priority.config["choices"], serde_json::json!(["Low", "Medium", "High"]));
+        let assignee = form.1.get("assignee").unwrap();
         assert_eq!(assignee.kind, "popup");
         assert_eq!(assignee.config["query"], "assignees");
-
-        let notes = list_page.item_types.get("notes").unwrap();
+        let notes = form.1.get("notes").unwrap();
         assert_eq!(notes.kind, "readonly");
-
-        let estimate = list_page.item_types.get("estimate_hours").unwrap();
+        let estimate = form.1.get("estimate_hours").unwrap();
         assert_eq!(estimate.kind, "slider");
         assert_eq!(estimate.config["min"], "0");
         assert_eq!(estimate.config["max"], "40");
         assert_eq!(estimate.config["step"], "1");
+        assert!(form.1.get("title").is_none());
+        assert!(form.1.get("done").is_none());
 
-        assert!(list_page.item_types.get("title").is_none());
-        assert!(list_page.item_types.get("done").is_none());
-
-        assert_eq!(list_page.queries.len(), 1);
-        assert_eq!(list_page.queries[0].name, "recent");
-        assert!(list_page
-            .items
+        assert_eq!(tasks_page.queries.len(), 1);
+        assert_eq!(tasks_page.queries[0].name, "recent");
+        assert!(tasks_page
+            .components
             .iter()
-            .any(|item| matches!(item, PageItem::Region { query, .. } if query == "recent")));
+            .any(|c| matches!(c, ComponentDef::Region { query, .. } if query == "recent")));
 
         let detail_page = app.pages.iter().find(|p| p.name == "TaskDetail").unwrap();
-        assert_eq!(detail_page.kind, PageKind::Detail);
-        assert_eq!(detail_page.entity.as_deref(), Some("tasks"));
         assert_eq!(detail_page.queries.len(), 1);
         assert_eq!(detail_page.queries[0].name, "siblings");
 
         let open_tasks = app.pages.iter().find(|p| p.name == "OpenTasks").unwrap();
-        assert_eq!(open_tasks.kind, PageKind::List);
-        assert_eq!(open_tasks.source_query.as_deref(), Some("open"));
-        assert_eq!(open_tasks.queries.len(), 1);
-        assert_eq!(open_tasks.queries[0].name, "open");
+        let open_report = open_tasks
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Report { source_query, .. } => Some(source_query),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(open_report.as_deref(), Some("open"));
 
         let about_page = app.pages.iter().find(|p| p.name == "About").unwrap();
-        assert_eq!(about_page.kind, PageKind::Static);
-        assert!(about_page.entity.is_none());
-        assert_eq!(about_page.items.len(), 2);
-        assert!(matches!(&about_page.items[0], PageItem::Text(_)));
-        assert!(matches!(&about_page.items[1], PageItem::Link { .. }));
+        assert_eq!(about_page.components.len(), 3); // chart, text, link
+        assert!(about_page
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentDef::Chart { .. })));
+        assert!(about_page
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentDef::Text(_))));
+        assert!(about_page
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentDef::Link { .. })));
 
-        assert_eq!(app.nav.len(), 3);
+        assert_eq!(app.nav.len(), 4);
         assert_eq!(app.nav[0].label, "Tasks");
         assert_eq!(app.nav[0].target_page.as_deref(), Some("Tasks"));
         assert_eq!(app.nav[1].label, "Open");
-        assert_eq!(app.nav[2].label, "More");
-        assert!(app.nav[2].target_page.is_none());
-        assert_eq!(app.nav[2].children.len(), 1);
-        assert_eq!(app.nav[2].children[0].label, "About");
+        assert_eq!(app.nav[2].label, "Quick edit");
+        assert_eq!(app.nav[3].label, "More");
+        assert!(app.nav[3].target_page.is_none());
+        assert_eq!(app.nav[3].children.len(), 1);
+        assert_eq!(app.nav[3].children[0].label, "About");
     }
 
     #[test]
@@ -679,21 +821,25 @@ mod tests {
                     field assignee: text
                 }
 
-                page "Tasks" as list of tasks {
-                    columns: title
-                    form: title, assignee
-                    item assignee as popup from query assignees
+                page "Tasks" {
+                    report "Tasks" of tasks {
+                        columns: title
+                    }
+                    form "Tasks" of tasks {
+                        fields: title, assignee
+                        item assignee as popup from query assignees
+                    }
                     query recent {
                         sql: "select id as value, title as label from pgapp_data.demo_tasks order by id desc limit 5"
                     }
-                    items {
-                        region "Recently added" from query recent
-                    }
+                    region "Recently added" from query recent
                 }
 
-                page "ProjectTasks" as list of tasks {
-                    source: query assignees
-                    link: title -> page ProjectTasks (assignee: owner)
+                page "ProjectTasks" {
+                    report "Project Tasks" of tasks {
+                        source: query assignees
+                        link: title -> page ProjectTasks (assignee: owner)
+                    }
                 }
             }
         "#;
@@ -704,14 +850,35 @@ mod tests {
         let tasks_page = app.pages.iter().find(|p| p.name == "Tasks").unwrap();
         assert_eq!(tasks_page.queries.len(), 1);
         assert_eq!(tasks_page.queries[0].name, "recent");
-        let assignee = tasks_page.item_types.get("assignee").unwrap();
+        let form = tasks_page
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Form { item_types, .. } => Some(item_types),
+                _ => None,
+            })
+            .unwrap();
+        let assignee = form.get("assignee").unwrap();
         assert_eq!(assignee.kind, "popup");
         assert_eq!(assignee.config["query"], "assignees");
-        assert!(matches!(&tasks_page.items[0], PageItem::Region { query, .. } if query == "recent"));
+        assert!(tasks_page
+            .components
+            .iter()
+            .any(|c| matches!(c, ComponentDef::Region { query, .. } if query == "recent")));
 
         let project_tasks = app.pages.iter().find(|p| p.name == "ProjectTasks").unwrap();
-        assert_eq!(project_tasks.source_query.as_deref(), Some("assignees"));
-        let link = project_tasks.link_column.as_ref().unwrap();
+        let report = project_tasks
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Report { source_query, link_column, .. } => {
+                    Some((source_query, link_column))
+                }
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(report.0.as_deref(), Some("assignees"));
+        let link = report.1.as_ref().unwrap();
         assert_eq!(link.extra_params, vec![("assignee".to_string(), "owner".to_string())]);
     }
 
@@ -723,15 +890,25 @@ mod tests {
         let src = r#"
             app "Demo" {
                 entity "t" { field id: id field n: integer }
-                page "P" as list of t {
-                    form: n
-                    item n as starfield (density: "12", twinkle: "true")
+                page "P" {
+                    form "P" of t {
+                        fields: n
+                        item n as starfield (density: "12", twinkle: "true")
+                    }
                 }
             }
         "#;
         let app = parse_app(src).unwrap();
         let page = &app.pages[0];
-        let item = page.item_types.get("n").unwrap();
+        let form = page
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Form { item_types, .. } => Some(item_types),
+                _ => None,
+            })
+            .unwrap();
+        let item = form.get("n").unwrap();
         assert_eq!(item.kind, "starfield");
         assert_eq!(item.config["density"], "12");
         assert_eq!(item.config["twinkle"], "true");

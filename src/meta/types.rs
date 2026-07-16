@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::model::{FieldItem, FieldType, PageKind};
+use crate::model::FieldItem;
 
 /// A named query, compiled once at load time: `sql` already uses
 /// positional `$N::text` parameters, and `bind_names[i]` is the bind
@@ -22,7 +22,7 @@ pub struct RuntimeQuery {
 #[derive(Debug, Clone)]
 pub struct RuntimeField {
     pub name: String,
-    pub data_type: FieldType,
+    pub data_type: crate::model::FieldType,
     pub required: bool,
 }
 
@@ -39,18 +39,6 @@ impl RuntimeEntity {
     }
 }
 
-/// A page item, reloaded from `pgapp_meta.page_items` (or the
-/// header/footer equivalents). `Link` targets are resolved back to the
-/// target page's *name* (not its id) so rendering never needs another
-/// database round trip; `Region` carries the query's name, resolved
-/// against the page/app query registry at render time.
-#[derive(Debug, Clone)]
-pub enum RuntimePageItem {
-    Text(String),
-    Link { label: String, target_page: String },
-    Region { label: String, query: String },
-}
-
 #[derive(Debug, Clone)]
 pub struct LinkColumn {
     pub field: String,
@@ -58,22 +46,54 @@ pub struct LinkColumn {
     pub extra_params: Vec<(String, String)>,
 }
 
+/// One independently-rendered piece of a page (or of the app-wide
+/// header/footer chrome) — the runtime counterpart of
+/// [`crate::model::ComponentDef`], with entity names already resolved
+/// to the full [`RuntimeEntity`] they describe.
+#[derive(Debug, Clone)]
+pub enum RuntimeComponent {
+    Report {
+        title: String,
+        entity: RuntimeEntity,
+        columns: Vec<String>,
+        source_query: Option<String>,
+        link_column: Option<LinkColumn>,
+        page_size: i64,
+    },
+    Form {
+        title: String,
+        entity: RuntimeEntity,
+        fields: Vec<String>,
+        item_types: HashMap<String, FieldItem>,
+    },
+    EditableTable {
+        title: String,
+        entity: RuntimeEntity,
+        columns: Vec<String>,
+        item_types: HashMap<String, FieldItem>,
+    },
+    Chart {
+        title: String,
+        query: String,
+        chart_type: String,
+        x: String,
+        y: String,
+    },
+    Text(String),
+    Link {
+        label: String,
+        target_page: String,
+    },
+    Region {
+        label: String,
+        query: String,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct RuntimePage {
     pub name: String,
-    pub kind: PageKind,
-    pub entity: Option<RuntimeEntity>,
-    pub columns: Vec<String>,
-    pub form: Vec<String>,
-    pub link_column: Option<LinkColumn>,
-    pub items: Vec<RuntimePageItem>,
-    /// Resolved item (kind + config) for every field in `form` (never
-    /// missing — `sync::sync_app` always writes one, defaulting via
-    /// `item_types::default_kind_for`).
-    pub item_types: HashMap<String, FieldItem>,
-    /// Overrides the page's row source with a named query; see
-    /// `model::PageDef::source_query`.
-    pub source_query: Option<String>,
+    pub components: Vec<RuntimeComponent>,
     /// Queries visible only on this page.
     pub queries: HashMap<String, RuntimeQuery>,
 }
@@ -100,8 +120,8 @@ pub struct RuntimeApp {
     pub name: String,
     pub pages: Vec<RuntimePage>,
     pub nav: Vec<NavNode>,
-    pub header: Vec<RuntimePageItem>,
-    pub footer: Vec<RuntimePageItem>,
+    pub header: Vec<RuntimeComponent>,
+    pub footer: Vec<RuntimeComponent>,
     /// Queries visible from every page.
     pub queries: HashMap<String, RuntimeQuery>,
 }
@@ -113,8 +133,9 @@ impl RuntimeApp {
 
     /// Everything site-wide that renderers need alongside a single
     /// page: the nav tree, header/footer chrome, and the resolved rows
-    /// for every `Region` item anywhere on the current request (the
-    /// page's own items plus the header/footer), keyed by query name.
+    /// for every `Region` component anywhere on the current request
+    /// (the page's own components plus the header/footer), keyed by
+    /// query name.
     pub fn chrome<'a>(&'a self, regions: &'a RegionRows) -> Chrome<'a> {
         Chrome {
             nav: &self.nav,
@@ -125,7 +146,7 @@ impl RuntimeApp {
     }
 }
 
-/// Rows already fetched for each `Region` page item that appears on the
+/// Rows already fetched for each `Region` component that appears on the
 /// current request, keyed by query name. Resolving these is an async DB
 /// round trip, so `server.rs` does it up front and hands the result to
 /// the (synchronous) render functions.
@@ -137,7 +158,7 @@ pub type RegionRows = HashMap<String, Vec<BTreeMap<String, Option<String>>>>;
 #[derive(Debug, Clone, Copy)]
 pub struct Chrome<'a> {
     pub nav: &'a [NavNode],
-    pub header: &'a [RuntimePageItem],
-    pub footer: &'a [RuntimePageItem],
+    pub header: &'a [RuntimeComponent],
+    pub footer: &'a [RuntimeComponent],
     pub regions: &'a RegionRows,
 }
