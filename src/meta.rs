@@ -4,20 +4,20 @@
 //!
 //! The metadata tables — not the markup file — are the source of truth
 //! once the server is running: `load_app` re-derives everything the
-//! server needs (table names, column types, links, nav) from
-//! `pgapp_meta`.
+//! server needs (table names, column types, links, nav, item widgets)
+//! from `pgapp_meta`.
 //!
 //! Syncing happens in phases because pages, page items, link columns and
 //! nav items can all reference *other* pages by name, including ones
 //! declared later in the file: phase 1 creates entities/fields/tables,
 //! phase 2 creates a bare row for every page (so every page has an id),
-//! and phase 3 resolves everything that points at a page by name.
+//! and phase 3 onward resolves everything that points at a page by name.
 
 use anyhow::{Context, Result};
 use sqlx::PgPool;
 use std::collections::HashMap;
 
-use crate::model::{AppDef, FieldType, PageItem, PageKind};
+use crate::model::{AppDef, FieldItemType, FieldType, PageItem, PageKind};
 
 fn slug(s: &str) -> String {
     let mut out = String::new();
@@ -124,8 +124,8 @@ pub async fn sync_app(pool: &PgPool, app: &AppDef) -> Result<()> {
         page_ids.insert(page.name.clone(), page_id);
     }
 
-    // Phase 3: page fields, link columns, page items, all of which may
-    // reference a page by name.
+    // Phase 3: page fields, field item types, link columns, and page
+    // items — all of which may reference a page by name.
     for page in &app.pages {
         let page_id = page_ids[&page.name];
 
@@ -157,6 +157,36 @@ pub async fn sync_app(pool: &PgPool, app: &AppDef) -> Result<()> {
                 .execute(pool)
                 .await?;
             }
+
+            // Every form field gets an explicit, resolved item type
+            // (falling back to FieldItemType::default_for), so the
+            // runtime side never has to re-derive the default itself.
+            for field_name in &page.form {
+                let field = entity
+                    .fields
+                    .iter()
+                    .find(|f| &f.name == field_name)
+                    .with_context(|| format!("page '{}' form references unknown field '{field_name}'", page.name))?;
+                let item_type = page
+                    .item_types
+                    .get(field_name)
+                    .cloned()
+                    .unwrap_or_else(|| FieldItemType::default_for(field.ty));
+
+                sqlx::query(
+                    "insert into pgapp_meta.page_field_items (page_id, field_name, item_type, choices)
+                     values ($1, $2, $3, $4)
+                     on conflict (page_id, field_name) do update set
+                        item_type = excluded.item_type,
+                        choices = excluded.choices",
+                )
+                .bind(page_id)
+                .bind(field_name)
+                .bind(item_type.kind_str())
+                .bind(item_type.choices())
+                .execute(pool)
+                .await?;
+            }
         }
 
         let (link_field, link_target_id) = match &page.link_column {
@@ -178,32 +208,16 @@ pub async fn sync_app(pool: &PgPool, app: &AppDef) -> Result<()> {
             .execute(pool)
             .await?;
 
-        sqlx::query("delete from pgapp_meta.page_items where page_id = $1")
-            .bind(page_id)
-            .execute(pool)
-            .await?;
-        for (ordinal, item) in page.items.iter().enumerate() {
-            let (kind, label, target_id) = match item {
-                PageItem::Text(text) => ("text", text.clone(), None),
-                PageItem::Link { label, target_page } => {
-                    let target_id = *page_ids.get(target_page).with_context(|| {
-                        format!("page '{}' links to unknown page '{target_page}'", page.name)
-                    })?;
-                    ("link", label.clone(), Some(target_id))
-                }
-            };
-            sqlx::query(
-                "insert into pgapp_meta.page_items (page_id, kind, label, target_page_id, ordinal)
-                 values ($1, $2, $3, $4, $5)",
-            )
-            .bind(page_id)
-            .bind(kind)
-            .bind(label)
-            .bind(target_id)
-            .bind(ordinal as i32)
-            .execute(pool)
-            .await?;
-        }
+        sync_items(
+            pool,
+            "pgapp_meta.page_items",
+            "page_id",
+            page_id,
+            &page.items,
+            &page_ids,
+            &format!("page '{}'", page.name),
+        )
+        .await?;
     }
 
     // Phase 4: the nav tree, which can also reference any page by name.
@@ -213,6 +227,72 @@ pub async fn sync_app(pool: &PgPool, app: &AppDef) -> Result<()> {
         .await?;
     for (ordinal, item) in app.nav.iter().enumerate() {
         sync_nav_item(pool, app_id, None, ordinal as i32, item, &page_ids).await?;
+    }
+
+    // Phase 5: the app-wide header/footer chrome.
+    sync_items(
+        pool,
+        "pgapp_meta.header_items",
+        "app_id",
+        app_id,
+        &app.header,
+        &page_ids,
+        "app header",
+    )
+    .await?;
+    sync_items(
+        pool,
+        "pgapp_meta.footer_items",
+        "app_id",
+        app_id,
+        &app.footer,
+        &page_ids,
+        "app footer",
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Replaces the text/link items owned by one row (a page, or the app
+/// itself for header/footer) — shared by `page_items`, `header_items`,
+/// and `footer_items`, which only differ in table name and owning
+/// column.
+async fn sync_items(
+    pool: &PgPool,
+    table: &str,
+    owner_col: &str,
+    owner_id: i32,
+    items: &[PageItem],
+    page_ids: &HashMap<String, i32>,
+    owner_label: &str,
+) -> Result<()> {
+    sqlx::query(&format!("delete from {table} where {owner_col} = $1"))
+        .bind(owner_id)
+        .execute(pool)
+        .await?;
+
+    for (ordinal, item) in items.iter().enumerate() {
+        let (kind, label, target_id) = match item {
+            PageItem::Text(text) => ("text", text.clone(), None),
+            PageItem::Link { label, target_page } => {
+                let target_id = *page_ids
+                    .get(target_page)
+                    .with_context(|| format!("{owner_label} links to unknown page '{target_page}'"))?;
+                ("link", label.clone(), Some(target_id))
+            }
+        };
+        sqlx::query(&format!(
+            "insert into {table} ({owner_col}, kind, label, target_page_id, ordinal)
+             values ($1, $2, $3, $4, $5)"
+        ))
+        .bind(owner_id)
+        .bind(kind)
+        .bind(label)
+        .bind(target_id)
+        .bind(ordinal as i32)
+        .execute(pool)
+        .await?;
     }
 
     Ok(())
@@ -260,24 +340,11 @@ async fn ensure_data_table(
     table_name: &str,
     entity: &crate::model::EntityDef,
 ) -> Result<()> {
-    let mut cols = Vec::new();
-    for field in &entity.fields {
-        let mut col = format!("{} {}", field.name, field.ty.sql_column_type());
-        if field.ty != FieldType::Id {
-            if field.required {
-                col.push_str(" not null");
-            }
-            if let Some(default) = &field.default {
-                match field.ty {
-                    FieldType::Boolean => col.push_str(&format!(" default {default}")),
-                    FieldType::Timestamp if default == "now" => col.push_str(" default now()"),
-                    FieldType::Integer => col.push_str(&format!(" default {default}")),
-                    _ => col.push_str(&format!(" default '{default}'")),
-                }
-            }
-        }
-        cols.push(col);
-    }
+    let cols: Vec<String> = entity
+        .fields
+        .iter()
+        .map(|f| column_def(f, true))
+        .collect();
 
     let sql = format!(
         "create table if not exists pgapp_data.{table_name} ({})",
@@ -287,7 +354,48 @@ async fn ensure_data_table(
         .execute(pool)
         .await
         .with_context(|| format!("failed to create data table pgapp_data.{table_name}"))?;
+
+    // The table may already have existed before a field was added to
+    // the entity — CREATE TABLE IF NOT EXISTS doesn't add columns to an
+    // existing table, so bring existing tables up to date too. Skipping
+    // NOT NULL here: enforcing it on a table that may already have rows
+    // is a real migration (backfill or a default) that this vertical
+    // slice doesn't attempt.
+    for field in &entity.fields {
+        if field.ty == FieldType::Id {
+            continue; // the primary key only ever comes from CREATE TABLE
+        }
+        let alter_sql = format!(
+            "alter table pgapp_data.{table_name} add column if not exists {}",
+            column_def(field, false)
+        );
+        sqlx::raw_sql(&alter_sql)
+            .execute(pool)
+            .await
+            .with_context(|| {
+                format!("failed to add column '{}' to pgapp_data.{table_name}", field.name)
+            })?;
+    }
+
     Ok(())
+}
+
+fn column_def(field: &crate::model::FieldDef, include_not_null: bool) -> String {
+    let mut col = format!("{} {}", field.name, field.ty.sql_column_type());
+    if field.ty != FieldType::Id {
+        if include_not_null && field.required {
+            col.push_str(" not null");
+        }
+        if let Some(default) = &field.default {
+            match field.ty {
+                FieldType::Boolean => col.push_str(&format!(" default {default}")),
+                FieldType::Timestamp if default == "now" => col.push_str(" default now()"),
+                FieldType::Integer => col.push_str(&format!(" default {default}")),
+                _ => col.push_str(&format!(" default '{default}'")),
+            }
+        }
+    }
+    col
 }
 
 /// Runtime view of a field, as reloaded from `pgapp_meta` (not from the
@@ -312,9 +420,10 @@ impl RuntimeEntity {
     }
 }
 
-/// A page item, reloaded from `pgapp_meta.page_items`. `Link` targets
-/// are resolved back to the target page's *name* (not its id) so
-/// rendering never needs another database round trip.
+/// A page item, reloaded from `pgapp_meta.page_items` (or the
+/// header/footer equivalents). `Link` targets are resolved back to the
+/// target page's *name* (not its id) so rendering never needs another
+/// database round trip.
 #[derive(Debug, Clone)]
 pub enum RuntimePageItem {
     Text(String),
@@ -336,6 +445,9 @@ pub struct RuntimePage {
     pub form: Vec<String>,
     pub link_column: Option<LinkColumn>,
     pub items: Vec<RuntimePageItem>,
+    /// Resolved item type for every field in `form` (never missing —
+    /// see the phase-3 sync above).
+    pub item_types: HashMap<String, FieldItemType>,
 }
 
 /// One node in the reloaded nav tree; see [`crate::model::NavItem`] for
@@ -352,12 +464,34 @@ pub struct RuntimeApp {
     pub name: String,
     pub pages: Vec<RuntimePage>,
     pub nav: Vec<NavNode>,
+    pub header: Vec<RuntimePageItem>,
+    pub footer: Vec<RuntimePageItem>,
 }
 
 impl RuntimeApp {
     pub fn page(&self, name: &str) -> Option<&RuntimePage> {
         self.pages.iter().find(|p| p.name == name)
     }
+
+    /// Everything site-wide that renderers need alongside a single
+    /// page: the nav tree plus header/footer chrome.
+    pub fn chrome(&self) -> Chrome<'_> {
+        Chrome {
+            nav: &self.nav,
+            header: &self.header,
+            footer: &self.footer,
+        }
+    }
+}
+
+/// Borrowed bundle of the app-wide chrome (nav/header/footer), passed
+/// into every page render function instead of three separate
+/// parameters.
+#[derive(Debug, Clone, Copy)]
+pub struct Chrome<'a> {
+    pub nav: &'a [NavNode],
+    pub header: &'a [RuntimePageItem],
+    pub footer: &'a [RuntimePageItem],
 }
 
 /// Reloads the full runtime model for `app_name` straight from
@@ -456,26 +590,19 @@ pub async fn load_app(pool: &PgPool, app_name: &str) -> Result<RuntimeApp> {
             _ => None,
         };
 
-        let item_rows: Vec<(String, String, Option<i32>)> = sqlx::query_as(
-            "select kind, label, target_page_id from pgapp_meta.page_items
-              where page_id = $1 order by ordinal",
+        let item_type_rows: Vec<(String, String, Vec<String>)> = sqlx::query_as(
+            "select field_name, item_type, choices from pgapp_meta.page_field_items
+              where page_id = $1",
         )
         .bind(page_id)
         .fetch_all(pool)
         .await?;
-
-        let items = item_rows
+        let item_types = item_type_rows
             .into_iter()
-            .map(|(kind, label, target_page_id)| match kind.as_str() {
-                "link" => RuntimePageItem::Link {
-                    label,
-                    target_page: page_names[&target_page_id
-                        .expect("link page items always have a target page")]
-                        .clone(),
-                },
-                _ => RuntimePageItem::Text(label),
-            })
+            .map(|(field_name, item_type, choices)| (field_name, FieldItemType::from_parts(&item_type, choices)))
             .collect();
+
+        let items = load_items(pool, "pgapp_meta.page_items", "page_id", *page_id, &page_names).await?;
 
         pages.push(RuntimePage {
             name: page_name.clone(),
@@ -485,6 +612,7 @@ pub async fn load_app(pool: &PgPool, app_name: &str) -> Result<RuntimeApp> {
             form,
             link_column,
             items,
+            item_types,
         });
     }
 
@@ -497,11 +625,44 @@ pub async fn load_app(pool: &PgPool, app_name: &str) -> Result<RuntimeApp> {
     .await?;
     let nav = build_nav_tree(&nav_rows, None, &page_names);
 
+    let header = load_items(pool, "pgapp_meta.header_items", "app_id", app_id, &page_names).await?;
+    let footer = load_items(pool, "pgapp_meta.footer_items", "app_id", app_id, &page_names).await?;
+
     Ok(RuntimeApp {
         name: app_name.to_string(),
         pages,
         nav,
+        header,
+        footer,
     })
+}
+
+/// Loads the text/link items owned by one row — shared by `page_items`,
+/// `header_items`, and `footer_items`.
+async fn load_items(
+    pool: &PgPool,
+    table: &str,
+    owner_col: &str,
+    owner_id: i32,
+    page_names: &HashMap<i32, String>,
+) -> Result<Vec<RuntimePageItem>> {
+    let rows: Vec<(String, String, Option<i32>)> = sqlx::query_as(&format!(
+        "select kind, label, target_page_id from {table} where {owner_col} = $1 order by ordinal"
+    ))
+    .bind(owner_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(kind, label, target_page_id)| match kind.as_str() {
+            "link" => RuntimePageItem::Link {
+                label,
+                target_page: page_names[&target_page_id.expect("link items always have a target page")].clone(),
+            },
+            _ => RuntimePageItem::Text(label),
+        })
+        .collect())
 }
 
 fn build_nav_tree(

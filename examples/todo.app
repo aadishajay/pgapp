@@ -4,6 +4,15 @@
 # which is what actually drives routing and rendering afterwards.
 
 app "Todo" {
+  header {
+    text "pgapp Todo Demo"
+  }
+
+  footer {
+    text "Built with pgapp - a Postgres-native no/low-code framework."
+    link "About" -> page About
+  }
+
   nav {
     item "Tasks" -> page Tasks
     item "More" {
@@ -14,14 +23,22 @@ app "Todo" {
   entity "tasks" {
     field id: id
     field title: text required
+    field priority: text default Medium
     field done: boolean default false
+    field assignee: text
+    field notes: text
     field created_at: timestamp default now
   }
 
+  # Demonstrates every item type: title/done fall back to their default
+  # (text, checkbox); priority/assignee/notes declare one explicitly.
   page "Tasks" as list of tasks {
-    columns: title, done, created_at
-    form: title, done
+    columns: title, priority, done, created_at
+    form: title, priority, done, assignee, notes
     link: title -> page TaskDetail
+    item priority as radio ("Low", "Medium", "High")
+    item assignee as popup ("Alice", "Bob", "Carol")
+    item notes as readonly
     items {
       text "Manage your tasks below. Click a title to see its detail page."
     }

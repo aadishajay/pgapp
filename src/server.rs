@@ -10,7 +10,7 @@ use serde_json::json;
 use sqlx::{PgPool, Row};
 
 use crate::meta::{RuntimeApp, RuntimeEntity, RuntimePage};
-use crate::model::PageKind;
+use crate::model::{FieldItemType, PageKind};
 use crate::render;
 use crate::theme::Theme;
 
@@ -116,16 +116,21 @@ async fn fetch_row(
     })
 }
 
-/// Builds (column names, value expressions, bind values) for the given
-/// form field names. Empty, non-required values become SQL `NULL`
-/// literals directly (an empty string can't be cast to e.g. integer);
-/// everything else is bound as text and cast in SQL, since the actual
-/// Postgres column type isn't known at compile time.
+/// Builds (column names, value expressions, bind values) for a page's
+/// form fields. Empty, non-required values become SQL `NULL` literals
+/// directly (an empty string can't be cast to e.g. integer); everything
+/// else is bound as text and cast in SQL, since the actual Postgres
+/// column type isn't known at compile time.
+///
+/// Unchecked HTML checkboxes never submit their key at all, so a
+/// `Checkbox` field reads "true"/"false" from whether `name` is present
+/// in `values`, not from the (usually absent) value itself.
 fn build_value_exprs(
-    entity: &RuntimeEntity,
+    page: &RuntimePage,
     form_fields: &[String],
     values: &HashMap<String, String>,
 ) -> anyhow::Result<(Vec<String>, Vec<String>, Vec<String>)> {
+    let entity = page.entity.as_ref().expect("list page always has an entity");
     let mut columns = Vec::new();
     let mut exprs = Vec::new();
     let mut binds = Vec::new();
@@ -134,7 +139,13 @@ fn build_value_exprs(
         let field = entity
             .field(name)
             .ok_or_else(|| anyhow::anyhow!("unknown field '{name}'"))?;
-        let raw = values.get(name).map(|s| s.trim()).unwrap_or("");
+        let item_type = page.item_types.get(name).unwrap_or(&FieldItemType::Text);
+
+        let raw = if matches!(item_type, FieldItemType::Checkbox) {
+            if values.contains_key(name) { "true" } else { "false" }.to_string()
+        } else {
+            values.get(name).map(|s| s.trim().to_string()).unwrap_or_default()
+        };
 
         if field.required && raw.is_empty() {
             anyhow::bail!("'{name}' is required");
@@ -144,7 +155,7 @@ fn build_value_exprs(
         if raw.is_empty() {
             exprs.push("NULL".to_string());
         } else {
-            binds.push(raw.to_string());
+            binds.push(raw);
             exprs.push(format!("${}::{}", binds.len(), field.data_type.sql_cast()));
         }
     }
@@ -169,7 +180,7 @@ fn require_list_page<'a>(page: &'a RuntimePage) -> Result<&'a RuntimePage, AppEr
 
 async fn index(State(state): State<Arc<AppState>>) -> Html<String> {
     let pages: Vec<String> = state.app.pages.iter().map(|p| p.name.clone()).collect();
-    Html(render::index_page(&state.app.name, &pages, &state.app.nav))
+    Html(render::index_page(&state.app.name, &pages, state.app.chrome()))
 }
 
 async fn theme_css(State(state): State<Arc<AppState>>) -> Response {
@@ -210,7 +221,7 @@ async fn show(
         PageKind::List => {
             let entity = entity_of(page)?;
             let rows = fetch_rows(&state.pool, entity).await.map_err(err_response)?;
-            Ok(Html(render::list_page(page, &rows, None, &state.app.nav)))
+            Ok(Html(render::list_page(page, &rows, None, state.app.chrome())))
         }
         PageKind::Detail => {
             let entity = entity_of(page)?;
@@ -224,9 +235,9 @@ async fn show(
                 .await
                 .map_err(err_response)?
                 .ok_or_else(|| (StatusCode::NOT_FOUND, "row not found".to_string()))?;
-            Ok(Html(render::detail_page(page, &row, &state.app.nav)))
+            Ok(Html(render::detail_page(page, &row, state.app.chrome())))
         }
-        PageKind::Static => Ok(Html(render::static_page(page, &state.app.nav))),
+        PageKind::Static => Ok(Html(render::static_page(page, state.app.chrome()))),
     }
 }
 
@@ -238,13 +249,18 @@ async fn create(
     let page = require_list_page(page_or_404(&state.app, &page_name)?)?;
     let entity = entity_of(page)?;
 
-    let build = build_value_exprs(entity, &page.form, &values);
+    let build = build_value_exprs(page, &page.form, &values);
     let (columns, exprs, binds) = match build {
         Ok(v) => v,
         Err(e) => {
             let rows = fetch_rows(&state.pool, entity).await.map_err(err_response)?;
-            return Ok(Html(render::list_page(page, &rows, Some(&e.to_string()), &state.app.nav))
-                .into_response());
+            return Ok(Html(render::list_page(
+                page,
+                &rows,
+                Some(&e.to_string()),
+                state.app.chrome(),
+            ))
+            .into_response());
         }
     };
 
@@ -278,7 +294,7 @@ async fn edit_form(
         .await
         .map_err(err_response)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "row not found".to_string()))?;
-    Ok(Html(render::edit_page(page, &id, &row, None, &state.app.nav)))
+    Ok(Html(render::edit_page(page, &id, &row, None, state.app.chrome())))
 }
 
 async fn update(
@@ -289,7 +305,7 @@ async fn update(
     let page = require_list_page(page_or_404(&state.app, &page_name)?)?;
     let entity = entity_of(page)?;
 
-    let build = build_value_exprs(entity, &page.form, &values);
+    let build = build_value_exprs(page, &page.form, &values);
     let (columns, exprs, mut binds) = match build {
         Ok(v) => v,
         Err(e) => {
@@ -302,7 +318,7 @@ async fn update(
                 &id,
                 &row,
                 Some(&e.to_string()),
-                &state.app.nav,
+                state.app.chrome(),
             ))
             .into_response());
         }

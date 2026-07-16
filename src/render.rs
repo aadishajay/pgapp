@@ -7,8 +7,8 @@
 //! comes from `/theme.css` (the active theme, see src/theme.rs) plus any
 //! app-level override in assets/app.css.
 
-use crate::meta::{NavNode, RuntimePage, RuntimePageItem};
-use crate::model::FieldType;
+use crate::meta::{Chrome, NavNode, RuntimePage, RuntimePageItem};
+use crate::model::{FieldItemType, FieldType};
 use std::collections::BTreeMap;
 
 fn escape(s: &str) -> String {
@@ -16,6 +16,13 @@ fn escape(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+/// Escapes a string for embedding inside a single-quoted JS string
+/// literal. Callers must still HTML-escape the *result* before splicing
+/// it into an HTML attribute (see `render_popup`).
+fn js_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
 /// Extra `<link>`/`<script>` tags for user-supplied assets, if present —
@@ -69,7 +76,8 @@ fn nav_node_html(node: &NavNode) -> String {
     html
 }
 
-/// Renders a page's `items` list (static text and links to other pages).
+/// Renders an item list (page `items`, or the app's header/footer) —
+/// static text and links to other pages.
 fn items_html(items: &[RuntimePageItem]) -> String {
     if items.is_empty() {
         return String::new();
@@ -93,7 +101,24 @@ fn items_html(items: &[RuntimePageItem]) -> String {
     html
 }
 
-fn layout(title: &str, nav: &[NavNode], body: &str) -> String {
+fn layout(title: &str, chrome: Chrome, body: &str) -> String {
+    let header = if chrome.header.is_empty() {
+        String::new()
+    } else {
+        format!(
+            r#"<header class="pgapp-header">{}</header>"#,
+            items_html(chrome.header)
+        )
+    };
+    let footer = if chrome.footer.is_empty() {
+        String::new()
+    } else {
+        format!(
+            r#"<footer class="pgapp-footer">{}</footer>"#,
+            items_html(chrome.footer)
+        )
+    };
+
     format!(
         r#"<!doctype html>
 <html>
@@ -104,16 +129,59 @@ fn layout(title: &str, nav: &[NavNode], body: &str) -> String {
 {assets}
 </head>
 <body>
+{header}
 <nav class="pgapp-nav"><a class="pgapp-link" href="/">pgapp</a>{navbar}</nav>
 <h1 class="pgapp-title">{title}</h1>
 {body}
+{footer}
 </body>
 </html>"#,
         title = escape(title),
         assets = asset_tags(),
-        navbar = nav_html(nav),
+        navbar = nav_html(chrome.nav),
         body = body,
     )
+}
+
+/// Renders a "Pop Up LOV": a hidden input holding the actual value, a
+/// button showing the current choice, and a native `<dialog>` listing
+/// every choice — no JS framework, just `showModal()`/`close()`.
+fn render_popup(field_name: &str, value: &str, choices: &[String]) -> String {
+    let name = escape(field_name);
+    let dialog_id = format!("pgapp-popup-dialog-{name}");
+    let value_id = format!("pgapp-popup-value-{name}");
+    let display_id = format!("pgapp-popup-display-{name}");
+
+    let mut html = format!(
+        r#"<div class="pgapp-popup">
+<input type="hidden" id="{value_id}" name="{name}" value="{value}">
+<button type="button" class="pgapp-btn pgapp-btn-secondary" onclick="document.getElementById('{dialog_id}').showModal()">
+<span id="{display_id}">{display}</span>
+</button>
+<dialog id="{dialog_id}" class="pgapp-popup-dialog">
+<ul class="pgapp-popup-list">"#,
+        value = escape(value),
+        display = if value.is_empty() {
+            "Choose\u{2026}".to_string()
+        } else {
+            escape(value)
+        },
+    );
+
+    for choice in choices {
+        // JS-escape first (protects the single-quoted JS string), then
+        // HTML-escape the result (protects the double-quoted attribute).
+        let js_choice = escape(&js_escape(choice));
+        html.push_str(&format!(
+            r#"<li><button type="button" onclick="document.getElementById('{value_id}').value='{js_choice}'; document.getElementById('{display_id}').textContent='{js_choice}'; document.getElementById('{dialog_id}').close();">{label}</button></li>"#,
+            label = escape(choice),
+        ));
+    }
+
+    html.push_str(&format!(
+        r#"</ul><button type="button" class="pgapp-btn" onclick="document.getElementById('{dialog_id}').close()">Cancel</button></dialog></div>"#
+    ));
+    html
 }
 
 fn input_for_field(page: &RuntimePage, field_name: &str, value: Option<&str>) -> String {
@@ -124,34 +192,52 @@ fn input_for_field(page: &RuntimePage, field_name: &str, value: Option<&str>) ->
         .expect("form field must exist on entity");
     let value = value.unwrap_or("");
     let required = if field.required { " required" } else { "" };
+    let item_type = page.item_types.get(field_name).unwrap_or(&FieldItemType::Text);
 
-    let input = match field.data_type {
-        FieldType::Boolean => {
-            let (true_sel, false_sel) = if value == "true" {
-                (" selected", "")
-            } else {
-                ("", " selected")
-            };
+    let input = match item_type {
+        FieldItemType::Checkbox => {
+            let checked = if value == "true" { " checked" } else { "" };
             format!(
-                r#"<select class="pgapp-select" name="{name}"><option value="true"{true_sel}>true</option><option value="false"{false_sel}>false</option></select>"#,
+                r#"<input class="pgapp-checkbox" type="checkbox" name="{name}" value="true"{checked}>"#,
                 name = escape(field_name),
             )
         }
-        FieldType::Integer => format!(
-            r#"<input class="pgapp-input" type="number" name="{name}" value="{value}"{required}>"#,
+        FieldItemType::ReadOnly => format!(
+            r#"<span class="pgapp-readonly">{val}</span><input type="hidden" name="{name}" value="{val}">"#,
             name = escape(field_name),
-            value = escape(value),
+            val = escape(value),
         ),
-        FieldType::Timestamp => format!(
-            r#"<input class="pgapp-input" type="text" name="{name}" value="{value}" placeholder="YYYY-MM-DD HH:MM:SS"{required}>"#,
-            name = escape(field_name),
-            value = escape(value),
-        ),
-        FieldType::Text | FieldType::Id => format!(
-            r#"<input class="pgapp-input" type="text" name="{name}" value="{value}"{required}>"#,
-            name = escape(field_name),
-            value = escape(value),
-        ),
+        FieldItemType::Radio(choices) => {
+            let mut html = String::from(r#"<div class="pgapp-radio-group">"#);
+            for choice in choices {
+                let checked = if choice == value { " checked" } else { "" };
+                html.push_str(&format!(
+                    r#"<label class="pgapp-radio-option"><input type="radio" name="{name}" value="{choice}"{checked}> {choice}</label>"#,
+                    name = escape(field_name),
+                    choice = escape(choice),
+                ));
+            }
+            html.push_str("</div>");
+            html
+        }
+        FieldItemType::Popup(choices) => render_popup(field_name, value, choices),
+        FieldItemType::Text => match field.data_type {
+            FieldType::Integer => format!(
+                r#"<input class="pgapp-input" type="number" name="{name}" value="{value}"{required}>"#,
+                name = escape(field_name),
+                value = escape(value),
+            ),
+            FieldType::Timestamp => format!(
+                r#"<input class="pgapp-input" type="text" name="{name}" value="{value}" placeholder="YYYY-MM-DD HH:MM:SS"{required}>"#,
+                name = escape(field_name),
+                value = escape(value),
+            ),
+            FieldType::Text | FieldType::Id | FieldType::Boolean => format!(
+                r#"<input class="pgapp-input" type="text" name="{name}" value="{value}"{required}>"#,
+                name = escape(field_name),
+                value = escape(value),
+            ),
+        },
     };
 
     format!(
@@ -164,7 +250,7 @@ pub fn list_page(
     page: &RuntimePage,
     rows: &[BTreeMap<String, Option<String>>],
     error: Option<&str>,
-    nav: &[NavNode],
+    chrome: Chrome,
 ) -> String {
     let mut body = String::new();
 
@@ -222,7 +308,7 @@ pub fn list_page(
     }
     body.push_str(r#"<button class="pgapp-btn pgapp-btn-primary" type="submit">Create</button></form>"#);
 
-    layout(&page.name, nav, &body)
+    layout(&page.name, chrome, &body)
 }
 
 pub fn edit_page(
@@ -230,7 +316,7 @@ pub fn edit_page(
     id: &str,
     row: &BTreeMap<String, Option<String>>,
     error: Option<&str>,
-    nav: &[NavNode],
+    chrome: Chrome,
 ) -> String {
     let mut body = String::new();
     if let Some(err) = error {
@@ -254,11 +340,11 @@ pub fn edit_page(
         escape(&page.name)
     ));
 
-    layout(&format!("Edit {}", page.name), nav, &body)
+    layout(&format!("Edit {}", page.name), chrome, &body)
 }
 
 /// A read-only single-row view for `Detail` pages, selected via `?id=`.
-pub fn detail_page(page: &RuntimePage, row: &BTreeMap<String, Option<String>>, nav: &[NavNode]) -> String {
+pub fn detail_page(page: &RuntimePage, row: &BTreeMap<String, Option<String>>, chrome: Chrome) -> String {
     let entity = page
         .entity
         .as_ref()
@@ -277,16 +363,16 @@ pub fn detail_page(page: &RuntimePage, row: &BTreeMap<String, Option<String>>, n
     }
     body.push_str("</tbody></table>");
 
-    layout(&page.name, nav, &body)
+    layout(&page.name, chrome, &body)
 }
 
 /// A pure page-items page: no entity, no table/form, just `items`.
-pub fn static_page(page: &RuntimePage, nav: &[NavNode]) -> String {
+pub fn static_page(page: &RuntimePage, chrome: Chrome) -> String {
     let body = items_html(&page.items);
-    layout(&page.name, nav, &body)
+    layout(&page.name, chrome, &body)
 }
 
-pub fn index_page(app_name: &str, pages: &[String], nav: &[NavNode]) -> String {
+pub fn index_page(app_name: &str, pages: &[String], chrome: Chrome) -> String {
     let mut body = String::from(r#"<ul class="pgapp-list">"#);
     for p in pages {
         body.push_str(&format!(
@@ -295,5 +381,5 @@ pub fn index_page(app_name: &str, pages: &[String], nav: &[NavNode]) -> String {
         ));
     }
     body.push_str("</ul>");
-    layout(app_name, nav, &body)
+    layout(app_name, chrome, &body)
 }

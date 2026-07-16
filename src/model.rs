@@ -117,6 +117,57 @@ pub struct LinkColumn {
     pub target_page: String,
 }
 
+/// How a form field is presented, independent of its Postgres column
+/// type. `Radio` and `Popup` carry a static list of choices (a "static
+/// LOV" in APEX terms — no lookup against another entity yet).
+#[derive(Debug, Clone)]
+pub enum FieldItemType {
+    Text,
+    ReadOnly,
+    Checkbox,
+    Radio(Vec<String>),
+    Popup(Vec<String>),
+}
+
+impl FieldItemType {
+    /// The item type a field gets when a page doesn't declare one
+    /// explicitly.
+    pub fn default_for(ty: FieldType) -> Self {
+        match ty {
+            FieldType::Boolean => FieldItemType::Checkbox,
+            FieldType::Id => FieldItemType::ReadOnly,
+            FieldType::Text | FieldType::Integer | FieldType::Timestamp => FieldItemType::Text,
+        }
+    }
+
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            FieldItemType::Text => "text",
+            FieldItemType::ReadOnly => "readonly",
+            FieldItemType::Checkbox => "checkbox",
+            FieldItemType::Radio(_) => "radio",
+            FieldItemType::Popup(_) => "popup",
+        }
+    }
+
+    pub fn choices(&self) -> &[String] {
+        match self {
+            FieldItemType::Radio(choices) | FieldItemType::Popup(choices) => choices,
+            FieldItemType::Text | FieldItemType::ReadOnly | FieldItemType::Checkbox => &[],
+        }
+    }
+
+    pub fn from_parts(kind: &str, choices: Vec<String>) -> Self {
+        match kind {
+            "readonly" => FieldItemType::ReadOnly,
+            "checkbox" => FieldItemType::Checkbox,
+            "radio" => FieldItemType::Radio(choices),
+            "popup" => FieldItemType::Popup(choices),
+            _ => FieldItemType::Text,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PageDef {
     pub name: String,
@@ -126,6 +177,9 @@ pub struct PageDef {
     pub form: Vec<String>,
     pub link_column: Option<LinkColumn>,
     pub items: Vec<PageItem>,
+    /// Explicit `item <field> as <type>` overrides; fields not listed
+    /// here get `FieldItemType::default_for` their column type.
+    pub item_types: std::collections::HashMap<String, FieldItemType>,
 }
 
 /// One entry in the app's (possibly multi-level) navigation bar. A leaf
@@ -143,6 +197,11 @@ pub struct AppDef {
     pub entities: Vec<EntityDef>,
     pub pages: Vec<PageDef>,
     pub nav: Vec<NavItem>,
+    /// Shown on every page, above the nav bar / below the footer
+    /// respectively. Reuses `PageItem` (text/link) — the same content
+    /// model as a page's `items`.
+    pub header: Vec<PageItem>,
+    pub footer: Vec<PageItem>,
 }
 
 impl AppDef {

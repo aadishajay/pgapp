@@ -3,10 +3,13 @@
 //! Grammar (informal):
 //!
 //! ```text
-//! app       := "app" String "{" (nav | entity | page)* "}"
+//! app       := "app" String "{" (nav | header | footer | entity | page)* "}"
 //!
 //! nav       := "nav" "{" navitem* "}"
 //! navitem   := "item" String ( "->" "page" Ident | "{" navitem* "}" )
+//!
+//! header    := "header" "{" item* "}"
+//! footer    := "footer" "{" item* "}"
 //!
 //! entity    := "entity" String "{" field* "}"
 //! field     := "field" Ident ":" Ident ("required")? ("default" Value)?
@@ -17,10 +20,15 @@
 //!            | "form" ":" identlist
 //!            | "link" ":" Ident "->" "page" Ident
 //!            | "items" "{" item* "}"
+//!            | "item" Ident "as" itemtype
+//! itemtype  := "text" | "readonly" | "checkbox"
+//!            | "radio" "(" stringlist ")"
+//!            | "popup" "(" stringlist ")"
 //! item      := "text" String | "link" String "->" "page" Ident
 //!
-//! identlist := Ident ("," Ident)*
-//! value     := Ident | Number
+//! identlist  := Ident ("," Ident)*
+//! stringlist := String ("," String)*
+//! value      := Ident | Number
 //! ```
 //!
 //! `Ident` tokens are restricted to `[A-Za-z_][A-Za-z0-9_]*`, which means
@@ -34,7 +42,8 @@
 use anyhow::{bail, Context, Result};
 
 use crate::model::{
-    AppDef, EntityDef, FieldDef, FieldType, LinkColumn, NavItem, PageDef, PageItem, PageKind,
+    AppDef, EntityDef, FieldDef, FieldItemType, FieldType, LinkColumn, NavItem, PageDef, PageItem,
+    PageKind,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -71,7 +80,7 @@ fn lex(src: &str) -> Result<Vec<Token>> {
         } else if c == '-' && chars.get(i + 1) == Some(&'>') {
             tokens.push(Token::Arrow);
             i += 2;
-        } else if c == '{' || c == '}' || c == ':' || c == ',' {
+        } else if c == '{' || c == '}' || c == ':' || c == ',' || c == '(' || c == ')' {
             tokens.push(Token::Symbol(c));
             i += 1;
         } else if c.is_alphanumeric() || c == '_' {
@@ -166,6 +175,8 @@ impl Parser {
         let mut entities = Vec::new();
         let mut pages = Vec::new();
         let mut nav = Vec::new();
+        let mut header = Vec::new();
+        let mut footer = Vec::new();
         while !self.at_symbol('}') {
             if self.at_keyword("entity") {
                 entities.push(self.parse_entity()?);
@@ -173,9 +184,13 @@ impl Parser {
                 pages.push(self.parse_page()?);
             } else if self.at_keyword("nav") {
                 nav = self.parse_nav()?;
+            } else if self.at_keyword("header") {
+                header = self.parse_item_block("header")?;
+            } else if self.at_keyword("footer") {
+                footer = self.parse_item_block("footer")?;
             } else {
                 bail!(
-                    "expected 'entity', 'page', or 'nav' block, found {:?}",
+                    "expected 'entity', 'page', 'nav', 'header', or 'footer' block, found {:?}",
                     self.peek()
                 );
             }
@@ -187,6 +202,8 @@ impl Parser {
             entities,
             pages,
             nav,
+            header,
+            footer,
         })
     }
 
@@ -225,6 +242,18 @@ impl Parser {
                 children: Vec::new(),
             })
         }
+    }
+
+    /// Parses `"header" "{" item* "}"` / `"footer" "{" item* "}"`.
+    fn parse_item_block(&mut self, keyword: &str) -> Result<Vec<PageItem>> {
+        self.expect_keyword(keyword)?;
+        self.expect_symbol('{')?;
+        let mut items = Vec::new();
+        while !self.at_symbol('}') {
+            items.push(self.parse_page_item()?);
+        }
+        self.expect_symbol('}')?;
+        Ok(items)
     }
 
     fn parse_entity(&mut self) -> Result<EntityDef> {
@@ -300,6 +329,7 @@ impl Parser {
         let mut form = Vec::new();
         let mut link_column = None;
         let mut items = Vec::new();
+        let mut item_types = std::collections::HashMap::new();
         while !self.at_symbol('}') {
             if self.at_keyword("items") {
                 self.advance()?;
@@ -308,6 +338,11 @@ impl Parser {
                     items.push(self.parse_page_item()?);
                 }
                 self.expect_symbol('}')?;
+                continue;
+            }
+            if self.at_keyword("item") {
+                let (field, item_type) = self.parse_field_item()?;
+                item_types.insert(field, item_type);
                 continue;
             }
 
@@ -334,7 +369,50 @@ impl Parser {
             form,
             link_column,
             items,
+            item_types,
         })
+    }
+
+    /// Parses `"item" Ident "as" itemtype`.
+    fn parse_field_item(&mut self) -> Result<(String, FieldItemType)> {
+        self.expect_keyword("item")?;
+        let field = self.expect_ident()?;
+        self.expect_keyword("as")?;
+
+        let item_type = if self.at_keyword("text") {
+            self.advance()?;
+            FieldItemType::Text
+        } else if self.at_keyword("readonly") {
+            self.advance()?;
+            FieldItemType::ReadOnly
+        } else if self.at_keyword("checkbox") {
+            self.advance()?;
+            FieldItemType::Checkbox
+        } else if self.at_keyword("radio") {
+            self.advance()?;
+            FieldItemType::Radio(self.parse_choice_list()?)
+        } else if self.at_keyword("popup") {
+            self.advance()?;
+            FieldItemType::Popup(self.parse_choice_list()?)
+        } else {
+            bail!(
+                "expected 'text', 'readonly', 'checkbox', 'radio', or 'popup' item type, found {:?}",
+                self.peek()
+            );
+        };
+
+        Ok((field, item_type))
+    }
+
+    fn parse_choice_list(&mut self) -> Result<Vec<String>> {
+        self.expect_symbol('(')?;
+        let mut out = vec![self.expect_string()?];
+        while self.at_symbol(',') {
+            self.advance()?;
+            out.push(self.expect_string()?);
+        }
+        self.expect_symbol(')')?;
+        Ok(out)
     }
 
     fn parse_page_item(&mut self) -> Result<PageItem> {
@@ -385,16 +463,49 @@ mod tests {
         assert_eq!(app.entities.len(), 1);
         let tasks = &app.entities[0];
         assert_eq!(tasks.name, "tasks");
-        assert_eq!(tasks.fields.len(), 4);
+        assert_eq!(tasks.fields.len(), 7);
+
+        assert_eq!(app.header.len(), 1);
+        assert!(matches!(&app.header[0], PageItem::Text(_)));
+        assert_eq!(app.footer.len(), 2);
+        assert!(matches!(&app.footer[0], PageItem::Text(_)));
+        assert!(matches!(&app.footer[1], PageItem::Link { .. }));
 
         assert_eq!(app.pages.len(), 3);
         let list_page = app.pages.iter().find(|p| p.name == "Tasks").unwrap();
         assert_eq!(list_page.kind, PageKind::List);
-        assert_eq!(list_page.columns, vec!["title", "done", "created_at"]);
-        assert_eq!(list_page.form, vec!["title", "done"]);
+        assert_eq!(
+            list_page.columns,
+            vec!["title", "priority", "done", "created_at"]
+        );
+        assert_eq!(
+            list_page.form,
+            vec!["title", "priority", "done", "assignee", "notes"]
+        );
         let link = list_page.link_column.as_ref().unwrap();
         assert_eq!(link.field, "title");
         assert_eq!(link.target_page, "TaskDetail");
+
+        assert!(matches!(
+            list_page.item_types.get("priority"),
+            Some(FieldItemType::Radio(_))
+        ));
+        assert!(matches!(
+            list_page.item_types.get("assignee"),
+            Some(FieldItemType::Popup(_))
+        ));
+        assert!(matches!(
+            list_page.item_types.get("notes"),
+            Some(FieldItemType::ReadOnly)
+        ));
+        assert!(list_page.item_types.get("title").is_none());
+        assert!(list_page.item_types.get("done").is_none());
+        if let Some(FieldItemType::Radio(choices)) = list_page.item_types.get("priority") {
+            assert_eq!(choices, &vec!["Low", "Medium", "High"]);
+        }
+        if let Some(FieldItemType::Popup(choices)) = list_page.item_types.get("assignee") {
+            assert_eq!(choices, &vec!["Alice", "Bob", "Carol"]);
+        }
 
         let detail_page = app.pages.iter().find(|p| p.name == "TaskDetail").unwrap();
         assert_eq!(detail_page.kind, PageKind::Detail);

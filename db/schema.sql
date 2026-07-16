@@ -76,3 +76,34 @@ create table if not exists pgapp_meta.nav_items (
     target_page_id  integer references pgapp_meta.pages(id),
     ordinal         integer not null default 0
 );
+
+-- App-wide chrome shown on every page: same shape as page_items, just
+-- scoped to the app rather than one page.
+create table if not exists pgapp_meta.header_items (
+    id              serial primary key,
+    app_id          integer not null references pgapp_meta.apps(id) on delete cascade,
+    kind            text not null, -- 'text' | 'link'
+    label           text not null,
+    target_page_id  integer references pgapp_meta.pages(id),
+    ordinal         integer not null default 0
+);
+
+create table if not exists pgapp_meta.footer_items (
+    id              serial primary key,
+    app_id          integer not null references pgapp_meta.apps(id) on delete cascade,
+    kind            text not null, -- 'text' | 'link'
+    label           text not null,
+    target_page_id  integer references pgapp_meta.pages(id),
+    ordinal         integer not null default 0
+);
+
+-- How each form field is presented: a "static LOV" of choices for
+-- radio/popup, or nothing for text/readonly/checkbox.
+create table if not exists pgapp_meta.page_field_items (
+    id          serial primary key,
+    page_id     integer not null references pgapp_meta.pages(id) on delete cascade,
+    field_name  text not null,
+    item_type   text not null default 'text', -- 'text' | 'readonly' | 'checkbox' | 'radio' | 'popup'
+    choices     text[] not null default '{}',
+    unique (page_id, field_name)
+);

@@ -36,6 +36,15 @@ top of it.
 
 ```text
 app "Todo" {
+  header {
+    text "pgapp Todo Demo"
+  }
+
+  footer {
+    text "Built with pgapp - a Postgres-native no/low-code framework."
+    link "About" -> page About
+  }
+
   nav {
     item "Tasks" -> page Tasks
     item "More" {
@@ -46,14 +55,20 @@ app "Todo" {
   entity "tasks" {
     field id: id
     field title: text required
+    field priority: text default Medium
     field done: boolean default false
+    field assignee: text
+    field notes: text
     field created_at: timestamp default now
   }
 
   page "Tasks" as list of tasks {
-    columns: title, done, created_at
-    form: title, done
+    columns: title, priority, done, created_at
+    form: title, priority, done, assignee, notes
     link: title -> page TaskDetail
+    item priority as radio ("Low", "Medium", "High")
+    item assignee as popup ("Alice", "Bob", "Carol")
+    item notes as readonly
     items {
       text "Manage your tasks below. Click a title to see its detail page."
     }
@@ -71,6 +86,9 @@ app "Todo" {
 }
 ```
 
+- `header { }` / `footer { }` (optional, top-level) declare app-wide
+  chrome shown on every page — the same `text`/`link` items as page
+  `items` (below), just scoped to the whole app instead of one page.
 - `nav { }` (optional, top-level) declares the app's navigation bar.
   Each `item "Label"` is either a leaf (`-> page <Name>`) or a group
   (`{ ... }` of nested items) — nesting groups gives you a multi-level
@@ -92,6 +110,24 @@ app "Todo" {
 - `items { }` (any page kind) adds `text "..."` (static copy) and/or
   `link "Label" -> page <Name>` (a link to another page) to the page
   body — content that isn't tied to the entity's table/form.
+- `item <field> as <type>` (list pages only) picks how a form field is
+  presented — a "page item type" in APEX terms. Types:
+  - `text` — a plain input (the default for text/integer/timestamp).
+  - `readonly` — displays the value but isn't editable; its value still
+    round-trips via a hidden input, so it survives an update. Since
+    create and edit share one form, avoid `readonly` on a field whose
+    column default matters at creation time (there's no prior value to
+    show or resubmit yet).
+  - `checkbox` — a real `<input type=checkbox>` (the default for
+    boolean fields, replacing the old true/false dropdown).
+  - `radio ("A", "B", ...)` — a radio button group over a fixed,
+    markup-declared list of choices (a "static LOV").
+  - `popup ("A", "B", ...)` — a "Pop Up LOV": a button that opens a
+    native `<dialog>` listing the same kind of static choice list.
+  - Fields left undeclared get `FieldItemType::default_for` their
+    column type (see `src/model.rs`) — `id` fields default to
+    `readonly`. There's no dynamic LOV (choices from another entity)
+    yet; see the roadmap.
 - Anything that targets a page by name (`nav` items, `link:`, `link`
   items) uses a bare identifier, not a quoted string — restricting link
   targets to the same safe charset as SQL identifiers.
@@ -131,13 +167,16 @@ pgapp doesn't hardcode a look. Every server-rendered element carries one
 of a fixed set of classes — `pgapp-nav`, `pgapp-link`, `pgapp-title`,
 `pgapp-subtitle`, `pgapp-table`, `pgapp-form`, `pgapp-field`,
 `pgapp-label`, `pgapp-input`, `pgapp-select`, `pgapp-btn` (+
-`pgapp-btn-primary` / `pgapp-btn-destructive`), `pgapp-inline-form`,
-`pgapp-alert` (+ `pgapp-alert-error`), `pgapp-list`, `pgapp-navbar` (+
-`pgapp-navbar-item` / `pgapp-navbar-label` / `pgapp-navbar-submenu`),
-`pgapp-items`, `pgapp-text` — and nothing else. A **theme** is what
-gives those classes an actual appearance. This is the whole contract;
-anything that satisfies it is a valid theme, regardless of what design
-system it's built on.
+`pgapp-btn-primary` / `pgapp-btn-destructive` / `pgapp-btn-secondary`),
+`pgapp-inline-form`, `pgapp-alert` (+ `pgapp-alert-error`), `pgapp-list`,
+`pgapp-navbar` (+ `pgapp-navbar-item` / `pgapp-navbar-label` /
+`pgapp-navbar-submenu`), `pgapp-items`, `pgapp-text`, `pgapp-header`,
+`pgapp-footer`, `pgapp-checkbox`, `pgapp-readonly`, `pgapp-radio-group`
+(+ `pgapp-radio-option`), `pgapp-popup` (+ `pgapp-popup-dialog` /
+`pgapp-popup-list`) — and nothing else. A **theme** is what gives those
+classes an actual appearance. This is the whole contract; anything that
+satisfies it is a valid theme, regardless of what design system it's
+built on.
 
 ### The contract
 
@@ -194,11 +233,19 @@ On startup it prints the URL for each page, e.g. `http://127.0.0.1:8080/Tasks`.
 ## Roadmap (not in this slice)
 
 - Multi-app routing (`/:app/:page`) instead of one app per process
-- More field types, relationships (foreign keys, lookups)
+- More field types, relationships (foreign keys, lookups) — including a
+  *dynamic* LOV (popup/radio choices queried from another entity, not
+  just a static markup-declared list)
 - A real drag-and-drop builder UI that edits the markup/metadata
 - `action`/`flow` blocks in the markup for pluggable server-side logic
-  (theming, the CSS/JS asset hooks, and now nav/page items/linking are
-  the pluggable extension points so far; actions and flows are next)
+  (theming, the CSS/JS asset hooks, and now nav/page items/linking/item
+  types are the pluggable extension points so far; actions and flows
+  are next)
 - Auth/roles at the page and field level
-- Migrating existing data tables when field definitions change (today,
-  `ensure_data_table` only handles `CREATE TABLE IF NOT EXISTS`)
+- Migrating existing data tables when field definitions change beyond
+  adding a column: `ensure_data_table` now runs `ADD COLUMN IF NOT
+  EXISTS` for new fields on an existing table (without `NOT NULL`, to
+  avoid breaking on existing rows), but doesn't handle renames, type
+  changes, or drops
+- Separate field lists for create vs. edit forms, so e.g. a `readonly`
+  field with a meaningful default doesn't get nulled out on create

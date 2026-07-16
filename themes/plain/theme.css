@@ -51,8 +51,25 @@ body {
 .pgapp-btn { cursor: pointer; padding: 0.3rem 0.8rem; }
 .pgapp-btn-primary { background: #eee; border: 1px solid #999; }
 .pgapp-btn-destructive { background: #fee; border: 1px solid #a00; color: #a00; }
+.pgapp-btn-secondary { background: #f5f5f5; border: 1px solid #ccc; }
 
 .pgapp-inline-form { display: inline; margin-left: 0.5rem; }
 .pgapp-alert { padding: 0.5rem; margin-bottom: 1rem; }
 .pgapp-alert-error { color: #b00; border: 1px solid #b00; }
 .pgapp-list { list-style: none; padding: 0; }
+
+.pgapp-checkbox { width: 1.1rem; height: 1.1rem; }
+.pgapp-readonly { display: inline-block; padding: 0.3rem 0.5rem; color: #555; background: #f5f5f5; }
+.pgapp-radio-group { display: flex; flex-direction: column; gap: 0.25rem; }
+.pgapp-radio-option { display: flex; align-items: center; gap: 0.3rem; font-weight: 400; }
+
+.pgapp-popup { display: inline-block; }
+.pgapp-popup-dialog { min-width: 14rem; padding: 0.5rem; border: 1px solid #ccc; background: #fff; }
+.pgapp-popup-list { list-style: none; margin: 0 0 0.5rem; padding: 0; }
+.pgapp-popup-list button { width: 100%; text-align: left; padding: 0.3rem 0.4rem; border: none; background: transparent; cursor: pointer; }
+.pgapp-popup-list button:hover { background: #eee; }
+
+.pgapp-header, .pgapp-footer { font-size: 0.9rem; color: #555; }
+.pgapp-header { margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid #ddd; }
+.pgapp-footer { margin-top: 1.5rem; padding-top: 0.75rem; border-top: 1px solid #ddd; }
+.pgapp-header .pgapp-items, .pgapp-footer .pgapp-items { margin-bottom: 0; }
