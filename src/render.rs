@@ -1,21 +1,14 @@
 //! Minimal, dependency-free HTML rendering. Every page is metadata-driven:
 //! the field list comes from `RuntimePage`, not from a per-app template.
+//!
+//! Markup here only ever uses the fixed `.pgapp-*` class names — the
+//! "Theme contract" documented in the README. All actual look-and-feel
+//! comes from `/theme.css` (the active theme, see src/theme.rs) plus any
+//! app-level override in assets/app.css.
 
 use crate::meta::RuntimePage;
 use crate::model::FieldType;
 use std::collections::BTreeMap;
-
-const BASE_CSS: &str = r#"
-body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; color: #222; }
-table { border-collapse: collapse; width: 100%; margin-bottom: 1.5rem; }
-th, td { border: 1px solid #ddd; padding: 0.4rem 0.6rem; text-align: left; }
-th { background: #f5f5f5; }
-form.inline { display: inline; }
-.field { margin-bottom: 0.6rem; }
-label { display: block; font-weight: 600; margin-bottom: 0.2rem; }
-button, input[type=submit] { cursor: pointer; }
-nav { margin-bottom: 1.5rem; }
-"#;
 
 fn escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -25,7 +18,7 @@ fn escape(s: &str) -> String {
 }
 
 /// Extra `<link>`/`<script>` tags for user-supplied assets, if present —
-/// the pluggable css/js extension point.
+/// the app-level override layer, on top of the active theme.
 pub fn asset_tags() -> String {
     let mut tags = String::new();
     if std::path::Path::new("assets/app.css").exists() {
@@ -44,12 +37,12 @@ fn layout(title: &str, body: &str) -> String {
 <head>
 <meta charset="utf-8">
 <title>{title}</title>
-<style>{BASE_CSS}</style>
+<link rel="stylesheet" href="/theme.css">
 {assets}
 </head>
 <body>
-<nav><a href="/">pgapp</a></nav>
-<h1>{title}</h1>
+<nav class="pgapp-nav"><a class="pgapp-link" href="/">pgapp</a></nav>
+<h1 class="pgapp-title">{title}</h1>
 {body}
 </body>
 </html>"#,
@@ -75,29 +68,29 @@ fn input_for_field(page: &RuntimePage, field_name: &str, value: Option<&str>) ->
                 ("", " selected")
             };
             format!(
-                r#"<select name="{name}"><option value="true"{true_sel}>true</option><option value="false"{false_sel}>false</option></select>"#,
+                r#"<select class="pgapp-select" name="{name}"><option value="true"{true_sel}>true</option><option value="false"{false_sel}>false</option></select>"#,
                 name = escape(field_name),
             )
         }
         FieldType::Integer => format!(
-            r#"<input type="number" name="{name}" value="{value}"{required}>"#,
+            r#"<input class="pgapp-input" type="number" name="{name}" value="{value}"{required}>"#,
             name = escape(field_name),
             value = escape(value),
         ),
         FieldType::Timestamp => format!(
-            r#"<input type="text" name="{name}" value="{value}" placeholder="YYYY-MM-DD HH:MM:SS"{required}>"#,
+            r#"<input class="pgapp-input" type="text" name="{name}" value="{value}" placeholder="YYYY-MM-DD HH:MM:SS"{required}>"#,
             name = escape(field_name),
             value = escape(value),
         ),
         FieldType::Text | FieldType::Id => format!(
-            r#"<input type="text" name="{name}" value="{value}"{required}>"#,
+            r#"<input class="pgapp-input" type="text" name="{name}" value="{value}"{required}>"#,
             name = escape(field_name),
             value = escape(value),
         ),
     };
 
     format!(
-        r#"<div class="field"><label>{label}</label>{input}</div>"#,
+        r#"<div class="pgapp-field"><label class="pgapp-label">{label}</label>{input}</div>"#,
         label = escape(field_name),
     )
 }
@@ -111,12 +104,12 @@ pub fn list_page(
 
     if let Some(err) = error {
         body.push_str(&format!(
-            r#"<p style="color:#b00"><strong>Error:</strong> {}</p>"#,
+            r#"<div class="pgapp-alert pgapp-alert-error"><strong>Error:</strong> {}</div>"#,
             escape(err)
         ));
     }
 
-    body.push_str("<table><thead><tr>");
+    body.push_str(r#"<table class="pgapp-table"><thead><tr>"#);
     for col in &page.columns {
         body.push_str(&format!("<th>{}</th>", escape(col)));
     }
@@ -131,9 +124,9 @@ pub fn list_page(
         let id = row.get("id").and_then(|v| v.as_deref()).unwrap_or("");
         body.push_str(&format!(
             r#"<td>
-<a href="/{page}/{id}/edit">Edit</a>
-<form class="inline" method="post" action="/{page}/{id}/delete" onsubmit="return confirm('Delete this row?')">
-<button type="submit">Delete</button>
+<a class="pgapp-link" href="/{page}/{id}/edit">Edit</a>
+<form class="pgapp-inline-form" method="post" action="/{page}/{id}/delete" onsubmit="return confirm('Delete this row?')">
+<button class="pgapp-btn pgapp-btn-destructive" type="submit">Delete</button>
 </form>
 </td>"#,
             page = escape(&page.name),
@@ -144,13 +137,13 @@ pub fn list_page(
     body.push_str("</tbody></table>");
 
     body.push_str(&format!(
-        r#"<h2>Add new</h2><form method="post" action="/{}">"#,
+        r#"<h2 class="pgapp-subtitle">Add new</h2><form class="pgapp-form" method="post" action="/{}">"#,
         escape(&page.name)
     ));
     for field_name in &page.form {
         body.push_str(&input_for_field(page, field_name, None));
     }
-    body.push_str(r#"<button type="submit">Create</button></form>"#);
+    body.push_str(r#"<button class="pgapp-btn pgapp-btn-primary" type="submit">Create</button></form>"#);
 
     layout(&page.name, &body)
 }
@@ -164,12 +157,12 @@ pub fn edit_page(
     let mut body = String::new();
     if let Some(err) = error {
         body.push_str(&format!(
-            r#"<p style="color:#b00"><strong>Error:</strong> {}</p>"#,
+            r#"<div class="pgapp-alert pgapp-alert-error"><strong>Error:</strong> {}</div>"#,
             escape(err)
         ));
     }
     body.push_str(&format!(
-        r#"<form method="post" action="/{page}/{id}/update">"#,
+        r#"<form class="pgapp-form" method="post" action="/{page}/{id}/update">"#,
         page = escape(&page.name),
         id = escape(id),
     ));
@@ -177,16 +170,22 @@ pub fn edit_page(
         let value = row.get(field_name).and_then(|v| v.as_deref());
         body.push_str(&input_for_field(page, field_name, value));
     }
-    body.push_str(r#"<button type="submit">Save</button></form>"#);
-    body.push_str(&format!(r#"<p><a href="/{}">Back to list</a></p>"#, escape(&page.name)));
+    body.push_str(r#"<button class="pgapp-btn pgapp-btn-primary" type="submit">Save</button></form>"#);
+    body.push_str(&format!(
+        r#"<p><a class="pgapp-link" href="/{}">Back to list</a></p>"#,
+        escape(&page.name)
+    ));
 
     layout(&format!("Edit {}", page.name), &body)
 }
 
 pub fn index_page(app_name: &str, pages: &[String]) -> String {
-    let mut body = String::from("<ul>");
+    let mut body = String::from(r#"<ul class="pgapp-list">"#);
     for p in pages {
-        body.push_str(&format!(r#"<li><a href="/{p}">{p}</a></li>"#, p = escape(p)));
+        body.push_str(&format!(
+            r#"<li><a class="pgapp-link" href="/{p}">{p}</a></li>"#,
+            p = escape(p)
+        ));
     }
     body.push_str("</ul>");
     layout(app_name, &body)

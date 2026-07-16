@@ -11,15 +11,18 @@ use sqlx::{PgPool, Row};
 
 use crate::meta::{RuntimeApp, RuntimeEntity, RuntimePage};
 use crate::render;
+use crate::theme::Theme;
 
 pub struct AppState {
     pub pool: PgPool,
     pub app: RuntimeApp,
+    pub theme: Theme,
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(index))
+        .route("/theme.css", get(theme_css))
         .route("/assets/*path", get(asset))
         .route("/api/:entity", get(api_list))
         .route("/:page", get(list).post(create))
@@ -144,6 +147,13 @@ fn page_or_404<'a>(app: &'a RuntimeApp, name: &str) -> Result<&'a RuntimePage, A
 async fn index(State(state): State<Arc<AppState>>) -> Html<String> {
     let pages: Vec<String> = state.app.pages.iter().map(|p| p.name.clone()).collect();
     Html(render::index_page(&state.app.name, &pages))
+}
+
+async fn theme_css(State(state): State<Arc<AppState>>) -> Response {
+    match tokio::fs::read(&state.theme.css_path).await {
+        Ok(bytes) => ([(header::CONTENT_TYPE, "text/css")], bytes).into_response(),
+        Err(_) => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 async fn asset(Path(path): Path<String>) -> Response {

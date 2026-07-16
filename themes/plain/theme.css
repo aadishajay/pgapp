@@ -1,0 +1,35 @@
+/* pgapp theme: plain
+ * A dependency-free baseline styling the same `.pgapp-*` class contract
+ * as any other theme (see themes/shadcn/theme.css for a richer example).
+ */
+
+body {
+  font-family: system-ui, sans-serif;
+  max-width: 720px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+  color: #222;
+}
+
+.pgapp-nav { margin-bottom: 1.5rem; }
+.pgapp-link { color: #06c; }
+.pgapp-title { margin: 0 0 1rem; }
+.pgapp-subtitle { margin: 1.5rem 0 0.75rem; }
+
+.pgapp-table { border-collapse: collapse; width: 100%; margin-bottom: 1.5rem; }
+.pgapp-table th, .pgapp-table td { border: 1px solid #ddd; padding: 0.4rem 0.6rem; text-align: left; }
+.pgapp-table th { background: #f5f5f5; }
+
+.pgapp-form { display: block; }
+.pgapp-field { margin-bottom: 0.6rem; }
+.pgapp-label { display: block; font-weight: 600; margin-bottom: 0.2rem; }
+.pgapp-input, .pgapp-select { padding: 0.3rem; }
+
+.pgapp-btn { cursor: pointer; padding: 0.3rem 0.8rem; }
+.pgapp-btn-primary { background: #eee; border: 1px solid #999; }
+.pgapp-btn-destructive { background: #fee; border: 1px solid #a00; color: #a00; }
+
+.pgapp-inline-form { display: inline; margin-left: 0.5rem; }
+.pgapp-alert { padding: 0.5rem; margin-bottom: 1rem; }
+.pgapp-alert-error { color: #b00; border: 1px solid #b00; }
+.pgapp-list { list-style: none; padding: 0; }

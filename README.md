@@ -15,8 +15,10 @@ Postgres, written in Rust.
 - **Low-code CRUD**: given an entity and a page definition, pgapp
   generates the data table, the list view, the create/edit forms, and a
   JSON endpoint, with zero per-app code.
-- **Pluggable CSS/JS**: drop files in `assets/app.css` / `assets/app.js`
-  and they're served and linked into every rendered page automatically.
+- **Pluggable design system**: rendered HTML only ever uses a fixed set
+  of `.pgapp-*` classes; a swappable `theme.css` (see "Theming" below)
+  gives them their actual look. `assets/app.css`/`app.js` still exist as
+  a per-app override layer on top of whatever theme is active.
 - **Rust instead of PostgREST**: rather than fronting Postgres with
   PostgREST, pgapp's own Axum server owns routing directly, using the
   metadata to build parameterized SQL on the fly.
@@ -84,6 +86,47 @@ always sent as bind parameters, cast in SQL to the field's declared type
 (e.g. `$1::boolean`), since the generic layer doesn't know column types
 at compile time.
 
+## Theming
+
+pgapp doesn't hardcode a look. Every server-rendered element carries one
+of a fixed set of classes — `pgapp-nav`, `pgapp-link`, `pgapp-title`,
+`pgapp-subtitle`, `pgapp-table`, `pgapp-form`, `pgapp-field`,
+`pgapp-label`, `pgapp-input`, `pgapp-select`, `pgapp-btn` (+
+`pgapp-btn-primary` / `pgapp-btn-destructive`), `pgapp-inline-form`,
+`pgapp-alert` (+ `pgapp-alert-error`), `pgapp-list` — and nothing else.
+A **theme** is what gives those classes an actual appearance. This is
+the whole contract; anything that satisfies it is a valid theme,
+regardless of what design system it's built on.
+
+### The contract
+
+A theme is a directory at `themes/<name>/` containing:
+
+- `theme.css` (required) — styles the `.pgapp-*` classes above however
+  it wants (CSS variables + utility-style rules, plain selectors,
+  whatever the source design system uses). Served at `GET /theme.css`
+  and linked first in `<head>`, before `assets/app.css`.
+- `theme.json` (optional) — `{ "label": "...", "description": "..." }`,
+  human-facing metadata, printed at startup. Doesn't affect rendering.
+
+Select a theme with `PGAPP_THEME=<name>` (default: `shadcn`). If
+`themes/<name>/theme.css` doesn't exist, the server refuses to start
+with a clear error rather than silently falling back.
+
+### Shipped themes
+
+- `themes/shadcn/` (default) — shadcn/ui's default zinc palette:
+  HSL custom properties (`--background`, `--primary`, `--border`,
+  `--radius`, ...) with light/dark handled via
+  `prefers-color-scheme`.
+- `themes/plain/` — the same classes styled with plain CSS and zero
+  design-system assumptions, proving the contract isn't shadcn-specific.
+
+To add another design system (Bootstrap, Material, a custom brand kit,
+...), create `themes/<name>/theme.css` styling the classes above and run
+with `PGAPP_THEME=<name>`. No Rust or markup changes needed — theming is
+fully decoupled from both.
+
 ## Running it
 
 Requires a reachable Postgres instance.
@@ -112,8 +155,8 @@ On startup it prints the URL for each page, e.g. `http://127.0.0.1:8080/Tasks`.
 - More field types, relationships (foreign keys, lookups)
 - A real drag-and-drop builder UI that edits the markup/metadata
 - `action`/`flow` blocks in the markup for pluggable server-side logic
-  (the current CSS/JS asset hooks are the first pluggable extension
-  point; actions and flows are the next one)
+  (theming and the CSS/JS asset hooks are the first pluggable extension
+  points; actions and flows are the next one)
 - Auth/roles at the page and field level
 - Migrating existing data tables when field definitions change (today,
   `ensure_data_table` only handles `CREATE TABLE IF NOT EXISTS`)

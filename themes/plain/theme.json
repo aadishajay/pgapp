@@ -1,0 +1,5 @@
+{
+  "name": "plain",
+  "label": "Plain",
+  "description": "Minimal fallback theme with no design-system dependency, proving pgapp's theme contract isn't tied to shadcn."
+}

@@ -1,0 +1,5 @@
+{
+  "name": "shadcn",
+  "label": "shadcn/ui",
+  "description": "Default theme. Follows shadcn/ui's design tokens (zinc palette, HSL CSS variables, light/dark via prefers-color-scheme)."
+}

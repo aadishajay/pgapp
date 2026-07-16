@@ -3,6 +3,7 @@ mod meta;
 mod model;
 mod render;
 mod server;
+mod theme;
 
 use std::sync::Arc;
 
@@ -17,6 +18,8 @@ async fn main() -> anyhow::Result<()> {
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/pgapp".to_string());
+    let theme_name = std::env::var("PGAPP_THEME").unwrap_or_else(|_| "shadcn".to_string());
+    let theme = theme::load(&theme_name)?;
 
     let src = std::fs::read_to_string(&markup_path)
         .with_context(|| format!("failed to read markup file '{markup_path}'"))?;
@@ -34,6 +37,16 @@ async fn main() -> anyhow::Result<()> {
     let runtime_app = meta::load_app(&pool, &app_def.name).await?;
 
     println!("pgapp: serving '{}' from {}", runtime_app.name, markup_path);
+    println!(
+        "  theme: {} ({}) - {}",
+        theme.name,
+        if theme.meta.label.is_empty() {
+            "no label"
+        } else {
+            &theme.meta.label
+        },
+        theme.meta.description
+    );
     for page in &runtime_app.pages {
         println!(
             "  http://{bind_addr}/{}  (entity: {}, table: pgapp_data.{})",
@@ -44,6 +57,7 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(server::AppState {
         pool,
         app: runtime_app,
+        theme,
     });
     let router = server::build_router(state);
 
