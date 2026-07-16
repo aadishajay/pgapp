@@ -19,6 +19,9 @@ Postgres, written in Rust.
   of `.pgapp-*` classes; a swappable `theme.css` (see "Theming" below)
   gives them their actual look. `assets/app.css`/`app.js` still exist as
   a per-app override layer on top of whatever theme is active.
+- **Pluggable item types**: a form field's widget (Text, Checkbox,
+  Radio, Popup, a Slider, ...) is a component in its own file under
+  `src/item_types/`, not a hardcoded match arm — see "Item types" below.
 - **Named queries**: reusable SQL, declared once (app-wide or scoped to
   one page) and referenced by name from LOVs, regions, and a list page's
   row source — see "Named queries" below.
@@ -72,16 +75,18 @@ app "Todo" {
     field done: boolean default false
     field assignee: text
     field notes: text
+    field estimate_hours: integer default 4
     field created_at: timestamp default now
   }
 
   page "Tasks" as list of tasks {
-    columns: title, priority, done, created_at
-    form: title, priority, done, assignee, notes
+    columns: title, priority, done, estimate_hours, created_at
+    form: title, priority, done, assignee, notes, estimate_hours
     link: title -> page TaskDetail (priority: priority)
     item priority as radio ("Low", "Medium", "High")
     item assignee as popup from query assignees
     item notes as readonly
+    item estimate_hours as slider (min: "0", max: "40", step: "1")
 
     # Page-scoped: only this page's items/LOVs can see "recent".
     query recent {
@@ -150,22 +155,19 @@ app "Todo" {
 - `items { }` (any page kind) adds `text "..."`, `link "Label" -> page
   <Name>`, and/or `region "Label" from query <name>` to the page body —
   content that isn't tied to the entity's table/form.
-- `item <field> as <type>` (list pages only) picks how a form field is
-  presented — a "page item type" in APEX terms. Types:
-  - `text` — a plain input (the default for text/integer/timestamp).
-  - `readonly` — displays the value but isn't editable; its value still
-    round-trips via a hidden input, so it survives an update. Since
-    create and edit share one form, avoid `readonly` on a field whose
-    column default matters at creation time (there's no prior value to
-    show or resubmit yet).
-  - `checkbox` — a real `<input type=checkbox>` (the default for
-    boolean fields, replacing the old true/false dropdown).
-  - `radio (...)` / `popup (...)` — a radio group / a "Pop Up LOV" (a
-    button opening a native `<dialog>`), each sourced from either a
-    fixed `("A", "B", ...)` list or `from query <name>` (see below).
-  - Fields left undeclared get `FieldItemType::default_for` their
-    column type (see `src/model.rs`) — `id` fields default to
-    `readonly`.
+- `item <field> as <kind> [(...)]` (list pages only) picks how a form
+  field is presented — a "page item type" in APEX terms. `<kind>` names
+  a component registered in `src/item_types/` (built in: `text`,
+  `readonly`, `checkbox`, `radio`, `popup`, `slider` — see "Item types"
+  below for what each does and how to add your own). The parenthesized
+  part is a generic config blob each component reads its own keys from:
+  a bare `("A", "B", ...)` list becomes `{"choices": [...]}` (what
+  Radio/Popup read for a fixed list); `(key: value, ...)` becomes
+  `{key: value, ...}` (what Slider reads for `min`/`max`/`step`);
+  `from query <name>` becomes `{"query": name}` (a live source instead
+  of a fixed list — see "Named queries"). Fields left undeclared get
+  `item_types::default_kind_for` their column type, with an empty
+  config — `id` fields default to `readonly`.
 - Anything that targets a page by name (`nav` items, `link:`, `link`
   items) uses a bare identifier, not a quoted string — restricting link
   targets to the same safe charset as SQL identifiers. Query names are
@@ -173,6 +175,58 @@ app "Todo" {
 
 See `src/markup.rs` for the full grammar and `examples/todo.app` for a
 working example.
+
+## Item types
+
+A form field's widget is one small Rust file implementing this trait
+(`src/item_types.rs`):
+
+```rust
+pub trait ItemType: Send + Sync {
+    fn kind(&self) -> &'static str;                      // the markup keyword
+    fn render(&self, args: RenderArgs) -> String;         // the <input>/etc, unwrapped
+    fn read_value(&self, field_name: &str,                // default: raw submitted value
+                   values: &HashMap<String, String>) -> String { ... }
+}
+```
+
+`RenderArgs` carries the field's name/value/required-ness/column type,
+its raw JSON `config`, and (for anything whose config used `choices`/
+`query`) the already-resolved `(value, label)` pairs — resolving a
+`query` means an async DB call, so that happens once up front in
+`server::query_engine`, before any (synchronous) rendering runs.
+`read_value` only needs overriding when a field doesn't submit a plain
+value the usual way — Checkbox is the one built-in example, since an
+unchecked box never sends its key at all.
+
+```
+src/item_types.rs        registry() + the ItemType trait + default_kind_for
+src/item_types/
+  text.rs                default for text/integer/timestamp
+  readonly.rs             visible, not editable, round-trips via hidden input
+  checkbox.rs             default for boolean; read_value overridden
+  radio.rs                radio group over args.choices
+  popup.rs                "Pop Up LOV": <dialog> + pgapp.setItem(...)
+  slider.rs               <input type=range>, reads min/max/step from config
+```
+
+Adding a new one (say a date picker) means writing
+`src/item_types/date_picker.rs` implementing the trait and adding one
+line to `registry()` in `src/item_types.rs` — nothing in `markup.rs`,
+`meta.rs`, `server.rs`, or `render.rs` needs to change, since all of
+them only ever go through the registry by kind string and a generic
+JSON config. That said, this is a *compile-time* plugin point: Rust has
+no way to pick up a dropped-in `.rs` file without a rebuild. "Drop in a
+file" here means write it, register it, `cargo build`, restart — not
+hot-loading into a running process. A wrong/misspelled `kind` in markup
+is caught at sync time (`meta::sync_app` checks every declared kind
+against the registry) rather than failing silently at render time.
+
+Two config keys are reserved by convention, generic across every kind
+(see `server::query_engine::resolve_field_choices`): `choices` (a fixed
+list) and `query` (a named query's rows instead) — a component only
+needs to read `args.choices` to get either, without caring which one it
+was.
 
 ## Named queries
 
@@ -236,7 +290,7 @@ the point, so any future custom action code has one consistent API.
         │  markup::parse_app
         ▼
     AppDef (in memory)
-        │  meta::sync_app
+        │  meta::sync_app (validates item kinds against the item_types registry)
         ▼
  pgapp_meta.* tables  ──creates──▶  pgapp_data.<table> (the real data table)
         │  meta::load_app (reloads from the DB, not from AppDef)
@@ -254,6 +308,29 @@ safe to splice them into generated SQL. All user-supplied *values* are
 always sent as bind parameters, cast in SQL to the field's declared type
 (e.g. `$1::boolean`), since the generic layer doesn't know column types
 at compile time.
+
+### Source layout
+
+```
+src/
+  main.rs             wires everything together, builds the item_types registry
+  markup.rs           lexer + parser: .app text -> model::AppDef
+  model.rs            the parsed-markup types (AppDef, PageDef, FieldItem, ...)
+  html.rs             shared escape/js_escape/url_encode helpers
+  theme.rs            theme.css/theme.json loading (see "Theming")
+  runtime.js          seed content for the DB-stored JS runtime
+  item_types.rs       the ItemType trait + registry() (see "Item types")
+  item_types/         one file per component: text, readonly, checkbox, radio, popup, slider
+  meta.rs             module root: ensure_schema + re-exports
+  meta/
+    types.rs          the runtime model (RuntimeApp, RuntimePage, Chrome, ...)
+    sync.rs           AppDef -> pgapp_meta.* (+ physical data tables)
+    load.rs           pgapp_meta.* -> RuntimeApp, compile_named_query
+  server.rs           module root: AppState, routes, HTTP handlers
+  server/
+    query_engine.rs   named-query execution, bind context, LOV/region resolution
+  render.rs           HTML generation; delegates field widgets to item_types
+```
 
 ## Theming
 
@@ -333,12 +410,16 @@ On startup it prints the URL for each page, e.g. `http://127.0.0.1:8080/Tasks`.
   concept of one entity referencing another yet
 - A real drag-and-drop builder UI that edits the markup/metadata
 - `action`/`flow` blocks in the markup for pluggable server-side logic
-  (theming, the CSS/JS asset hooks, nav/page items/linking/item types,
-  and now named queries + the JS runtime are the pluggable extension
-  points so far; actions and flows are next — likely built as a second
+  (theming, the CSS/JS asset hooks, nav/page items/linking, named
+  queries, the JS runtime, and now item types are the pluggable
+  extension points so far; actions and flows are next — likely a second
   runtime.js convention plus a way to declare which item/event triggers
   which named query or action)
 - Auth/roles at the page and field level
+- Item type config is currently always flat strings (`serde_json::Value`
+  values are strings even for Slider's numeric-looking `min`/`max`); a
+  component that wanted structured config (nested objects, arrays of
+  objects) would have to encode/decode that itself
 - Migrating existing data tables when field definitions change beyond
   adding a column: `ensure_data_table` now runs `ADD COLUMN IF NOT
   EXISTS` for new fields on an existing table (without `NOT NULL`, to

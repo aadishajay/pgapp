@@ -101,18 +101,23 @@ create table if not exists pgapp_meta.footer_items (
 );
 alter table pgapp_meta.footer_items add column if not exists query_name text;
 
--- How each form field is presented: a "static LOV" of choices for
--- radio/popup, a named query supplying `value`/`label` columns instead,
--- or nothing for text/readonly/checkbox.
+-- How each form field is presented: item_type names a component
+-- registered in src/item_types.rs (open-ended — not a fixed set of
+-- values), and config is whatever that component wants: e.g. a static
+-- {"choices": [...]} list or {"query": "name"} for radio/popup, or
+-- {"min": "0", "max": "40", "step": "1"} for a slider. Components read
+-- their own keys out of this generically; adding a new item type never
+-- requires a schema change here.
 create table if not exists pgapp_meta.page_field_items (
     id             serial primary key,
     page_id        integer not null references pgapp_meta.pages(id) on delete cascade,
     field_name     text not null,
-    item_type      text not null default 'text', -- 'text' | 'readonly' | 'checkbox' | 'radio' | 'popup'
-    choices        text[] not null default '{}',
+    item_type      text not null default 'text',
     unique (page_id, field_name)
 );
-alter table pgapp_meta.page_field_items add column if not exists choices_query text;
+alter table pgapp_meta.page_field_items add column if not exists config jsonb not null default '{}';
+alter table pgapp_meta.page_field_items drop column if exists choices;
+alter table pgapp_meta.page_field_items drop column if exists choices_query;
 
 -- Named, reusable SQL queries. page_id null = app-scoped (visible from
 -- every page); page_id set = visible only within that page, shadowing

@@ -1,3 +1,10 @@
+//! Route handlers and the generic entity CRUD they're built on. Named
+//! query execution and everything that depends on it (LOV choices,
+//! regions) lives in `server::query_engine`, which this module just
+//! calls into.
+
+mod query_engine;
+
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
@@ -9,16 +16,19 @@ use axum::Router;
 use serde_json::json;
 use sqlx::{PgPool, Row};
 
-use crate::meta::{RegionRows, RuntimeApp, RuntimeEntity, RuntimePage, RuntimePageItem, RuntimeQuery};
-use crate::model::{ChoiceSource, FieldItemType, PageKind};
+use crate::item_types;
+use crate::meta::{RuntimeApp, RuntimeEntity, RuntimePage};
+use crate::model::PageKind;
 use crate::render;
 use crate::theme::Theme;
+use query_engine::{bind_context, resolve_field_choices, resolve_regions, run_named_query_rows};
 
 pub struct AppState {
     pub pool: PgPool,
     pub app: RuntimeApp,
     pub theme: Theme,
     pub runtime_js: String,
+    pub item_types: item_types::Registry,
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -140,153 +150,22 @@ async fn list_rows(
     }
 }
 
-/// Turns a `to_jsonb` result value into the display string the rest of
-/// the generic rendering layer expects: `null` becomes "not set", other
-/// scalars are stringified (strings verbatim, numbers/bools via their
-/// JSON text).
-fn json_to_display(value: &serde_json::Value) -> Option<String> {
-    match value {
-        serde_json::Value::Null => None,
-        serde_json::Value::String(s) => Some(s.clone()),
-        other => Some(other.to_string()),
-    }
-}
-
-/// Runs a compiled named query, binding `rq.bind_names` from `ctx` (a
-/// name missing from `ctx` binds SQL NULL). The query is wrapped in
-/// `to_jsonb` so its result can be decoded generically regardless of
-/// what columns it selects or what Postgres types they are.
-async fn run_named_query(
-    pool: &PgPool,
-    rq: &RuntimeQuery,
-    ctx: &HashMap<String, String>,
-) -> anyhow::Result<Vec<serde_json::Value>> {
-    let wrapped = format!("select to_jsonb(t) as j from ({}) as t", rq.sql);
-    let mut query = sqlx::query_scalar::<_, serde_json::Value>(&wrapped);
-    for name in &rq.bind_names {
-        query = query.bind(ctx.get(name).map(|s| s.as_str()));
-    }
-    Ok(query.fetch_all(pool).await?)
-}
-
-async fn run_named_query_rows(
-    pool: &PgPool,
-    rq: &RuntimeQuery,
-    ctx: &HashMap<String, String>,
-) -> anyhow::Result<Vec<BTreeMap<String, Option<String>>>> {
-    let rows = run_named_query(pool, rq, ctx).await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| match row {
-            serde_json::Value::Object(map) => map
-                .into_iter()
-                .map(|(k, v)| (k, json_to_display(&v)))
-                .collect(),
-            _ => BTreeMap::new(),
-        })
-        .collect())
-}
-
-/// Resolves every `Region` item's rows across the current page's items
-/// plus the app's header/footer, keyed by query name. Page items may
-/// use a page-scoped query; header/footer can only see app-scoped ones
-/// (there's no single page to shadow through).
-async fn resolve_regions(
-    pool: &PgPool,
-    app: &RuntimeApp,
-    page_items: &[RuntimePageItem],
-    page: Option<&RuntimePage>,
-    ctx: &HashMap<String, String>,
-) -> anyhow::Result<RegionRows> {
-    let mut out = RegionRows::new();
-
-    for item in page_items.iter().chain(app.header.iter()).chain(app.footer.iter()) {
-        let RuntimePageItem::Region { query, .. } = item else {
-            continue;
-        };
-        if out.contains_key(query) {
-            continue;
-        }
-        let rq = page
-            .and_then(|p| p.resolve_query(app, query))
-            .or_else(|| app.queries.get(query))
-            .ok_or_else(|| anyhow::anyhow!("region references unknown query '{query}'"))?;
-        out.insert(query.clone(), run_named_query_rows(pool, rq, ctx).await?);
-    }
-
-    Ok(out)
-}
-
-/// Resolves live choices for every form field whose item type sources
-/// from a named query (`radio from query ...` / `popup from query
-/// ...`), keyed by field name. Static choice lists don't need this.
-async fn resolve_field_choices(
-    pool: &PgPool,
-    app: &RuntimeApp,
-    page: &RuntimePage,
-    ctx: &HashMap<String, String>,
-) -> anyhow::Result<HashMap<String, Vec<(String, String)>>> {
-    let mut out = HashMap::new();
-    for (field_name, item_type) in &page.item_types {
-        let Some(ChoiceSource::Query(query_name)) = item_type.choice_source() else {
-            continue;
-        };
-        let rq = page.resolve_query(app, query_name).ok_or_else(|| {
-            anyhow::anyhow!("field '{field_name}' references unknown query '{query_name}'")
-        })?;
-        let rows = run_named_query(pool, rq, ctx).await?;
-        let choices = rows
-            .into_iter()
-            .filter_map(|row| {
-                let value = row.get("value")?.as_str()?.to_string();
-                let label = row
-                    .get("label")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or(&value)
-                    .to_string();
-                Some((value, label))
-            })
-            .collect();
-        out.insert(field_name.clone(), choices);
-    }
-    Ok(out)
-}
-
-/// Bind context available to named queries on one request: the URL's
-/// query-string parameters, plus — when editing or viewing a specific
-/// row — that row's own field values, so e.g. a popup LOV can filter by
-/// another field on the same row. Query-string values win on conflict.
-fn bind_context(
-    query_params: &HashMap<String, String>,
-    row: Option<&BTreeMap<String, Option<String>>>,
-) -> HashMap<String, String> {
-    let mut ctx = HashMap::new();
-    if let Some(row) = row {
-        for (k, v) in row {
-            if let Some(v) = v {
-                ctx.insert(k.clone(), v.clone());
-            }
-        }
-    }
-    for (k, v) in query_params {
-        ctx.insert(k.clone(), v.clone());
-    }
-    ctx
-}
-
 /// Builds (column names, value expressions, bind values) for a page's
 /// form fields. Empty, non-required values become SQL `NULL` literals
 /// directly (an empty string can't be cast to e.g. integer); everything
 /// else is bound as text and cast in SQL, since the actual Postgres
 /// column type isn't known at compile time.
 ///
-/// Unchecked HTML checkboxes never submit their key at all, so a
-/// `Checkbox` field reads "true"/"false" from whether `name` is present
-/// in `values`, not from the (usually absent) value itself.
+/// Each field's submitted value is read through its registered item
+/// type's `read_value` (e.g. Checkbox reads presence-in-the-form rather
+/// than a submitted value, since unchecked boxes never submit their key
+/// at all) — this dispatches by whatever `page.item_types` says, not a
+/// hardcoded kind list.
 fn build_value_exprs(
     page: &RuntimePage,
     form_fields: &[String],
     values: &HashMap<String, String>,
+    registry: &item_types::Registry,
 ) -> anyhow::Result<(Vec<String>, Vec<String>, Vec<String>)> {
     let entity = page.entity.as_ref().expect("list page always has an entity");
     let mut columns = Vec::new();
@@ -297,13 +176,12 @@ fn build_value_exprs(
         let field = entity
             .field(name)
             .ok_or_else(|| anyhow::anyhow!("unknown field '{name}'"))?;
-        let item_type = page.item_types.get(name).unwrap_or(&FieldItemType::Text);
 
-        let raw = if matches!(item_type, FieldItemType::Checkbox) {
-            if values.contains_key(name) { "true" } else { "false" }.to_string()
-        } else {
-            values.get(name).map(|s| s.trim().to_string()).unwrap_or_default()
+        let raw = match page.item_types.get(name).and_then(|fi| registry.get(fi.kind.as_str())) {
+            Some(component) => component.read_value(name, values),
+            None => values.get(name).cloned().unwrap_or_default(),
         };
+        let raw = raw.trim().to_string();
 
         if field.required && raw.is_empty() {
             anyhow::bail!("'{name}' is required");
@@ -409,6 +287,7 @@ async fn show(
                 None,
                 state.app.chrome(&regions),
                 &choices,
+                &state.item_types,
             )))
         }
         PageKind::Detail => {
@@ -448,7 +327,7 @@ async fn create(
     let page = require_list_page(page_or_404(&state.app, &page_name)?)?;
     let entity = entity_of(page)?;
 
-    let build = build_value_exprs(page, &page.form, &values);
+    let build = build_value_exprs(page, &page.form, &values, &state.item_types);
     let (columns, exprs, binds) = match build {
         Ok(v) => v,
         Err(e) => {
@@ -468,6 +347,7 @@ async fn create(
                 Some(&e.to_string()),
                 state.app.chrome(&regions),
                 &choices,
+                &state.item_types,
             ))
             .into_response());
         }
@@ -518,6 +398,7 @@ async fn edit_form(
         None,
         state.app.chrome(&regions),
         &choices,
+        &state.item_types,
     )))
 }
 
@@ -530,7 +411,7 @@ async fn update(
     let page = require_list_page(page_or_404(&state.app, &page_name)?)?;
     let entity = entity_of(page)?;
 
-    let build = build_value_exprs(page, &page.form, &values);
+    let build = build_value_exprs(page, &page.form, &values, &state.item_types);
     let (columns, exprs, mut binds) = match build {
         Ok(v) => v,
         Err(e) => {
@@ -552,6 +433,7 @@ async fn update(
                 Some(&e.to_string()),
                 state.app.chrome(&regions),
                 &choices,
+                &state.item_types,
             ))
             .into_response());
         }

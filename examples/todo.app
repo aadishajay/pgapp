@@ -38,20 +38,24 @@ app "Todo" {
     field done: boolean default false
     field assignee: text
     field notes: text
+    field estimate_hours: integer default 4
     field created_at: timestamp default now
   }
 
   # Demonstrates every item type: title/done fall back to their default
   # (text, checkbox); priority/assignee/notes declare one explicitly,
   # with assignee's popup sourced from the app-scoped query above
-  # instead of a fixed list.
+  # instead of a fixed list. estimate_hours uses "slider", a component
+  # that isn't built into the markup grammar at all — it's just another
+  # file under src/item_types/, registered like any other.
   page "Tasks" as list of tasks {
-    columns: title, priority, done, created_at
-    form: title, priority, done, assignee, notes
+    columns: title, priority, done, estimate_hours, created_at
+    form: title, priority, done, assignee, notes, estimate_hours
     link: title -> page TaskDetail (priority: priority)
     item priority as radio ("Low", "Medium", "High")
     item assignee as popup from query assignees
     item notes as readonly
+    item estimate_hours as slider (min: "0", max: "40", step: "1")
 
     # Page-scoped: only this page's items/LOVs can see "recent".
     query recent {

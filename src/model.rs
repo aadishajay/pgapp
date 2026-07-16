@@ -132,70 +132,17 @@ pub struct LinkColumn {
     pub extra_params: Vec<(String, String)>,
 }
 
-/// Where a Radio/Popup item's choices come from: a fixed list written
-/// directly in the markup, or the live result of a named query (which
-/// must alias its columns `value` and, optionally, `label`).
+/// How a form field is presented: `kind` names a registered component
+/// (see `src/item_types.rs`, e.g. "text", "radio", "slider"), and
+/// `config` is whatever that component wants — a generic JSON blob so
+/// new item types never need a change here or in the markup grammar.
+/// Two config keys are reserved by convention (not enforced here):
+/// `choices` (a fixed list, for Radio/Popup) and `query` (a named
+/// query's rows instead — see `server::query_engine::resolve_field_choices`).
 #[derive(Debug, Clone)]
-pub enum ChoiceSource {
-    Static(Vec<String>),
-    Query(String),
-}
-
-/// How a form field is presented, independent of its Postgres column
-/// type.
-#[derive(Debug, Clone)]
-pub enum FieldItemType {
-    Text,
-    ReadOnly,
-    Checkbox,
-    Radio(ChoiceSource),
-    Popup(ChoiceSource),
-}
-
-impl FieldItemType {
-    /// The item type a field gets when a page doesn't declare one
-    /// explicitly.
-    pub fn default_for(ty: FieldType) -> Self {
-        match ty {
-            FieldType::Boolean => FieldItemType::Checkbox,
-            FieldType::Id => FieldItemType::ReadOnly,
-            FieldType::Text | FieldType::Integer | FieldType::Timestamp => FieldItemType::Text,
-        }
-    }
-
-    pub fn kind_str(&self) -> &'static str {
-        match self {
-            FieldItemType::Text => "text",
-            FieldItemType::ReadOnly => "readonly",
-            FieldItemType::Checkbox => "checkbox",
-            FieldItemType::Radio(_) => "radio",
-            FieldItemType::Popup(_) => "popup",
-        }
-    }
-
-    pub fn choice_source(&self) -> Option<&ChoiceSource> {
-        match self {
-            FieldItemType::Radio(source) | FieldItemType::Popup(source) => Some(source),
-            FieldItemType::Text | FieldItemType::ReadOnly | FieldItemType::Checkbox => None,
-        }
-    }
-
-    /// Reconstructs a resolved item type from `pgapp_meta.page_field_items`:
-    /// `choices` is the static list (empty when sourced from a query),
-    /// `choices_query` is the query name (empty when static).
-    pub fn from_parts(kind: &str, choices: Vec<String>, choices_query: Option<String>) -> Self {
-        let source = || match choices_query {
-            Some(name) if !name.is_empty() => ChoiceSource::Query(name),
-            _ => ChoiceSource::Static(choices),
-        };
-        match kind {
-            "readonly" => FieldItemType::ReadOnly,
-            "checkbox" => FieldItemType::Checkbox,
-            "radio" => FieldItemType::Radio(source()),
-            "popup" => FieldItemType::Popup(source()),
-            _ => FieldItemType::Text,
-        }
-    }
+pub struct FieldItem {
+    pub kind: String,
+    pub config: serde_json::Value,
 }
 
 #[derive(Debug, Clone)]
@@ -207,9 +154,10 @@ pub struct PageDef {
     pub form: Vec<String>,
     pub link_column: Option<LinkColumn>,
     pub items: Vec<PageItem>,
-    /// Explicit `item <field> as <type>` overrides; fields not listed
-    /// here get `FieldItemType::default_for` their column type.
-    pub item_types: std::collections::HashMap<String, FieldItemType>,
+    /// Explicit `item <field> as <kind>` overrides; fields not listed
+    /// here get `item_types::default_kind_for` their column type (with
+    /// an empty config).
+    pub item_types: std::collections::HashMap<String, FieldItem>,
     /// Queries visible only within this page (in addition to the app's).
     pub queries: Vec<QueryDef>,
     /// `source: query <name>` — when set, a `list` page's rows come from

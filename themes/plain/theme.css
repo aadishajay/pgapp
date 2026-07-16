@@ -69,6 +69,10 @@ body {
 .pgapp-popup-list button { width: 100%; text-align: left; padding: 0.3rem 0.4rem; border: none; background: transparent; cursor: pointer; }
 .pgapp-popup-list button:hover { background: #eee; }
 
+.pgapp-slider { display: flex; align-items: center; gap: 0.5rem; }
+.pgapp-slider-input { flex: 1; }
+.pgapp-slider-output { min-width: 2.5rem; text-align: right; color: #555; }
+
 .pgapp-header, .pgapp-footer { font-size: 0.9rem; color: #555; }
 .pgapp-header { margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid #ddd; }
 .pgapp-footer { margin-top: 1.5rem; padding-top: 0.75rem; border-top: 1px solid #ddd; }

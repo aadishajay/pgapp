@@ -1,3 +1,5 @@
+mod html;
+mod item_types;
 mod markup;
 mod meta;
 mod model;
@@ -32,8 +34,10 @@ async fn main() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("failed to connect to database '{database_url}'"))?;
 
+    let item_types = item_types::registry();
+
     meta::ensure_schema(&pool).await?;
-    meta::sync_app(&pool, &app_def).await?;
+    meta::sync_app(&pool, &app_def, &item_types).await?;
     let runtime_app = meta::load_app(&pool, &app_def.name).await?;
     let runtime_js = meta::load_runtime_js(&pool, &app_def.name).await?;
 
@@ -70,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
         app: runtime_app,
         theme,
         runtime_js,
+        item_types,
     });
     let router = server::build_router(state);
 

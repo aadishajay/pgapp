@@ -5,41 +5,15 @@
 //! Markup here only ever uses the fixed `.pgapp-*` class names — the
 //! "Theme contract" documented in the README. All actual look-and-feel
 //! comes from `/theme.css` (the active theme, see src/theme.rs) plus any
-//! app-level override in assets/app.css. Item value capture (the popup
-//! LOV) goes through the DB-stored `pgapp.setItem(...)` runtime library
-//! (see `/runtime.js`, src/server.rs) rather than raw DOM calls.
+//! app-level override in assets/app.css. A form field's actual input is
+//! never built here — `input_for_field` just hands off to whatever
+//! component is registered for that field's item type (see
+//! `src/item_types.rs`), so adding a new one never touches this file.
 
+use crate::html::{escape, url_encode};
+use crate::item_types::{self, RenderArgs};
 use crate::meta::{Chrome, NavNode, RegionRows, RuntimePage, RuntimePageItem};
-use crate::model::{ChoiceSource, FieldItemType, FieldType};
 use std::collections::{BTreeMap, HashMap};
-
-fn escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-}
-
-/// Escapes a string for embedding inside a single-quoted JS string
-/// literal. Callers must still HTML-escape the *result* before splicing
-/// it into an HTML attribute (see `render_popup`).
-fn js_escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('\'', "\\'")
-}
-
-/// Percent-encodes a query-string value. Used for anything forwarded
-/// across pages (row ids, `link:` extra params) so a value containing
-/// `&`/`=`/spaces can't corrupt the URL it's embedded in.
-fn url_encode(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
 
 /// Extra `<link>`/`<script>` tags for user-supplied assets, if present —
 /// the app-level override layer, on top of the active theme.
@@ -94,7 +68,8 @@ fn nav_node_html(node: &NavNode) -> String {
 
 /// Renders an item list (page `items`, or the app's header/footer):
 /// static text, links to other pages, and regions rendering a named
-/// query's already-resolved rows (see `server::resolve_regions`).
+/// query's already-resolved rows (see
+/// `server::query_engine::resolve_regions`).
 fn items_html(items: &[RuntimePageItem], regions: &RegionRows) -> String {
     if items.is_empty() {
         return String::new();
@@ -197,68 +172,17 @@ fn layout(title: &str, chrome: Chrome, body: &str) -> String {
     )
 }
 
-/// Renders a "Pop Up LOV": a hidden input holding the actual value, a
-/// button showing the current choice, and a native `<dialog>` listing
-/// every (value, label) choice. Picking one calls the pgapp runtime's
-/// `setItem(name, value)` — see `/runtime.js` — instead of touching the
-/// DOM directly, so any custom action code can capture/set the same
-/// item the same way.
-fn render_popup(field_name: &str, value: &str, choices: &[(String, String)]) -> String {
-    let name = escape(field_name);
-    let dialog_id = format!("pgapp-popup-dialog-{name}");
-    let display_id = format!("pgapp-popup-display-{name}");
-
-    let mut html = format!(
-        r#"<div class="pgapp-popup">
-<input type="hidden" name="{name}" value="{value}">
-<button type="button" class="pgapp-btn pgapp-btn-secondary" onclick="document.getElementById('{dialog_id}').showModal()">
-<span id="{display_id}">{display}</span>
-</button>
-<dialog id="{dialog_id}" class="pgapp-popup-dialog">
-<ul class="pgapp-popup-list">"#,
-        value = escape(value),
-        display = if value.is_empty() {
-            "Choose\u{2026}".to_string()
-        } else {
-            escape(value)
-        },
-    );
-
-    for (choice_value, choice_label) in choices {
-        // JS-escape first (protects the single-quoted JS string), then
-        // HTML-escape the result (protects the double-quoted attribute).
-        let js_value = escape(&js_escape(choice_value));
-        html.push_str(&format!(
-            r#"<li><button type="button" onclick="pgapp.setItem('{name}', '{js_value}'); document.getElementById('{dialog_id}').close();">{label}</button></li>"#,
-            label = escape(choice_label),
-        ));
-    }
-
-    html.push_str(&format!(
-        r#"</ul><button type="button" class="pgapp-btn" onclick="document.getElementById('{dialog_id}').close()">Cancel</button></dialog></div>"#
-    ));
-    html
-}
-
-/// Turns a Radio/Popup choice source into concrete (value, label) pairs:
-/// a static list pairs each string with itself; a query-sourced one
-/// looks up the choices `server::resolve_field_choices` already fetched.
-fn choices_for(
-    source: &ChoiceSource,
-    field_name: &str,
-    resolved: &HashMap<String, Vec<(String, String)>>,
-) -> Vec<(String, String)> {
-    match source {
-        ChoiceSource::Static(list) => list.iter().map(|s| (s.clone(), s.clone())).collect(),
-        ChoiceSource::Query(_) => resolved.get(field_name).cloned().unwrap_or_default(),
-    }
-}
-
+/// Renders one field's input by looking up its registered item type
+/// (`page.item_types[field_name].kind`) and calling that component's
+/// `render`. `resolved_choices` carries whatever
+/// `query_engine::resolve_field_choices` already fetched for fields
+/// whose config uses the `choices`/`query` convention.
 fn input_for_field(
     page: &RuntimePage,
     field_name: &str,
     value: Option<&str>,
     resolved_choices: &HashMap<String, Vec<(String, String)>>,
+    registry: &item_types::Registry,
 ) -> String {
     let field = page
         .entity
@@ -266,59 +190,24 @@ fn input_for_field(
         .and_then(|e| e.field(field_name))
         .expect("form field must exist on entity");
     let value = value.unwrap_or("");
-    let required = if field.required { " required" } else { "" };
-    let item_type = page.item_types.get(field_name).unwrap_or(&FieldItemType::Text);
+    let field_item = page
+        .item_types
+        .get(field_name)
+        .expect("every form field has a resolved item type (see meta::sync_app)");
+    let component = registry
+        .get(field_item.kind.as_str())
+        .unwrap_or_else(|| panic!("unknown item type '{}' for field '{field_name}'", field_item.kind));
+    let empty_choices = Vec::new();
+    let choices = resolved_choices.get(field_name).unwrap_or(&empty_choices);
 
-    let input = match item_type {
-        FieldItemType::Checkbox => {
-            let checked = if value == "true" { " checked" } else { "" };
-            format!(
-                r#"<input class="pgapp-checkbox" type="checkbox" name="{name}" value="true"{checked}>"#,
-                name = escape(field_name),
-            )
-        }
-        FieldItemType::ReadOnly => format!(
-            r#"<span class="pgapp-readonly">{val}</span><input type="hidden" name="{name}" value="{val}">"#,
-            name = escape(field_name),
-            val = escape(value),
-        ),
-        FieldItemType::Radio(source) => {
-            let choices = choices_for(source, field_name, resolved_choices);
-            let mut html = String::from(r#"<div class="pgapp-radio-group">"#);
-            for (choice_value, choice_label) in &choices {
-                let checked = if choice_value == value { " checked" } else { "" };
-                html.push_str(&format!(
-                    r#"<label class="pgapp-radio-option"><input type="radio" name="{name}" value="{cv}"{checked}> {cl}</label>"#,
-                    name = escape(field_name),
-                    cv = escape(choice_value),
-                    cl = escape(choice_label),
-                ));
-            }
-            html.push_str("</div>");
-            html
-        }
-        FieldItemType::Popup(source) => {
-            let choices = choices_for(source, field_name, resolved_choices);
-            render_popup(field_name, value, &choices)
-        }
-        FieldItemType::Text => match field.data_type {
-            FieldType::Integer => format!(
-                r#"<input class="pgapp-input" type="number" name="{name}" value="{value}"{required}>"#,
-                name = escape(field_name),
-                value = escape(value),
-            ),
-            FieldType::Timestamp => format!(
-                r#"<input class="pgapp-input" type="text" name="{name}" value="{value}" placeholder="YYYY-MM-DD HH:MM:SS"{required}>"#,
-                name = escape(field_name),
-                value = escape(value),
-            ),
-            FieldType::Text | FieldType::Id | FieldType::Boolean => format!(
-                r#"<input class="pgapp-input" type="text" name="{name}" value="{value}"{required}>"#,
-                name = escape(field_name),
-                value = escape(value),
-            ),
-        },
-    };
+    let input = component.render(RenderArgs {
+        field_name,
+        value,
+        required: field.required,
+        field_type: field.data_type,
+        config: &field_item.config,
+        choices,
+    });
 
     format!(
         r#"<div class="pgapp-field"><label class="pgapp-label">{label}</label>{input}</div>"#,
@@ -332,6 +221,7 @@ pub fn list_page(
     error: Option<&str>,
     chrome: Chrome,
     resolved_choices: &HashMap<String, Vec<(String, String)>>,
+    registry: &item_types::Registry,
 ) -> String {
     let mut body = String::new();
 
@@ -387,7 +277,7 @@ pub fn list_page(
         escape(&page.name)
     ));
     for field_name in &page.form {
-        body.push_str(&input_for_field(page, field_name, None, resolved_choices));
+        body.push_str(&input_for_field(page, field_name, None, resolved_choices, registry));
     }
     body.push_str(r#"<button class="pgapp-btn pgapp-btn-primary" type="submit">Create</button></form>"#);
 
@@ -401,6 +291,7 @@ pub fn edit_page(
     error: Option<&str>,
     chrome: Chrome,
     resolved_choices: &HashMap<String, Vec<(String, String)>>,
+    registry: &item_types::Registry,
 ) -> String {
     let mut body = String::new();
     if let Some(err) = error {
@@ -416,7 +307,7 @@ pub fn edit_page(
     ));
     for field_name in &page.form {
         let value = row.get(field_name).and_then(|v| v.as_deref());
-        body.push_str(&input_for_field(page, field_name, value, resolved_choices));
+        body.push_str(&input_for_field(page, field_name, value, resolved_choices, registry));
     }
     body.push_str(r#"<button class="pgapp-btn pgapp-btn-primary" type="submit">Save</button></form>"#);
     body.push_str(&format!(

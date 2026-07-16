@@ -23,18 +23,18 @@
 //!            | "source" ":" "query" Ident
 //!            | "link" ":" Ident "->" "page" Ident ( "(" paramlist ")" )?
 //!            | "items" "{" item* "}"
-//!            | "item" Ident "as" itemtype
+//!            | "item" Ident "as" fielditem
 //!            | query
-//! itemtype  := "text" | "readonly" | "checkbox"
-//!            | "radio" choicesource
-//!            | "popup" choicesource
-//! choicesource := "(" stringlist ")" | "from" "query" Ident
+//! fielditem := Ident itemconfig?
+//! itemconfig := "(" arglist ")" | "from" "query" Ident
+//! arglist   := String ("," String)*        (-> config = {"choices": [...]})
+//!            | namedarg ("," namedarg)*    (-> config = {key: value, ...})
+//! namedarg  := Ident ":" (String | Ident)
 //! item      := "text" String
 //!            | "link" String "->" "page" Ident
 //!            | "region" String "from" "query" Ident
 //!
 //! identlist  := Ident ("," Ident)*
-//! stringlist := String ("," String)*
 //! paramlist  := parammap ("," parammap)*
 //! parammap   := Ident ":" Ident
 //! value      := Ident | Number
@@ -49,12 +49,19 @@
 //! restricted to the same safe charset. A query's `sql` is a raw string,
 //! opaque to this parser — see `meta::compile_named_query` for how its
 //! `:name` bind markers get turned into safe positional parameters.
+//!
+//! A `fielditem`'s `Ident` (its "kind") isn't a fixed keyword set: it's
+//! whatever's registered in `src/item_types.rs` at the time the app is
+//! synced (checked there, not here — the parser doesn't know the
+//! registry). `itemconfig` is deliberately generic (a plain JSON blob)
+//! so a brand new item type never needs a grammar change: it just reads
+//! whatever config keys it defines out of that blob itself.
 
 use anyhow::{bail, Context, Result};
 
 use crate::model::{
-    AppDef, ChoiceSource, EntityDef, FieldDef, FieldItemType, FieldType, LinkColumn, NavItem,
-    PageDef, PageItem, PageKind, QueryDef,
+    AppDef, EntityDef, FieldDef, FieldItem, FieldType, LinkColumn, NavItem, PageDef, PageItem,
+    PageKind, QueryDef,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -370,8 +377,8 @@ impl Parser {
                 continue;
             }
             if self.at_keyword("item") {
-                let (field, item_type) = self.parse_field_item()?;
-                item_types.insert(field, item_type);
+                let (field, field_item) = self.parse_field_item()?;
+                item_types.insert(field, field_item);
                 continue;
             }
             if self.at_keyword("query") {
@@ -421,58 +428,77 @@ impl Parser {
         })
     }
 
-    /// Parses `"item" Ident "as" itemtype`.
-    fn parse_field_item(&mut self) -> Result<(String, FieldItemType)> {
+    /// Parses `"item" Ident "as" Ident itemconfig?` — the kind is any
+    /// identifier (validated against the item type registry later, in
+    /// `meta::sync_app`, not here) and the config is a generic blob (see
+    /// `parse_item_config`).
+    fn parse_field_item(&mut self) -> Result<(String, FieldItem)> {
         self.expect_keyword("item")?;
         let field = self.expect_ident()?;
         self.expect_keyword("as")?;
+        let kind = self.expect_ident()?;
 
-        let item_type = if self.at_keyword("text") {
-            self.advance()?;
-            FieldItemType::Text
-        } else if self.at_keyword("readonly") {
-            self.advance()?;
-            FieldItemType::ReadOnly
-        } else if self.at_keyword("checkbox") {
-            self.advance()?;
-            FieldItemType::Checkbox
-        } else if self.at_keyword("radio") {
-            self.advance()?;
-            FieldItemType::Radio(self.parse_choice_source()?)
-        } else if self.at_keyword("popup") {
-            self.advance()?;
-            FieldItemType::Popup(self.parse_choice_source()?)
-        } else {
-            bail!(
-                "expected 'text', 'readonly', 'checkbox', 'radio', or 'popup' item type, found {:?}",
-                self.peek()
-            );
-        };
-
-        Ok((field, item_type))
-    }
-
-    /// Parses a Radio/Popup choice source: either a literal `(...)` list
-    /// or `from query <Ident>`.
-    fn parse_choice_source(&mut self) -> Result<ChoiceSource> {
-        if self.at_keyword("from") {
+        let config = if self.at_keyword("from") {
             self.advance()?;
             self.expect_keyword("query")?;
-            Ok(ChoiceSource::Query(self.expect_ident()?))
+            let query_name = self.expect_ident()?;
+            serde_json::json!({ "query": query_name })
+        } else if self.at_symbol('(') {
+            self.parse_item_config()?
         } else {
-            Ok(ChoiceSource::Static(self.parse_choice_list()?))
-        }
+            serde_json::json!({})
+        };
+
+        Ok((field, FieldItem { kind, config }))
     }
 
-    fn parse_choice_list(&mut self) -> Result<Vec<String>> {
+    /// Parses `"(" arg ("," arg)* ")"`. Every arg in the list must be the
+    /// same shape: all bare strings become `{"choices": [...]}` (the
+    /// radio/popup static-list shorthand); all `key: value` pairs become
+    /// `{key: value, ...}` for anything else (e.g. a slider's
+    /// `min`/`max`/`step`).
+    fn parse_item_config(&mut self) -> Result<serde_json::Value> {
         self.expect_symbol('(')?;
-        let mut out = vec![self.expect_string()?];
-        while self.at_symbol(',') {
-            self.advance()?;
-            out.push(self.expect_string()?);
-        }
+        let named = matches!(self.peek(), Some(Token::Ident(_)));
+
+        let config = if named {
+            let mut map = serde_json::Map::new();
+            loop {
+                let key = self.expect_ident()?;
+                self.expect_symbol(':')?;
+                let value = self.expect_config_value()?;
+                map.insert(key, serde_json::Value::String(value));
+                if self.at_symbol(',') {
+                    self.advance()?;
+                } else {
+                    break;
+                }
+            }
+            serde_json::Value::Object(map)
+        } else {
+            let mut choices = Vec::new();
+            loop {
+                choices.push(serde_json::Value::String(self.expect_string()?));
+                if self.at_symbol(',') {
+                    self.advance()?;
+                } else {
+                    break;
+                }
+            }
+            serde_json::json!({ "choices": choices })
+        };
+
         self.expect_symbol(')')?;
-        Ok(out)
+        Ok(config)
+    }
+
+    /// A named config value: a quoted string or a bare word/number.
+    fn expect_config_value(&mut self) -> Result<String> {
+        match self.advance()? {
+            Token::Str(s) => Ok(s),
+            Token::Ident(s) => Ok(s),
+            other => bail!("expected a config value, found {other:?}"),
+        }
     }
 
     /// Parses `"(" Ident ":" Ident ("," Ident ":" Ident)* ")"` — the
@@ -553,7 +579,7 @@ mod tests {
         assert_eq!(app.entities.len(), 1);
         let tasks = &app.entities[0];
         assert_eq!(tasks.name, "tasks");
-        assert_eq!(tasks.fields.len(), 7);
+        assert_eq!(tasks.fields.len(), 8);
 
         assert_eq!(app.header.len(), 1);
         assert!(matches!(&app.header[0], PageItem::Text(_)));
@@ -569,42 +595,39 @@ mod tests {
         assert_eq!(list_page.kind, PageKind::List);
         assert_eq!(
             list_page.columns,
-            vec!["title", "priority", "done", "created_at"]
+            vec!["title", "priority", "done", "estimate_hours", "created_at"]
         );
         assert_eq!(
             list_page.form,
-            vec!["title", "priority", "done", "assignee", "notes"]
+            vec!["title", "priority", "done", "assignee", "notes", "estimate_hours"]
         );
         let link = list_page.link_column.as_ref().unwrap();
         assert_eq!(link.field, "title");
         assert_eq!(link.target_page, "TaskDetail");
         assert_eq!(link.extra_params, vec![("priority".to_string(), "priority".to_string())]);
 
-        assert!(matches!(
-            list_page.item_types.get("priority"),
-            Some(FieldItemType::Radio(_))
-        ));
-        assert!(matches!(
-            list_page.item_types.get("assignee"),
-            Some(FieldItemType::Popup(_))
-        ));
-        assert!(matches!(
-            list_page.item_types.get("notes"),
-            Some(FieldItemType::ReadOnly)
-        ));
+        let priority = list_page.item_types.get("priority").unwrap();
+        assert_eq!(priority.kind, "radio");
+        assert_eq!(
+            priority.config["choices"],
+            serde_json::json!(["Low", "Medium", "High"])
+        );
+
+        let assignee = list_page.item_types.get("assignee").unwrap();
+        assert_eq!(assignee.kind, "popup");
+        assert_eq!(assignee.config["query"], "assignees");
+
+        let notes = list_page.item_types.get("notes").unwrap();
+        assert_eq!(notes.kind, "readonly");
+
+        let estimate = list_page.item_types.get("estimate_hours").unwrap();
+        assert_eq!(estimate.kind, "slider");
+        assert_eq!(estimate.config["min"], "0");
+        assert_eq!(estimate.config["max"], "40");
+        assert_eq!(estimate.config["step"], "1");
+
         assert!(list_page.item_types.get("title").is_none());
         assert!(list_page.item_types.get("done").is_none());
-        if let Some(FieldItemType::Radio(ChoiceSource::Static(choices))) =
-            list_page.item_types.get("priority")
-        {
-            assert_eq!(choices, &vec!["Low", "Medium", "High"]);
-        } else {
-            panic!("expected a static radio choice list for 'priority'");
-        }
-        assert!(matches!(
-            list_page.item_types.get("assignee"),
-            Some(FieldItemType::Popup(ChoiceSource::Query(name))) if name == "assignees"
-        ));
 
         assert_eq!(list_page.queries.len(), 1);
         assert_eq!(list_page.queries[0].name, "recent");
@@ -681,15 +704,36 @@ mod tests {
         let tasks_page = app.pages.iter().find(|p| p.name == "Tasks").unwrap();
         assert_eq!(tasks_page.queries.len(), 1);
         assert_eq!(tasks_page.queries[0].name, "recent");
-        assert!(matches!(
-            tasks_page.item_types.get("assignee"),
-            Some(FieldItemType::Popup(ChoiceSource::Query(name))) if name == "assignees"
-        ));
+        let assignee = tasks_page.item_types.get("assignee").unwrap();
+        assert_eq!(assignee.kind, "popup");
+        assert_eq!(assignee.config["query"], "assignees");
         assert!(matches!(&tasks_page.items[0], PageItem::Region { query, .. } if query == "recent"));
 
         let project_tasks = app.pages.iter().find(|p| p.name == "ProjectTasks").unwrap();
         assert_eq!(project_tasks.source_query.as_deref(), Some("assignees"));
         let link = project_tasks.link_column.as_ref().unwrap();
         assert_eq!(link.extra_params, vec![("assignee".to_string(), "owner".to_string())]);
+    }
+
+    #[test]
+    fn parses_a_hypothetical_new_item_type_with_no_grammar_change() {
+        // Proves the grammar doesn't special-case any particular kind:
+        // "starfield" isn't a real component, but it parses exactly like
+        // one, with a named config blob.
+        let src = r#"
+            app "Demo" {
+                entity "t" { field id: id field n: integer }
+                page "P" as list of t {
+                    form: n
+                    item n as starfield (density: "12", twinkle: "true")
+                }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+        let page = &app.pages[0];
+        let item = page.item_types.get("n").unwrap();
+        assert_eq!(item.kind, "starfield");
+        assert_eq!(item.config["density"], "12");
+        assert_eq!(item.config["twinkle"], "true");
     }
 }

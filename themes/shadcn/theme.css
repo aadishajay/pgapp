@@ -304,6 +304,23 @@ body {
   background: hsl(var(--accent));
 }
 
+.pgapp-slider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.pgapp-slider-input {
+  flex: 1;
+  accent-color: hsl(var(--primary));
+}
+.pgapp-slider-output {
+  min-width: 2.5rem;
+  text-align: right;
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+  color: hsl(var(--muted-foreground));
+}
+
 /* Header / footer chrome, shown on every page. */
 .pgapp-header,
 .pgapp-footer {
