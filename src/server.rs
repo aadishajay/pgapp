@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use axum::extract::{Form, Path, State};
+use axum::extract::{Form, Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -10,6 +10,7 @@ use serde_json::json;
 use sqlx::{PgPool, Row};
 
 use crate::meta::{RuntimeApp, RuntimeEntity, RuntimePage};
+use crate::model::PageKind;
 use crate::render;
 use crate::theme::Theme;
 
@@ -25,7 +26,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/theme.css", get(theme_css))
         .route("/assets/*path", get(asset))
         .route("/api/:entity", get(api_list))
-        .route("/:page", get(list).post(create))
+        .route("/:page", get(show).post(create))
         .route("/:page/:id/edit", get(edit_form))
         .route("/:page/:id/update", post(update))
         .route("/:page/:id/delete", post(delete))
@@ -36,6 +37,18 @@ type AppError = (StatusCode, String);
 
 fn err_response(e: anyhow::Error) -> AppError {
     (StatusCode::BAD_REQUEST, e.to_string())
+}
+
+/// `list`/`detail` pages always have an entity by construction (the
+/// parser requires `of <entity>` for both kinds); this just turns that
+/// invariant into a normal error instead of a panic if it's ever wrong.
+fn entity_of(page: &RuntimePage) -> Result<&RuntimeEntity, AppError> {
+    page.entity.as_ref().ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("page '{}' has no backing entity", page.name),
+        )
+    })
 }
 
 /// All entity columns, cast to text, so the generic layer only ever deals
@@ -144,9 +157,19 @@ fn page_or_404<'a>(app: &'a RuntimeApp, name: &str) -> Result<&'a RuntimePage, A
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("no such page '{name}'")))
 }
 
+fn require_list_page<'a>(page: &'a RuntimePage) -> Result<&'a RuntimePage, AppError> {
+    if page.kind != PageKind::List {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("page '{}' does not support this operation", page.name),
+        ));
+    }
+    Ok(page)
+}
+
 async fn index(State(state): State<Arc<AppState>>) -> Html<String> {
     let pages: Vec<String> = state.app.pages.iter().map(|p| p.name.clone()).collect();
-    Html(render::index_page(&state.app.name, &pages))
+    Html(render::index_page(&state.app.name, &pages, &state.app.nav))
 }
 
 async fn theme_css(State(state): State<Arc<AppState>>) -> Response {
@@ -175,15 +198,36 @@ async fn asset(Path(path): Path<String>) -> Response {
     }
 }
 
-async fn list(
+/// Serves all three page kinds behind `GET /:page`: a CRUD list, a
+/// single-row read-only detail (via `?id=`), or a pure page-items page.
+async fn show(
     State(state): State<Arc<AppState>>,
     Path(page_name): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
     let page = page_or_404(&state.app, &page_name)?;
-    let rows = fetch_rows(&state.pool, &page.entity)
-        .await
-        .map_err(err_response)?;
-    Ok(Html(render::list_page(page, &rows, None)))
+    match page.kind {
+        PageKind::List => {
+            let entity = entity_of(page)?;
+            let rows = fetch_rows(&state.pool, entity).await.map_err(err_response)?;
+            Ok(Html(render::list_page(page, &rows, None, &state.app.nav)))
+        }
+        PageKind::Detail => {
+            let entity = entity_of(page)?;
+            let id = query.get("id").ok_or_else(|| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    "missing '?id=' query parameter".to_string(),
+                )
+            })?;
+            let row = fetch_row(&state.pool, entity, id)
+                .await
+                .map_err(err_response)?
+                .ok_or_else(|| (StatusCode::NOT_FOUND, "row not found".to_string()))?;
+            Ok(Html(render::detail_page(page, &row, &state.app.nav)))
+        }
+        PageKind::Static => Ok(Html(render::static_page(page, &state.app.nav))),
+    }
 }
 
 async fn create(
@@ -191,22 +235,22 @@ async fn create(
     Path(page_name): Path<String>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let page = page_or_404(&state.app, &page_name)?;
+    let page = require_list_page(page_or_404(&state.app, &page_name)?)?;
+    let entity = entity_of(page)?;
 
-    let build = build_value_exprs(&page.entity, &page.form, &values);
+    let build = build_value_exprs(entity, &page.form, &values);
     let (columns, exprs, binds) = match build {
         Ok(v) => v,
         Err(e) => {
-            let rows = fetch_rows(&state.pool, &page.entity)
-                .await
-                .map_err(err_response)?;
-            return Ok(Html(render::list_page(page, &rows, Some(&e.to_string()))).into_response());
+            let rows = fetch_rows(&state.pool, entity).await.map_err(err_response)?;
+            return Ok(Html(render::list_page(page, &rows, Some(&e.to_string()), &state.app.nav))
+                .into_response());
         }
     };
 
     let sql = format!(
         "insert into pgapp_data.{} ({}) values ({})",
-        page.entity.table_name,
+        entity.table_name,
         columns.join(", "),
         exprs.join(", ")
     );
@@ -228,12 +272,13 @@ async fn edit_form(
     State(state): State<Arc<AppState>>,
     Path((page_name, id)): Path<(String, String)>,
 ) -> Result<Html<String>, AppError> {
-    let page = page_or_404(&state.app, &page_name)?;
-    let row = fetch_row(&state.pool, &page.entity, &id)
+    let page = require_list_page(page_or_404(&state.app, &page_name)?)?;
+    let entity = entity_of(page)?;
+    let row = fetch_row(&state.pool, entity, &id)
         .await
         .map_err(err_response)?
         .ok_or_else(|| (StatusCode::NOT_FOUND, "row not found".to_string()))?;
-    Ok(Html(render::edit_page(page, &id, &row, None)))
+    Ok(Html(render::edit_page(page, &id, &row, None, &state.app.nav)))
 }
 
 async fn update(
@@ -241,19 +286,25 @@ async fn update(
     Path((page_name, id)): Path<(String, String)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let page = page_or_404(&state.app, &page_name)?;
+    let page = require_list_page(page_or_404(&state.app, &page_name)?)?;
+    let entity = entity_of(page)?;
 
-    let build = build_value_exprs(&page.entity, &page.form, &values);
+    let build = build_value_exprs(entity, &page.form, &values);
     let (columns, exprs, mut binds) = match build {
         Ok(v) => v,
         Err(e) => {
-            let row = fetch_row(&state.pool, &page.entity, &id)
+            let row = fetch_row(&state.pool, entity, &id)
                 .await
                 .map_err(err_response)?
                 .unwrap_or_default();
-            return Ok(
-                Html(render::edit_page(page, &id, &row, Some(&e.to_string()))).into_response(),
-            );
+            return Ok(Html(render::edit_page(
+                page,
+                &id,
+                &row,
+                Some(&e.to_string()),
+                &state.app.nav,
+            ))
+            .into_response());
         }
     };
 
@@ -269,7 +320,7 @@ async fn update(
 
     let sql = format!(
         "update pgapp_data.{} set {set_clause} where id = ${where_placeholder}::integer",
-        page.entity.table_name
+        entity.table_name
     );
     let mut query = sqlx::query(&sql);
     for b in &binds {
@@ -289,10 +340,11 @@ async fn delete(
     State(state): State<Arc<AppState>>,
     Path((page_name, id)): Path<(String, String)>,
 ) -> Result<Response, AppError> {
-    let page = page_or_404(&state.app, &page_name)?;
+    let page = require_list_page(page_or_404(&state.app, &page_name)?)?;
+    let entity = entity_of(page)?;
     let sql = format!(
         "delete from pgapp_data.{} where id = $1::integer",
-        page.entity.table_name
+        entity.table_name
     );
     sqlx::query(&sql)
         .bind(&id)
@@ -312,10 +364,9 @@ async fn api_list(
         .app
         .pages
         .iter()
-        .find(|p| p.entity.name == entity_name)
+        .find(|p| p.entity.as_ref().is_some_and(|e| e.name == entity_name))
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("no such entity '{entity_name}'")))?;
-    let rows = fetch_rows(&state.pool, &page.entity)
-        .await
-        .map_err(err_response)?;
+    let entity = entity_of(page)?;
+    let rows = fetch_rows(&state.pool, entity).await.map_err(err_response)?;
     Ok(axum::Json(json!(rows)).into_response())
 }

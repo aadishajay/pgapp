@@ -3,28 +3,46 @@
 //! Grammar (informal):
 //!
 //! ```text
-//! app       := "app" String "{" (entity | page)* "}"
+//! app       := "app" String "{" (nav | entity | page)* "}"
+//!
+//! nav       := "nav" "{" navitem* "}"
+//! navitem   := "item" String ( "->" "page" Ident | "{" navitem* "}" )
+//!
 //! entity    := "entity" String "{" field* "}"
 //! field     := "field" Ident ":" Ident ("required")? ("default" Value)?
-//! page      := "page" String "as" "list" "of" Ident "{" pageprop* "}"
-//! pageprop  := Ident ":" identlist
+//!
+//! page      := "page" String "as" pagekind "{" pageprop* "}"
+//! pagekind  := "list" "of" Ident | "detail" "of" Ident | "static"
+//! pageprop  := "columns" ":" identlist
+//!            | "form" ":" identlist
+//!            | "link" ":" Ident "->" "page" Ident
+//!            | "items" "{" item* "}"
+//! item      := "text" String | "link" String "->" "page" Ident
+//!
 //! identlist := Ident ("," Ident)*
 //! value     := Ident | Number
 //! ```
 //!
 //! `Ident` tokens are restricted to `[A-Za-z_][A-Za-z0-9_]*`, which means
 //! every entity/field/page name that reaches the metadata layer is already
-//! safe to splice into SQL as an identifier.
+//! safe to splice into SQL as an identifier. Page names themselves are
+//! string literals (so they can be arbitrary display text), but anything
+//! that *targets* a page — `nav` items, `link` page properties, `link`
+//! page items — takes an `Ident`, so link targets are restricted to the
+//! same safe charset.
 
 use anyhow::{bail, Context, Result};
 
-use crate::model::{AppDef, EntityDef, FieldDef, FieldType, PageDef};
+use crate::model::{
+    AppDef, EntityDef, FieldDef, FieldType, LinkColumn, NavItem, PageDef, PageItem, PageKind,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
     Ident(String),
     Str(String),
     Symbol(char),
+    Arrow,
 }
 
 fn lex(src: &str) -> Result<Vec<Token>> {
@@ -50,6 +68,9 @@ fn lex(src: &str) -> Result<Vec<Token>> {
             }
             tokens.push(Token::Str(chars[start..i].iter().collect()));
             i += 1;
+        } else if c == '-' && chars.get(i + 1) == Some(&'>') {
+            tokens.push(Token::Arrow);
+            i += 2;
         } else if c == '{' || c == '}' || c == ':' || c == ',' {
             tokens.push(Token::Symbol(c));
             i += 1;
@@ -93,6 +114,13 @@ impl Parser {
         }
     }
 
+    fn expect_arrow(&mut self) -> Result<()> {
+        match self.advance()? {
+            Token::Arrow => Ok(()),
+            other => bail!("expected '->', found {other:?}"),
+        }
+    }
+
     fn expect_keyword(&mut self, word: &str) -> Result<()> {
         match self.advance()? {
             Token::Ident(s) if s == word => Ok(()),
@@ -122,6 +150,14 @@ impl Parser {
         matches!(self.peek(), Some(Token::Ident(s)) if s == word)
     }
 
+    /// Parses a `-> page <Ident>` link target, common to nav items, the
+    /// `link:` page property, and `link` page items.
+    fn parse_page_target(&mut self) -> Result<String> {
+        self.expect_arrow()?;
+        self.expect_keyword("page")?;
+        self.expect_ident()
+    }
+
     fn parse_app(&mut self) -> Result<AppDef> {
         self.expect_keyword("app")?;
         let name = self.expect_string()?;
@@ -129,13 +165,19 @@ impl Parser {
 
         let mut entities = Vec::new();
         let mut pages = Vec::new();
+        let mut nav = Vec::new();
         while !self.at_symbol('}') {
             if self.at_keyword("entity") {
                 entities.push(self.parse_entity()?);
             } else if self.at_keyword("page") {
                 pages.push(self.parse_page()?);
+            } else if self.at_keyword("nav") {
+                nav = self.parse_nav()?;
             } else {
-                bail!("expected 'entity' or 'page' block, found {:?}", self.peek());
+                bail!(
+                    "expected 'entity', 'page', or 'nav' block, found {:?}",
+                    self.peek()
+                );
             }
         }
         self.expect_symbol('}')?;
@@ -144,7 +186,45 @@ impl Parser {
             name,
             entities,
             pages,
+            nav,
         })
+    }
+
+    fn parse_nav(&mut self) -> Result<Vec<NavItem>> {
+        self.expect_keyword("nav")?;
+        self.expect_symbol('{')?;
+        let mut items = Vec::new();
+        while !self.at_symbol('}') {
+            items.push(self.parse_nav_item()?);
+        }
+        self.expect_symbol('}')?;
+        Ok(items)
+    }
+
+    fn parse_nav_item(&mut self) -> Result<NavItem> {
+        self.expect_keyword("item")?;
+        let label = self.expect_string()?;
+
+        if self.at_symbol('{') {
+            self.advance()?;
+            let mut children = Vec::new();
+            while !self.at_symbol('}') {
+                children.push(self.parse_nav_item()?);
+            }
+            self.expect_symbol('}')?;
+            Ok(NavItem {
+                label,
+                target_page: None,
+                children,
+            })
+        } else {
+            let target_page = self.parse_page_target()?;
+            Ok(NavItem {
+                label,
+                target_page: Some(target_page),
+                children: Vec::new(),
+            })
+        }
     }
 
     fn parse_entity(&mut self) -> Result<EntityDef> {
@@ -195,20 +275,52 @@ impl Parser {
         self.expect_keyword("page")?;
         let name = self.expect_string()?;
         self.expect_keyword("as")?;
-        self.expect_keyword("list")?;
-        self.expect_keyword("of")?;
-        let entity = self.expect_ident()?;
+
+        let (kind, entity) = if self.at_keyword("list") {
+            self.advance()?;
+            self.expect_keyword("of")?;
+            (PageKind::List, Some(self.expect_ident()?))
+        } else if self.at_keyword("detail") {
+            self.advance()?;
+            self.expect_keyword("of")?;
+            (PageKind::Detail, Some(self.expect_ident()?))
+        } else if self.at_keyword("static") {
+            self.advance()?;
+            (PageKind::Static, None)
+        } else {
+            bail!(
+                "expected 'list', 'detail', or 'static' page kind, found {:?}",
+                self.peek()
+            );
+        };
+
         self.expect_symbol('{')?;
 
         let mut columns = Vec::new();
         let mut form = Vec::new();
+        let mut link_column = None;
+        let mut items = Vec::new();
         while !self.at_symbol('}') {
+            if self.at_keyword("items") {
+                self.advance()?;
+                self.expect_symbol('{')?;
+                while !self.at_symbol('}') {
+                    items.push(self.parse_page_item()?);
+                }
+                self.expect_symbol('}')?;
+                continue;
+            }
+
             let prop = self.expect_ident()?;
             self.expect_symbol(':')?;
-            let list = self.parse_ident_list()?;
             match prop.as_str() {
-                "columns" => columns = list,
-                "form" => form = list,
+                "columns" => columns = self.parse_ident_list()?,
+                "form" => form = self.parse_ident_list()?,
+                "link" => {
+                    let field = self.expect_ident()?;
+                    let target_page = self.parse_page_target()?;
+                    link_column = Some(LinkColumn { field, target_page });
+                }
                 other => bail!("unknown page property '{other}'"),
             }
         }
@@ -216,10 +328,27 @@ impl Parser {
 
         Ok(PageDef {
             name,
+            kind,
             entity,
             columns,
             form,
+            link_column,
+            items,
         })
+    }
+
+    fn parse_page_item(&mut self) -> Result<PageItem> {
+        if self.at_keyword("text") {
+            self.advance()?;
+            Ok(PageItem::Text(self.expect_string()?))
+        } else if self.at_keyword("link") {
+            self.advance()?;
+            let label = self.expect_string()?;
+            let target_page = self.parse_page_target()?;
+            Ok(PageItem::Link { label, target_page })
+        } else {
+            bail!("expected 'text' or 'link' page item, found {:?}", self.peek());
+        }
     }
 
     fn parse_ident_list(&mut self) -> Result<Vec<String>> {
@@ -245,18 +374,45 @@ pub fn parse_app(src: &str) -> Result<AppDef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::PageItem;
 
     #[test]
     fn parses_todo_example() {
         let src = include_str!("../examples/todo.app");
         let app = parse_app(src).unwrap();
         assert_eq!(app.name, "Todo");
+
         assert_eq!(app.entities.len(), 1);
         let tasks = &app.entities[0];
         assert_eq!(tasks.name, "tasks");
         assert_eq!(tasks.fields.len(), 4);
-        assert_eq!(app.pages.len(), 1);
-        assert_eq!(app.pages[0].columns, vec!["title", "done", "created_at"]);
-        assert_eq!(app.pages[0].form, vec!["title", "done"]);
+
+        assert_eq!(app.pages.len(), 3);
+        let list_page = app.pages.iter().find(|p| p.name == "Tasks").unwrap();
+        assert_eq!(list_page.kind, PageKind::List);
+        assert_eq!(list_page.columns, vec!["title", "done", "created_at"]);
+        assert_eq!(list_page.form, vec!["title", "done"]);
+        let link = list_page.link_column.as_ref().unwrap();
+        assert_eq!(link.field, "title");
+        assert_eq!(link.target_page, "TaskDetail");
+
+        let detail_page = app.pages.iter().find(|p| p.name == "TaskDetail").unwrap();
+        assert_eq!(detail_page.kind, PageKind::Detail);
+        assert_eq!(detail_page.entity.as_deref(), Some("tasks"));
+
+        let about_page = app.pages.iter().find(|p| p.name == "About").unwrap();
+        assert_eq!(about_page.kind, PageKind::Static);
+        assert!(about_page.entity.is_none());
+        assert_eq!(about_page.items.len(), 2);
+        assert!(matches!(&about_page.items[0], PageItem::Text(_)));
+        assert!(matches!(&about_page.items[1], PageItem::Link { .. }));
+
+        assert_eq!(app.nav.len(), 2);
+        assert_eq!(app.nav[0].label, "Tasks");
+        assert_eq!(app.nav[0].target_page.as_deref(), Some("Tasks"));
+        assert_eq!(app.nav[1].label, "More");
+        assert!(app.nav[1].target_page.is_none());
+        assert_eq!(app.nav[1].children.len(), 1);
+        assert_eq!(app.nav[1].children[0].label, "About");
     }
 }

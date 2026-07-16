@@ -71,12 +71,70 @@ pub struct EntityDef {
     pub fields: Vec<FieldDef>,
 }
 
+/// What a page is backed by. `List` and `Detail` pages read/write an
+/// entity's data table; `Static` pages are pure composition of page
+/// items (text, links) with no entity behind them at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageKind {
+    List,
+    Detail,
+    Static,
+}
+
+impl PageKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PageKind::List => "list",
+            PageKind::Detail => "detail",
+            PageKind::Static => "static",
+        }
+    }
+
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s {
+            "detail" => PageKind::Detail,
+            "static" => PageKind::Static,
+            _ => PageKind::List,
+        }
+    }
+}
+
+/// A page item: content placed on a page beyond its entity-bound
+/// table/form. `Link` is how pages reference each other outside of the
+/// global nav bar.
+#[derive(Debug, Clone)]
+pub enum PageItem {
+    Text(String),
+    Link { label: String, target_page: String },
+}
+
+/// Turns one report column into a link to another page, passing the
+/// row's id as a `?id=` query parameter — the common "click a row to
+/// see its detail page" pattern.
+#[derive(Debug, Clone)]
+pub struct LinkColumn {
+    pub field: String,
+    pub target_page: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct PageDef {
     pub name: String,
-    pub entity: String,
+    pub kind: PageKind,
+    pub entity: Option<String>,
     pub columns: Vec<String>,
     pub form: Vec<String>,
+    pub link_column: Option<LinkColumn>,
+    pub items: Vec<PageItem>,
+}
+
+/// One entry in the app's (possibly multi-level) navigation bar. A leaf
+/// links to a page; a group has children and no target of its own.
+#[derive(Debug, Clone)]
+pub struct NavItem {
+    pub label: String,
+    pub target_page: Option<String>,
+    pub children: Vec<NavItem>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,4 +142,11 @@ pub struct AppDef {
     pub name: String,
     pub entities: Vec<EntityDef>,
     pub pages: Vec<PageDef>,
+    pub nav: Vec<NavItem>,
+}
+
+impl AppDef {
+    pub fn entity(&self, name: &str) -> Option<&EntityDef> {
+        self.entities.iter().find(|e| e.name == name)
+    }
 }

@@ -1,12 +1,13 @@
 //! Minimal, dependency-free HTML rendering. Every page is metadata-driven:
-//! the field list comes from `RuntimePage`, not from a per-app template.
+//! the field/item/nav lists come from `RuntimePage`/`RuntimeApp`, not
+//! from a per-app template.
 //!
 //! Markup here only ever uses the fixed `.pgapp-*` class names — the
 //! "Theme contract" documented in the README. All actual look-and-feel
 //! comes from `/theme.css` (the active theme, see src/theme.rs) plus any
 //! app-level override in assets/app.css.
 
-use crate::meta::RuntimePage;
+use crate::meta::{NavNode, RuntimePage, RuntimePageItem};
 use crate::model::FieldType;
 use std::collections::BTreeMap;
 
@@ -30,7 +31,69 @@ pub fn asset_tags() -> String {
     tags
 }
 
-fn layout(title: &str, body: &str) -> String {
+/// Renders the app's (possibly multi-level) nav bar as nested `<ul>`s;
+/// submenus are shown on hover/focus via the theme's CSS, not JS.
+fn nav_html(nodes: &[NavNode]) -> String {
+    if nodes.is_empty() {
+        return String::new();
+    }
+    let mut html = String::from(r#"<ul class="pgapp-navbar">"#);
+    for node in nodes {
+        html.push_str(&nav_node_html(node));
+    }
+    html.push_str("</ul>");
+    html
+}
+
+fn nav_node_html(node: &NavNode) -> String {
+    let mut html = String::from(r#"<li class="pgapp-navbar-item">"#);
+    match &node.target_page {
+        Some(target) => html.push_str(&format!(
+            r#"<a class="pgapp-link" href="/{target}">{label}</a>"#,
+            target = escape(target),
+            label = escape(&node.label),
+        )),
+        None => html.push_str(&format!(
+            r#"<span class="pgapp-navbar-label">{}</span>"#,
+            escape(&node.label)
+        )),
+    }
+    if !node.children.is_empty() {
+        html.push_str(r#"<ul class="pgapp-navbar-submenu">"#);
+        for child in &node.children {
+            html.push_str(&nav_node_html(child));
+        }
+        html.push_str("</ul>");
+    }
+    html.push_str("</li>");
+    html
+}
+
+/// Renders a page's `items` list (static text and links to other pages).
+fn items_html(items: &[RuntimePageItem]) -> String {
+    if items.is_empty() {
+        return String::new();
+    }
+    let mut html = String::from(r#"<div class="pgapp-items">"#);
+    for item in items {
+        match item {
+            RuntimePageItem::Text(text) => {
+                html.push_str(&format!(r#"<p class="pgapp-text">{}</p>"#, escape(text)));
+            }
+            RuntimePageItem::Link { label, target_page } => {
+                html.push_str(&format!(
+                    r#"<p><a class="pgapp-link" href="/{target}">{label}</a></p>"#,
+                    target = escape(target_page),
+                    label = escape(label),
+                ));
+            }
+        }
+    }
+    html.push_str("</div>");
+    html
+}
+
+fn layout(title: &str, nav: &[NavNode], body: &str) -> String {
     format!(
         r#"<!doctype html>
 <html>
@@ -41,13 +104,14 @@ fn layout(title: &str, body: &str) -> String {
 {assets}
 </head>
 <body>
-<nav class="pgapp-nav"><a class="pgapp-link" href="/">pgapp</a></nav>
+<nav class="pgapp-nav"><a class="pgapp-link" href="/">pgapp</a>{navbar}</nav>
 <h1 class="pgapp-title">{title}</h1>
 {body}
 </body>
 </html>"#,
         title = escape(title),
         assets = asset_tags(),
+        navbar = nav_html(nav),
         body = body,
     )
 }
@@ -55,7 +119,8 @@ fn layout(title: &str, body: &str) -> String {
 fn input_for_field(page: &RuntimePage, field_name: &str, value: Option<&str>) -> String {
     let field = page
         .entity
-        .field(field_name)
+        .as_ref()
+        .and_then(|e| e.field(field_name))
         .expect("form field must exist on entity");
     let value = value.unwrap_or("");
     let required = if field.required { " required" } else { "" };
@@ -99,6 +164,7 @@ pub fn list_page(
     page: &RuntimePage,
     rows: &[BTreeMap<String, Option<String>>],
     error: Option<&str>,
+    nav: &[NavNode],
 ) -> String {
     let mut body = String::new();
 
@@ -109,6 +175,8 @@ pub fn list_page(
         ));
     }
 
+    body.push_str(&items_html(&page.items));
+
     body.push_str(r#"<table class="pgapp-table"><thead><tr>"#);
     for col in &page.columns {
         body.push_str(&format!("<th>{}</th>", escape(col)));
@@ -117,11 +185,20 @@ pub fn list_page(
 
     for row in rows {
         body.push_str("<tr>");
+        let id = row.get("id").and_then(|v| v.as_deref()).unwrap_or("");
         for col in &page.columns {
             let val = row.get(col).and_then(|v| v.as_deref()).unwrap_or("");
-            body.push_str(&format!("<td>{}</td>", escape(val)));
+            let cell = match &page.link_column {
+                Some(lc) if lc.field == *col => format!(
+                    r#"<a class="pgapp-link" href="/{target}?id={id}">{val}</a>"#,
+                    target = escape(&lc.target_page),
+                    id = escape(id),
+                    val = escape(val),
+                ),
+                _ => escape(val),
+            };
+            body.push_str(&format!("<td>{cell}</td>"));
         }
-        let id = row.get("id").and_then(|v| v.as_deref()).unwrap_or("");
         body.push_str(&format!(
             r#"<td>
 <a class="pgapp-link" href="/{page}/{id}/edit">Edit</a>
@@ -145,7 +222,7 @@ pub fn list_page(
     }
     body.push_str(r#"<button class="pgapp-btn pgapp-btn-primary" type="submit">Create</button></form>"#);
 
-    layout(&page.name, &body)
+    layout(&page.name, nav, &body)
 }
 
 pub fn edit_page(
@@ -153,6 +230,7 @@ pub fn edit_page(
     id: &str,
     row: &BTreeMap<String, Option<String>>,
     error: Option<&str>,
+    nav: &[NavNode],
 ) -> String {
     let mut body = String::new();
     if let Some(err) = error {
@@ -176,10 +254,39 @@ pub fn edit_page(
         escape(&page.name)
     ));
 
-    layout(&format!("Edit {}", page.name), &body)
+    layout(&format!("Edit {}", page.name), nav, &body)
 }
 
-pub fn index_page(app_name: &str, pages: &[String]) -> String {
+/// A read-only single-row view for `Detail` pages, selected via `?id=`.
+pub fn detail_page(page: &RuntimePage, row: &BTreeMap<String, Option<String>>, nav: &[NavNode]) -> String {
+    let entity = page
+        .entity
+        .as_ref()
+        .expect("detail page always has an entity");
+
+    let mut body = String::new();
+    body.push_str(&items_html(&page.items));
+    body.push_str(r#"<table class="pgapp-table"><tbody>"#);
+    for field in &entity.fields {
+        let val = row.get(&field.name).and_then(|v| v.as_deref()).unwrap_or("");
+        body.push_str(&format!(
+            "<tr><th>{name}</th><td>{val}</td></tr>",
+            name = escape(&field.name),
+            val = escape(val),
+        ));
+    }
+    body.push_str("</tbody></table>");
+
+    layout(&page.name, nav, &body)
+}
+
+/// A pure page-items page: no entity, no table/form, just `items`.
+pub fn static_page(page: &RuntimePage, nav: &[NavNode]) -> String {
+    let body = items_html(&page.items);
+    layout(&page.name, nav, &body)
+}
+
+pub fn index_page(app_name: &str, pages: &[String], nav: &[NavNode]) -> String {
     let mut body = String::from(r#"<ul class="pgapp-list">"#);
     for p in pages {
         body.push_str(&format!(
@@ -188,5 +295,5 @@ pub fn index_page(app_name: &str, pages: &[String]) -> String {
         ));
     }
     body.push_str("</ul>");
-    layout(app_name, &body)
+    layout(app_name, nav, &body)
 }

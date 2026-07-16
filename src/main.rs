@@ -48,10 +48,20 @@ async fn main() -> anyhow::Result<()> {
         theme.meta.description
     );
     for page in &runtime_app.pages {
-        println!(
-            "  http://{bind_addr}/{}  (entity: {}, table: pgapp_data.{})",
-            page.name, page.entity.name, page.entity.table_name
-        );
+        match &page.entity {
+            Some(entity) => println!(
+                "  http://{bind_addr}/{}  ({}, entity: {}, table: pgapp_data.{})",
+                page.name,
+                page.kind.as_str(),
+                entity.name,
+                entity.table_name
+            ),
+            None => println!(
+                "  http://{bind_addr}/{}  ({})",
+                page.name,
+                page.kind.as_str()
+            ),
+        }
     }
 
     let state = Arc::new(server::AppState {

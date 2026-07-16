@@ -65,6 +65,9 @@ body {
 }
 
 .pgapp-nav {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
   margin-bottom: 1.5rem;
   font-size: 0.875rem;
 }
@@ -76,6 +79,62 @@ body {
 }
 .pgapp-link:hover {
   text-decoration: underline;
+}
+
+/* Multi-level nav bar: submenus are plain nested <ul>s, shown via
+   hover/focus-within so no JS is required. */
+.pgapp-navbar {
+  display: flex;
+  gap: 1.25rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pgapp-navbar-item {
+  position: relative;
+}
+.pgapp-navbar-label {
+  color: hsl(var(--muted-foreground));
+  font-weight: 500;
+}
+.pgapp-navbar-submenu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 10rem;
+  margin: 0.25rem 0 0;
+  padding: 0.25rem;
+  list-style: none;
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.08);
+  z-index: 10;
+}
+.pgapp-navbar-item:hover > .pgapp-navbar-submenu,
+.pgapp-navbar-item:focus-within > .pgapp-navbar-submenu {
+  display: block;
+}
+.pgapp-navbar-submenu .pgapp-navbar-item {
+  display: block;
+}
+.pgapp-navbar-submenu .pgapp-link {
+  display: block;
+  padding: 0.375rem 0.5rem;
+  border-radius: calc(var(--radius) - 2px);
+}
+.pgapp-navbar-submenu .pgapp-link:hover {
+  background: hsl(var(--accent));
+  text-decoration: none;
+}
+
+.pgapp-items {
+  margin-bottom: 1.25rem;
+}
+.pgapp-text {
+  color: hsl(var(--muted-foreground));
+  margin: 0 0 0.5rem;
 }
 
 .pgapp-title {
