@@ -129,7 +129,10 @@ fn row_from_sqlx(row: &sqlx::postgres::PgRow, entity: &RuntimeEntity) -> anyhow:
 }
 
 async fn fetch_rows(pool: &PgPool, entity: &RuntimeEntity) -> anyhow::Result<Vec<BTreeMap<String, Option<String>>>> {
-    let sql = format!("select {} from pgapp_data.{} order by id", select_columns(entity), entity.table_name);
+    // `order by t.id`, qualified: the select list aliases `id::text as
+    // id`, and an unqualified ORDER BY id would bind to that *text*
+    // output column, sorting "10" before "2".
+    let sql = format!("select {} from pgapp_data.{} t order by t.id", select_columns(entity), entity.table_name);
     let rows = sqlx::query(&sql).fetch_all(pool).await?;
     rows.iter().map(|r| row_from_sqlx(r, entity)).collect()
 }
@@ -174,10 +177,14 @@ async fn fetch_report_rows(
 ) -> anyhow::Result<ReportPage> {
     let cols = select_columns(entity);
     let lim = page_size + 1;
+    // ORDER BY is qualified (`t.id`) for the same reason as in
+    // `fetch_rows`: the select list re-exports `id` as text, and the
+    // cursor comparison below is numeric — mixing the two orderings
+    // would make pages skip/repeat rows.
     let (sql, bind, reverse) = if let Some(after) = after {
         (
             format!(
-                "select {cols} from pgapp_data.{} where id > $1::integer order by id asc limit {lim}",
+                "select {cols} from pgapp_data.{} t where t.id > $1::integer order by t.id asc limit {lim}",
                 entity.table_name
             ),
             Some(after),
@@ -186,7 +193,7 @@ async fn fetch_report_rows(
     } else if let Some(before) = before {
         (
             format!(
-                "select {cols} from pgapp_data.{} where id < $1::integer order by id desc limit {lim}",
+                "select {cols} from pgapp_data.{} t where t.id < $1::integer order by t.id desc limit {lim}",
                 entity.table_name
             ),
             Some(before),
@@ -194,7 +201,7 @@ async fn fetch_report_rows(
         )
     } else {
         (
-            format!("select {cols} from pgapp_data.{} order by id asc limit {lim}", entity.table_name),
+            format!("select {cols} from pgapp_data.{} t order by t.id asc limit {lim}", entity.table_name),
             None,
             false,
         )

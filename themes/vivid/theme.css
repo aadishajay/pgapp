@@ -1,0 +1,327 @@
+/* pgapp theme: vivid
+ *
+ * A deliberately colorful theme proving the `.pgapp-*` contract can
+ * carry a strong visual identity: gradient hero title, pill nav,
+ * card-style panels with colored accents, vibrant buttons and charts.
+ * See the "Theme contract" section of the README.
+ */
+
+:root {
+  --v-bg: #f6f5ff;
+  --v-surface: #ffffff;
+  --v-ink: #1e1b2e;
+  --v-muted: #6b6685;
+  --v-indigo: #4f46e5;
+  --v-violet: #7c3aed;
+  --v-fuchsia: #d946ef;
+  --v-teal: #0d9488;
+  --v-amber: #f59e0b;
+  --v-rose: #e11d48;
+  --v-border: #e4e1f5;
+  --v-radius: 14px;
+  --v-shadow: 0 10px 30px rgb(79 70 229 / 0.08), 0 2px 8px rgb(30 27 46 / 0.06);
+  --v-grad: linear-gradient(120deg, var(--v-indigo), var(--v-violet) 55%, var(--v-fuchsia));
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background:
+    radial-gradient(1100px 380px at 85% -8%, rgb(217 70 239 / 0.14), transparent 60%),
+    radial-gradient(900px 340px at -10% 4%, rgb(13 148 136 / 0.12), transparent 55%),
+    var(--v-bg);
+  color: var(--v-ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  max-width: 860px;
+  margin: 2rem auto;
+  padding: 0 1.25rem;
+  line-height: 1.55;
+}
+
+/* Title: big gradient headline */
+.pgapp-title {
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin: 0 0 1.25rem;
+  background: var(--v-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.pgapp-subtitle {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin: 0 0 0.85rem;
+  color: var(--v-indigo);
+}
+
+.pgapp-link { color: var(--v-indigo); text-decoration: none; font-weight: 600; }
+.pgapp-link:hover { color: var(--v-fuchsia); }
+
+/* Top nav: white pill bar */
+.pgapp-nav {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+  margin-bottom: 1.5rem;
+  background: var(--v-surface);
+  border: 1px solid var(--v-border);
+  border-radius: 999px;
+  padding: 0.55rem 1.1rem;
+  box-shadow: var(--v-shadow);
+  font-size: 0.9rem;
+}
+
+.pgapp-navbar { display: flex; gap: 0.35rem; list-style: none; margin: 0; padding: 0; }
+.pgapp-navbar-item { position: relative; }
+.pgapp-navbar .pgapp-link,
+.pgapp-navbar-label {
+  display: inline-block;
+  padding: 0.3rem 0.85rem;
+  border-radius: 999px;
+}
+.pgapp-navbar .pgapp-link:hover { background: rgb(79 70 229 / 0.1); color: var(--v-indigo); }
+.pgapp-navbar-label { color: var(--v-muted); font-weight: 600; }
+.pgapp-navbar-submenu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 11rem;
+  margin: 0.35rem 0 0;
+  padding: 0.35rem;
+  list-style: none;
+  background: var(--v-surface);
+  border: 1px solid var(--v-border);
+  border-radius: var(--v-radius);
+  box-shadow: var(--v-shadow);
+  z-index: 10;
+}
+.pgapp-navbar-item:hover > .pgapp-navbar-submenu,
+.pgapp-navbar-item:focus-within > .pgapp-navbar-submenu { display: block; }
+.pgapp-navbar-submenu .pgapp-navbar-item { display: block; }
+.pgapp-navbar-submenu .pgapp-link { display: block; padding: 0.45rem 0.7rem; border-radius: 10px; }
+
+/* Header / footer chrome */
+.pgapp-header, .pgapp-footer { font-size: 0.9rem; color: var(--v-muted); }
+.pgapp-header {
+  margin-bottom: 1.25rem;
+  padding: 0.7rem 1.1rem;
+  background: var(--v-grad);
+  color: #fff;
+  border-radius: var(--v-radius);
+  box-shadow: var(--v-shadow);
+}
+.pgapp-header .pgapp-text { color: rgb(255 255 255 / 0.95); font-weight: 600; }
+.pgapp-footer { margin-top: 2.25rem; padding-top: 1rem; border-top: 2px dashed var(--v-border); }
+.pgapp-header .pgapp-items, .pgapp-footer .pgapp-items { margin-bottom: 0; }
+
+.pgapp-items { margin-bottom: 1.1rem; }
+.pgapp-text { color: var(--v-muted); margin: 0 0 0.6rem; }
+
+/* Tables: card wrapper feel with colored header row */
+.pgapp-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.875rem;
+  margin-bottom: 1rem;
+  background: var(--v-surface);
+  border: 1px solid var(--v-border);
+  border-radius: var(--v-radius);
+  overflow: hidden;
+  box-shadow: var(--v-shadow);
+}
+.pgapp-table th, .pgapp-table td { padding: 0.6rem 0.85rem; text-align: left; }
+.pgapp-table thead th {
+  background: linear-gradient(120deg, rgb(79 70 229 / 0.09), rgb(217 70 239 / 0.09));
+  color: var(--v-indigo);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+  border-bottom: 1px solid var(--v-border);
+}
+.pgapp-table tbody td { border-bottom: 1px solid var(--v-border); }
+.pgapp-table tbody tr:last-child td { border-bottom: none; }
+.pgapp-table tbody tr:nth-child(even) { background: #faf9ff; }
+.pgapp-table tbody tr:hover { background: rgb(79 70 229 / 0.05); }
+
+/* Forms */
+.pgapp-form { display: flex; flex-direction: column; gap: 0.8rem; max-width: 26rem; }
+.pgapp-field { display: flex; flex-direction: column; gap: 0.3rem; }
+.pgapp-label { font-size: 0.8rem; font-weight: 700; color: var(--v-indigo); text-transform: uppercase; letter-spacing: 0.05em; }
+.pgapp-input, .pgapp-select {
+  border: 1.5px solid var(--v-border);
+  border-radius: 10px;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.9rem;
+  background: var(--v-surface);
+  color: var(--v-ink);
+}
+.pgapp-input:focus, .pgapp-select:focus {
+  outline: none;
+  border-color: var(--v-violet);
+  box-shadow: 0 0 0 3px rgb(124 58 237 / 0.18);
+}
+
+/* Buttons */
+.pgapp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  padding: 0.5rem 1.15rem;
+  font-size: 0.875rem;
+  font-weight: 700;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.pgapp-btn-primary { background: var(--v-grad); color: #fff; box-shadow: 0 6px 16px rgb(124 58 237 / 0.35); }
+.pgapp-btn-primary:hover { filter: brightness(1.08); }
+.pgapp-btn-destructive { background: var(--v-rose); color: #fff; box-shadow: 0 4px 12px rgb(225 29 72 / 0.3); }
+.pgapp-btn-destructive:hover { filter: brightness(1.08); }
+.pgapp-btn-secondary { background: var(--v-surface); color: var(--v-indigo); border-color: var(--v-border); box-shadow: var(--v-shadow); }
+.pgapp-btn-secondary:hover { border-color: var(--v-violet); }
+.pgapp-btn-disabled { opacity: 0.35; cursor: default; pointer-events: none; }
+
+.pgapp-inline-form { display: inline; margin-left: 0.5rem; }
+
+/* Item types */
+.pgapp-checkbox { width: 1.15rem; height: 1.15rem; accent-color: var(--v-violet); }
+.pgapp-readonly {
+  display: inline-block;
+  padding: 0.5rem 0.8rem;
+  font-size: 0.875rem;
+  color: var(--v-muted);
+  background: rgb(79 70 229 / 0.07);
+  border-radius: 10px;
+}
+.pgapp-radio-group { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.pgapp-radio-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.35rem 0.8rem;
+  background: var(--v-surface);
+  border: 1.5px solid var(--v-border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.pgapp-radio-option:has(input:checked) {
+  border-color: var(--v-violet);
+  background: rgb(124 58 237 / 0.1);
+  color: var(--v-violet);
+}
+.pgapp-radio-option input { accent-color: var(--v-violet); }
+
+.pgapp-popup { display: inline-block; }
+.pgapp-popup-dialog {
+  min-width: 17rem;
+  padding: 0.9rem;
+  border: 1px solid var(--v-border);
+  border-radius: var(--v-radius);
+  background: var(--v-surface);
+  color: var(--v-ink);
+  box-shadow: var(--v-shadow);
+}
+.pgapp-popup-dialog::backdrop { background: rgb(30 27 46 / 0.45); }
+.pgapp-popup-list { list-style: none; margin: 0 0 0.6rem; padding: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+.pgapp-popup-list button {
+  width: 100%;
+  text-align: left;
+  padding: 0.55rem 0.7rem;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--v-ink);
+  cursor: pointer;
+}
+.pgapp-popup-list button:hover { background: rgb(124 58 237 / 0.12); color: var(--v-violet); }
+
+.pgapp-slider { display: flex; align-items: center; gap: 0.8rem; }
+.pgapp-slider-input { flex: 1; accent-color: var(--v-fuchsia); }
+.pgapp-slider-output {
+  min-width: 2.6rem;
+  text-align: center;
+  font-size: 0.85rem;
+  font-weight: 800;
+  color: #fff;
+  background: var(--v-grad);
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+}
+
+/* Components: report / form panel / editable table / chart / region as cards */
+.pgapp-report, .pgapp-form-panel, .pgapp-editable-table { margin-bottom: 1.75rem; }
+.pgapp-form-panel {
+  background: var(--v-surface);
+  border: 1px solid var(--v-border);
+  border-left: 5px solid var(--v-violet);
+  border-radius: var(--v-radius);
+  padding: 1.1rem 1.25rem;
+  box-shadow: var(--v-shadow);
+}
+.pgapp-form-panel .pgapp-subtitle { margin-top: 0; }
+.pgapp-report .pgapp-table, .pgapp-editable-table .pgapp-table { margin-bottom: 0.85rem; }
+
+.pgapp-row-actions { display: flex; align-items: center; gap: 0.45rem; white-space: nowrap; }
+.pgapp-row-actions .pgapp-inline-form { margin-left: 0; }
+.pgapp-row-actions .pgapp-btn { padding: 0.3rem 0.6rem; }
+.pgapp-icon { width: 1rem; height: 1rem; vertical-align: -0.15em; color: var(--v-indigo); }
+a.pgapp-link:hover .pgapp-icon { color: var(--v-fuchsia); }
+.pgapp-row-actions .pgapp-btn-destructive .pgapp-icon { color: #fff; }
+
+.pgapp-pagination { display: flex; justify-content: space-between; gap: 0.75rem; }
+
+.pgapp-editable-row-wrap {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.55rem;
+  margin-bottom: 0.6rem;
+  background: var(--v-surface);
+  border: 1px solid var(--v-border);
+  border-radius: var(--v-radius);
+  padding: 0.7rem 0.9rem;
+  box-shadow: var(--v-shadow);
+}
+.pgapp-editable-row-wrap .pgapp-inline-form { margin-left: 0; }
+.pgapp-editable-row { display: flex; flex-direction: row; flex-wrap: wrap; align-items: flex-end; gap: 0.7rem; max-width: none; }
+.pgapp-editable-row .pgapp-field { margin-bottom: 0; min-width: 8rem; }
+.pgapp-editable-row .pgapp-btn { padding: 0.4rem 0.7rem; }
+
+.pgapp-region, .pgapp-chart {
+  margin: 0 0 1.5rem;
+  padding: 1.1rem 1.25rem;
+  background: var(--v-surface);
+  border: 1px solid var(--v-border);
+  border-radius: var(--v-radius);
+  box-shadow: var(--v-shadow);
+}
+.pgapp-region { border-left: 5px solid var(--v-teal); }
+.pgapp-chart { border-left: 5px solid var(--v-fuchsia); }
+.pgapp-region-title { margin: 0 0 0.75rem; font-size: 0.95rem; font-weight: 800; color: var(--v-ink); }
+.pgapp-region .pgapp-table { margin-bottom: 0; box-shadow: none; }
+.pgapp-chart-svg { width: 100%; height: auto; color: var(--v-violet); }
+.pgapp-chart canvas { max-width: 100%; }
+
+.pgapp-alert { border-radius: var(--v-radius); padding: 0.8rem 1.1rem; margin-bottom: 1rem; font-size: 0.9rem; }
+.pgapp-alert-error { background: rgb(225 29 72 / 0.08); color: var(--v-rose); border: 1.5px solid rgb(225 29 72 / 0.3); }
+
+.pgapp-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+.pgapp-list .pgapp-link {
+  display: block;
+  background: var(--v-surface);
+  border: 1px solid var(--v-border);
+  border-radius: var(--v-radius);
+  padding: 0.75rem 1.1rem;
+  box-shadow: var(--v-shadow);
+}
+.pgapp-list .pgapp-link:hover { border-color: var(--v-violet); }

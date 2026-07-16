@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pgapp — your Postgres is the app</title>
+<style>
+  :root {
+    --ink0: #0b1220;
+    --ink1: #121b2e;
+    --ink2: #1a2740;
+    --line: #24304a;
+    --text: #dce4f2;
+    --muted: #8b97ad;
+    --accent: #6db3e8;
+    --accent-deep: #336791;
+    --amber: #e8a13d;
+    --good: #58c496;
+    --frame-bar: #1a2438;
+    --shadow: 0 24px 60px rgb(0 0 0 / 0.45);
+    --radius: 12px;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --ink0: #f5f7fb;
+      --ink1: #ffffff;
+      --ink2: #eef2f9;
+      --line: #dbe2ee;
+      --text: #17233a;
+      --muted: #5b6880;
+      --accent: #336791;
+      --accent-deep: #336791;
+      --amber: #a86408;
+      --good: #1e7a54;
+      --frame-bar: #e7ecf5;
+      --shadow: 0 18px 44px rgb(23 35 58 / 0.14);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink0: #0b1220; --ink1: #121b2e; --ink2: #1a2740; --line: #24304a;
+    --text: #dce4f2; --muted: #8b97ad; --accent: #6db3e8; --accent-deep: #336791;
+    --amber: #e8a13d; --good: #58c496; --frame-bar: #1a2438;
+    --shadow: 0 24px 60px rgb(0 0 0 / 0.45);
+  }
+  :root[data-theme="light"] {
+    --ink0: #f5f7fb; --ink1: #ffffff; --ink2: #eef2f9; --line: #dbe2ee;
+    --text: #17233a; --muted: #5b6880; --accent: #336791; --accent-deep: #336791;
+    --amber: #a86408; --good: #1e7a54; --frame-bar: #e7ecf5;
+    --shadow: 0 18px 44px rgb(23 35 58 / 0.14);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ink0);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.6;
+    font-size: 16px;
+  }
+  a { color: var(--accent); }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 1.5rem; }
+
+  /* ---------- hero ---------- */
+  .hero { padding: 4.5rem 0 3.5rem; border-bottom: 1px solid var(--line); }
+  .brand {
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 2.25rem;
+  }
+  .brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--good); }
+  h1 {
+    font-family: var(--mono);
+    font-size: clamp(2rem, 5vw, 3.3rem);
+    line-height: 1.12;
+    letter-spacing: -0.02em;
+    margin: 0 0 1.1rem;
+    max-width: 21ch;
+    text-wrap: balance;
+    font-weight: 700;
+  }
+  h1 .a { color: var(--accent); }
+  .lede { color: var(--muted); max-width: 58ch; font-size: 1.08rem; margin: 0 0 2.5rem; }
+  .lede strong { color: var(--text); font-weight: 600; }
+
+  .hero-pair {
+    display: grid;
+    grid-template-columns: minmax(320px, 5fr) 7fr;
+    gap: 1.6rem;
+    align-items: stretch;
+  }
+  @media (max-width: 860px) { .hero-pair { grid-template-columns: 1fr; } }
+
+  .code-card {
+    background: var(--ink1);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: var(--shadow);
+  }
+  .code-card .bar, .frame .bar {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    background: var(--frame-bar);
+    border-bottom: 1px solid var(--line);
+    padding: 0.55rem 0.9rem;
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--muted);
+  }
+  .bar .b { width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
+  .bar .name { margin-left: 0.4rem; }
+  .code-card pre {
+    margin: 0;
+    padding: 1.1rem 1.2rem;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    line-height: 1.65;
+    flex: 1;
+  }
+  .k { color: var(--accent); font-weight: 600; }
+  .s { color: var(--amber); }
+  .c { color: var(--muted); }
+
+  .frame {
+    background: var(--ink1);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+  .frame img { display: block; width: 100%; height: auto; }
+  .frame.crop img { max-height: 560px; object-fit: cover; object-position: top; }
+
+  .arrow-note {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+    color: var(--muted);
+    text-align: center;
+    padding: 1.2rem 0 0;
+  }
+  .arrow-note .a { color: var(--accent); }
+
+  /* ---------- stats strip ---------- */
+  .stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2.5rem;
+    padding: 1.6rem 0;
+    border-bottom: 1px solid var(--line);
+    font-family: var(--mono);
+  }
+  .stat .n { font-size: 1.5rem; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .stat .l { font-size: 0.75rem; color: var(--muted); letter-spacing: 0.06em; }
+
+  /* ---------- feature rows ---------- */
+  .features { padding: 1rem 0 2rem; }
+  .feature {
+    display: grid;
+    grid-template-columns: minmax(280px, 4fr) 8fr;
+    gap: 2.2rem;
+    align-items: start;
+    padding: 3.2rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .feature:last-child { border-bottom: none; }
+  .feature.flip { grid-template-columns: 8fr minmax(280px, 4fr); }
+  .feature.flip .txt { order: 2; }
+  .feature.flip .media { order: 1; }
+  @media (max-width: 860px) {
+    .feature, .feature.flip { grid-template-columns: 1fr; }
+    .feature.flip .txt { order: 1; }
+    .feature.flip .media { order: 2; }
+  }
+  .eyebrow {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 0.74rem;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    border-radius: 6px;
+    padding: 0.2rem 0.55rem;
+    margin-bottom: 0.9rem;
+  }
+  .feature h2 {
+    font-family: var(--mono);
+    font-size: 1.35rem;
+    letter-spacing: -0.01em;
+    margin: 0 0 0.7rem;
+    line-height: 1.3;
+    text-wrap: balance;
+  }
+  .feature p { color: var(--muted); margin: 0 0 0.8rem; max-width: 48ch; }
+  .feature p strong { color: var(--text); font-weight: 600; }
+  .feature .fine { font-size: 0.85rem; }
+  .media-stack { display: flex; flex-direction: column; gap: 1.2rem; }
+  .caption {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+    color: var(--muted);
+    padding: 0.55rem 0.2rem 0;
+  }
+  .two-up { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; }
+  @media (max-width: 700px) { .two-up { grid-template-columns: 1fr; } }
+
+  /* ---------- architecture ---------- */
+  .arch { padding: 3.5rem 0; border-bottom: 1px solid var(--line); }
+  .arch h2 { font-family: var(--mono); font-size: 1.35rem; margin: 0 0 1.6rem; }
+  .arch-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 1.2rem; }
+  .arch-card {
+    background: var(--ink1);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 1.1rem 1.2rem;
+  }
+  .arch-card h3 { font-family: var(--mono); font-size: 0.9rem; color: var(--accent); margin: 0 0 0.4rem; }
+  .arch-card p { font-size: 0.85rem; color: var(--muted); margin: 0; }
+
+  /* ---------- footer ---------- */
+  .foot { padding: 3rem 0 4rem; }
+  .foot h2 { font-family: var(--mono); font-size: 1.2rem; margin: 0 0 1rem; }
+  .runbox {
+    background: var(--ink1);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 1rem 1.2rem;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    overflow-x: auto;
+    white-space: pre;
+    line-height: 1.8;
+  }
+  .foot .sig { margin-top: 2rem; font-size: 0.85rem; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <div class="brand"><span class="dot"></span>pgapp &mdash; postgres-native application framework</div>
+    <h1>Your Postgres <span class="a">is</span> the application.</h1>
+    <p class="lede">pgapp is an <strong>Oracle&nbsp;APEX&ndash;inspired low-code framework</strong> written in Rust.
+    Describe an app in one markup file; pgapp syncs it into in-database metadata and a fast Axum server
+    renders the whole thing &mdash; reports, forms, charts, navigation. <strong>Every screenshot on this page is the
+    real framework</strong> running the 160-line demo file on a live Postgres.</p>
+
+    <div class="hero-pair">
+      <div class="code-card">
+        <div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">helpdesk.pgapp</span></div>
+        <pre><span class="k">app</span> <span class="s">"Helpdesk"</span> {
+  <span class="k">entity</span> <span class="s">"tickets"</span> {
+    <span class="k">field</span> subject: text required
+    <span class="k">field</span> status: text default Open
+    <span class="k">field</span> satisfaction: integer
+  }
+
+  <span class="k">query</span> by_status {
+    <span class="k">sql</span>: <span class="s">"select status as label, count(*)
+          as value from helpdesk_tickets
+          group by status"</span>
+  }
+
+  <span class="k">page</span> <span class="s">"Dashboard"</span> {
+    <span class="k">chart</span> <span class="s">"Tickets by status"</span>
+      <span class="k">from query</span> by_status {
+        type: bar  x: label  y: value
+    }
+    <span class="k">region</span> <span class="s">"Latest tickets"</span> <span class="k">from query</span> recent
+  }
+
+  <span class="k">page</span> <span class="s">"Tickets"</span> {
+    <span class="k">report</span> <span class="s">"All tickets"</span> <span class="k">of</span> tickets {
+      page_size: 8
+    }
+    <span class="k">form</span> <span class="s">"Create / edit"</span> <span class="k">of</span> tickets {
+      <span class="k">item</span> satisfaction <span class="k">as</span> slider (min:<span class="s">"1"</span>, max:<span class="s">"5"</span>)
+    }
+  }
+}</pre>
+      </div>
+      <div>
+        <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">127.0.0.1:8080/Dashboard</span></div><img src="shots/dashboard.png" alt="The rendered Dashboard page: two charts and two query-backed tables, styled by the vivid theme"></div>
+        <div class="arrow-note">markup file <span class="a">&rarr;</span> pgapp_meta.* tables <span class="a">&rarr;</span> this page. no per-app code.</div>
+      </div>
+    </div>
+  </div>
+</header>
+
+<section class="wrap stats" aria-label="Demo app contents">
+  <div class="stat"><div class="n">1</div><div class="l">markup file</div></div>
+  <div class="stat"><div class="n">2</div><div class="l">entities</div></div>
+  <div class="stat"><div class="n">6</div><div class="l">pages</div></div>
+  <div class="stat"><div class="n">6</div><div class="l">named queries</div></div>
+  <div class="stat"><div class="n">0</div><div class="l">lines of app code</div></div>
+</section>
+
+<main class="features wrap">
+
+  <div class="feature">
+    <div class="txt">
+      <span class="eyebrow">report &hellip; of tickets</span>
+      <h2>Paginated reports the database is happy about.</h2>
+      <p>A <strong>Report</strong> is a read-only table over an entity. Pagination is keyset ("seek") on the primary key
+      &mdash; no <code>COUNT(*)</code>, no <code>OFFSET</code> scans &mdash; so page 50 costs the same as page 1.</p>
+      <p>Columns can link to other pages, forwarding row values as URL parameters. And because a Form for the
+      same entity sits on this page, every row automatically gets edit and delete actions.</p>
+      <p class="fine">Icons are pluggable too: these are the built-in inline SVGs; drop in a Font&nbsp;Awesome or
+      Material pack via <code>PGAPP_ICONS</code>.</p>
+    </div>
+    <div class="media">
+      <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/Tickets &mdash; page 2 via ?r0_after=8</span></div><img src="shots/report-page2.png" alt="The All tickets report on its second page, with edit and delete icons on each row and Prev/Next controls"></div>
+      <div class="caption"># the extra fetched row answers "is there a next page?" &mdash; zero extra queries</div>
+    </div>
+  </div>
+
+  <div class="feature flip">
+    <div class="txt">
+      <span class="eyebrow">form &hellip; item x as slider</span>
+      <h2>Forms assembled from pluggable item types.</h2>
+      <p>Every field's widget is a small Rust component: text, checkbox, radio group, read-only, a slider,
+      a popup list of values. Adding your own is one file and one registry line &mdash; the markup grammar
+      never changes.</p>
+      <p>The <strong>popup LOV</strong> here gets its choices live from a named query (<code>select name as value from
+      agents&hellip;</code>), and writes the picked value back through the DB-stored <code>pgapp.setItem()</code> JS runtime.</p>
+    </div>
+    <div class="media">
+      <div class="media-stack">
+        <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/Tickets?edit_1=1 &mdash; the same form, now editing row 1</span></div><img src="shots/form-edit.png" alt="The ticket form in edit mode: pill-styled radio groups, an agent picker, a satisfaction slider reading 5"></div>
+        <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">popup LOV &mdash; choices from a live query</span></div><img src="shots/popup-lov.png" alt="A modal dialog listing the five active agents, fetched from a named query"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="feature">
+    <div class="txt">
+      <span class="eyebrow">chart &hellip; from query</span>
+      <h2>Charts with a swappable rendering engine.</h2>
+      <p>A <strong>Chart</strong> component points at a named query and two of its columns. The built-in renderer
+      draws dependency-free inline SVG on the server &mdash; no JS, no CDN.</p>
+      <p>Prefer canvas, D3, or a real charting library? Drop a <code>chart.js</code> file into
+      <code>chart-libs/&lt;name&gt;/</code> and set <code>PGAPP_CHART_LIB</code>. The server emits the rows as JSON and
+      your library draws them &mdash; it never needs to know how.</p>
+    </div>
+    <div class="media">
+      <div class="frame crop"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/Dashboard &mdash; bar + line, inline SVG</span></div><img src="shots/dashboard.png" alt="Bar chart of tickets by status and a line chart of new tickets per day"></div>
+    </div>
+  </div>
+
+  <div class="feature flip">
+    <div class="txt">
+      <span class="eyebrow">editable_table &hellip; of agents</span>
+      <h2>Spreadsheet-style editing for small tables.</h2>
+      <p>An <strong>EditableTable</strong> renders every row as its own inline form &mdash; change a value, hit save,
+      done. Plus an add-new row at the bottom. No list/edit round-trip for data you just want to tweak in place.</p>
+    </div>
+    <div class="media">
+      <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/Agents</span></div><img src="shots/agents.png" alt="Six agent rows, each with editable name, team, and active fields plus save and delete buttons"></div>
+    </div>
+  </div>
+
+  <div class="feature">
+    <div class="txt">
+      <span class="eyebrow">query &hellip; where status = :status</span>
+      <h2>Named SQL, safely parameterized, shared everywhere.</h2>
+      <p>Declare a query once &mdash; app-wide or scoped to one page &mdash; and reference it from charts, regions,
+      report sources, and popup choices. <code>:name</code> markers compile to genuine bind parameters,
+      <strong>never string interpolation</strong>.</p>
+      <p>Values cross pages through links: the Tickets report forwards each row's status as
+      <code>?status=&hellip;</code>, and this page's query reads it back as <code>:status</code>. Parameter passing
+      with zero code.</p>
+    </div>
+    <div class="media">
+      <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/TicketDetail?id=1&amp;status=Resolved</span></div><img src="shots/detail.png" alt="The TicketDetail page showing a table of other resolved tickets, driven by the forwarded status parameter"></div>
+      <div class="caption"># try editing ?status= in the URL &mdash; the region follows it</div>
+    </div>
+  </div>
+
+  <div class="feature flip">
+    <div class="txt">
+      <span class="eyebrow">PGAPP_THEME=vivid | shadcn | plain</span>
+      <h2>One app. Any design system.</h2>
+      <p>Rendered HTML only ever uses a fixed contract of <code>.pgapp-*</code> classes. A theme is a directory
+      with one CSS file that styles them &mdash; these two screenshots are <strong>the same app, the same database,
+      the same request</strong>, under two themes.</p>
+      <p class="fine">The colorful one ("vivid") was written for this demo in one CSS file. The other is the
+      shadcn/ui default.</p>
+    </div>
+    <div class="media">
+      <div class="two-up">
+        <div>
+          <div class="frame crop"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">PGAPP_THEME=vivid</span></div><img src="shots/dashboard.png" alt="Dashboard in the vivid theme: gradient header, purple charts, card panels"></div>
+        </div>
+        <div>
+          <div class="frame crop"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">PGAPP_THEME=shadcn</span></div><img src="shots/dashboard-shadcn.png" alt="The identical dashboard in the neutral shadcn theme"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<section class="arch">
+  <div class="wrap">
+    <h2>// under the hood</h2>
+    <div class="arch-grid">
+      <div class="arch-card"><h3>in-database metadata</h3><p>Apps, entities, pages, and components are rows in <code>pgapp_meta.*</code>. The markup is parsed once and synced in; the server always serves off the database.</p></div>
+      <div class="arch-card"><h3>rust, not postgrest</h3><p>A single Axum binary owns routing and builds parameterized SQL from metadata on the fly. One process, no Node, no JVM.</p></div>
+      <div class="arch-card"><h3>injection-proof by construction</h3><p>Identifiers are lexer-restricted to a safe charset; every user value is a bind parameter cast in SQL. Verified live with injection-shaped payloads.</p></div>
+      <div class="arch-card"><h3>pluggable everything</h3><p>Item types, themes, icon packs, chart libraries &mdash; each is a file dropped into a directory with a tiny contract, selected by an env var.</p></div>
+    </div>
+  </div>
+</section>
+
+<footer class="foot">
+  <div class="wrap">
+    <h2>$ run the demo</h2>
+    <div class="runbox">export DATABASE_URL=postgres://postgres:postgres@localhost:5432/pgapp
+PGAPP_THEME=vivid cargo run -- examples/helpdesk.pgapp   <span class="c"># first run creates the tables</span>
+psql "$DATABASE_URL" -f examples/helpdesk_seed.sql       <span class="c"># optional demo data</span></div>
+    <p class="sig">pgapp &mdash; an Oracle APEX-inspired no/low-code framework built on Postgres, written in Rust.<br>
+    Everything above was captured from a live run against Postgres 16.</p>
+  </div>
+</footer>
+
+</body>
+</html>

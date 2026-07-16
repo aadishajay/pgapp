@@ -1,0 +1,157 @@
+# Nova Helpdesk — a richer demo app than examples/todo.pgapp.
+# Two entities, six pages, six named queries, two chart types, every
+# built-in item type, both pagination modes, and cross-page parameter
+# passing — all in this one file, no per-app code.
+
+app "Helpdesk" {
+  header {
+    text "Nova Helpdesk — a demo application defined in one .pgapp file"
+  }
+
+  footer {
+    text "Built with pgapp: Postgres-native metadata, Rust server, pluggable everything."
+    link "About this app" -> page About
+  }
+
+  nav {
+    item "Dashboard" -> page Dashboard
+    item "Tickets" -> page Tickets
+    item "Agents" -> page Agents
+    item "More" {
+      item "Backlog" -> page Backlog
+      item "About" -> page About
+    }
+  }
+
+  # ---- App-scoped named queries (visible from every page) ----
+
+  query agent_names {
+    sql: "select name as value from pgapp_data.helpdesk_agents where active = true order by 1"
+  }
+
+  query by_status {
+    sql: "select status as label, count(*) as value from pgapp_data.helpdesk_tickets group by status order by 1"
+  }
+
+  query by_day {
+    sql: "select to_char(created_at, 'MM-DD') as label, count(*) as value
+          from pgapp_data.helpdesk_tickets group by 1 order by 1"
+  }
+
+  query top_agents {
+    sql: "select agent as label, count(*) as value from pgapp_data.helpdesk_tickets
+          where agent is not null group by agent order by 2 desc limit 6"
+  }
+
+  query recent {
+    sql: "select id, subject, status, priority, agent from pgapp_data.helpdesk_tickets
+          order by id desc limit 6"
+  }
+
+  query open_backlog {
+    sql: "select id, subject, priority, agent, satisfaction from pgapp_data.helpdesk_tickets
+          where status = 'Open' order by id"
+  }
+
+  # ---- Entities ----
+
+  entity "tickets" {
+    field id: id
+    field subject: text required
+    field status: text default Open
+    field priority: text default Medium
+    field agent: text
+    field urgent: boolean default false
+    field satisfaction: integer default 3
+    field notes: text
+    field created_at: timestamp default now
+  }
+
+  entity "agents" {
+    field id: id
+    field name: text required
+    field team: text default Support
+    field active: boolean default true
+  }
+
+  # ---- Pages ----
+
+  # A dashboard is just a page whose components happen to all be
+  # read-only: two charts and two regions, each one line of markup
+  # backed by a named query.
+  page "Dashboard" {
+    text "Live overview of the Nova support queue. Every widget below is one line of markup backed by a named SQL query."
+    chart "Tickets by status" from query by_status {
+      type: bar
+      x: label
+      y: value
+    }
+    chart "New tickets per day" from query by_day {
+      type: line
+      x: label
+      y: value
+    }
+    region "Busiest agents" from query top_agents
+    region "Latest tickets" from query recent
+  }
+
+  # The classic CRUD pattern: a keyset-paginated Report next to a Form
+  # for the same entity. The report rows get edit/delete actions
+  # automatically because the form is on the same page.
+  page "Tickets" {
+    report "All tickets" of tickets {
+      columns: subject, status, priority, agent, urgent, created_at
+      link: subject -> page TicketDetail (status: status)
+      page_size: 8
+    }
+
+    form "Create / edit ticket" of tickets {
+      fields: subject, status, priority, agent, urgent, satisfaction, notes
+      item status as radio ("Open", "In Progress", "Resolved")
+      item priority as radio ("Low", "Medium", "High")
+      item agent as popup from query agent_names
+      item satisfaction as slider (min: "1", max: "5", step: "1")
+    }
+  }
+
+  # The report's linked column forwards ?id= and ?status=; the
+  # page-scoped query below reads both back as :id / :status binds —
+  # cross-page parameter passing with no code.
+  page "TicketDetail" {
+    query same_status {
+      sql: "select id, subject, priority, agent from pgapp_data.helpdesk_tickets
+            where status = :status::text and id != :id::integer
+            order by id desc limit 8"
+    }
+    text "The status below arrived as a URL parameter forwarded by the report's linked column on the Tickets page."
+    region "More tickets with the same status" from query same_status
+  }
+
+  # An EditableTable: every row inline-editable, plus an add-new row.
+  page "Agents" {
+    editable_table "Support agents" of agents {
+      columns: name, team, active
+    }
+  }
+
+  # A report sourced from a named query instead of the entity table —
+  # paginated by OFFSET since arbitrary SQL has no assumed sort key.
+  page "Backlog" {
+    text "Only tickets still Open, straight from a named query. Writes would still target the entity by id."
+    report "Open backlog" of tickets {
+      source: query open_backlog
+      columns: subject, priority, agent, satisfaction
+      page_size: 6
+    }
+  }
+
+  page "About" {
+    text "Nova Helpdesk is defined in a single .pgapp markup file: 2 entities, 6 pages, 6 named queries, 2 chart types, every built-in item type - and zero per-app code."
+    chart "Tickets per agent" from query top_agents {
+      type: bar
+      x: label
+      y: value
+    }
+    link "Back to the dashboard" -> page Dashboard
+  }
+}

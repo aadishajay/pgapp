@@ -178,7 +178,12 @@ app "Todo" {
   Query and entity names are the same way.
 
 See `src/markup.rs` for the full grammar and `examples/todo.pgapp` for a
-working example.
+working example. `examples/helpdesk.pgapp` is a richer one — two
+entities, a chart dashboard, both pagination modes, and every built-in
+item type — with demo data in `examples/helpdesk_seed.sql` and a
+feature-by-feature tour (with live screenshots) in
+`marketing/index.html`. It pairs with the colorful `themes/vivid/`
+theme: `PGAPP_THEME=vivid cargo run -- examples/helpdesk.pgapp`.
 
 ## Components
 
