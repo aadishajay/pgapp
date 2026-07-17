@@ -942,10 +942,20 @@ with a clear error rather than silently falling back.
   `prefers-color-scheme`.
 - `themes/plain/` — the same classes styled with plain CSS and zero
   design-system assumptions, proving the contract isn't shadcn-specific.
+- `themes/vivid/` — a colorful demo theme: indigo-to-fuchsia gradients,
+  pill navigation, card surfaces. Used by `examples/helpdesk.pgapp`.
+- `themes/google_m3/` — Material Design 3 (Material You): tonal
+  surface-container cards instead of borders/shadows, pill-shaped
+  filled/tonal buttons, outlined text fields with M3's own 4px field
+  radius, 28px dialog corners, a Google-blue seed palette, light/dark
+  via `prefers-color-scheme`. (Selected as `theme: google_m3` — a
+  markup identifier can't contain a hyphen, hence the underscore.)
 
-To add another design system (Bootstrap, Material, a custom brand kit,
-...), create `themes/<name>/theme.css` styling the classes above and run
-with `theme: <name>` in the app's markup. No Rust changes needed —
+To add another design system (Bootstrap, a custom brand kit, ...),
+create `themes/<name>/theme.css` styling the classes above and run with
+`theme: <name>` in the app's markup — `<name>` has to be a valid
+identifier (letters/digits/underscore, no hyphens), since it's parsed
+the same way any other markup identifier is. No Rust changes needed —
 theming is fully decoupled from the framework.
 
 ## Running it

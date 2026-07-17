@@ -1,0 +1,4 @@
+{
+  "label": "Google Material 3",
+  "description": "A Material Design 3 (Material You) theme: tonal surface containers, pill-shaped filled/tonal buttons, outlined text fields, 28px dialog corners, and a Google-blue seed palette — light/dark via prefers-color-scheme. Same .pgapp-* contract as every other theme."
+}
