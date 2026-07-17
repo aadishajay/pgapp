@@ -256,7 +256,7 @@
     <p class="lede">pgapp is an <strong>Oracle&nbsp;APEX&ndash;inspired low-code framework</strong> written in Rust.
     Describe an app in one markup file; pgapp syncs it into in-database metadata and a fast Axum server
     renders the whole thing &mdash; reports, forms, charts, navigation. <strong>Every screenshot on this page is the
-    real framework</strong> running the 160-line demo file on a live Postgres.</p>
+    real framework</strong> running the ~200-line demo file on a live Postgres.</p>
 
     <div class="hero-pair">
       <div class="code-card">
@@ -305,9 +305,9 @@
 
 <section class="wrap stats" aria-label="Demo app contents">
   <div class="stat"><div class="n">1</div><div class="l">markup file</div></div>
-  <div class="stat"><div class="n">2</div><div class="l">entities</div></div>
+  <div class="stat"><div class="n">3</div><div class="l">entities</div></div>
   <div class="stat"><div class="n">6</div><div class="l">pages</div></div>
-  <div class="stat"><div class="n">6</div><div class="l">named queries</div></div>
+  <div class="stat"><div class="n">9</div><div class="l">named queries</div></div>
   <div class="stat"><div class="n">0</div><div class="l">lines of app code</div></div>
 </section>
 
@@ -327,6 +327,23 @@
     <div class="media">
       <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/Tickets &mdash; page 2 via ?r0_after=8</span></div><img src="shots/report-page2.png" alt="The All tickets report on its second page, with edit and delete icons on each row and Prev/Next controls"></div>
       <div class="caption"># the extra fetched row answers "is there a next page?" &mdash; zero extra queries</div>
+    </div>
+  </div>
+
+  <div class="feature flip">
+    <div class="txt">
+      <span class="eyebrow">?r0_q=&hellip; &middot; saved views</span>
+      <h2>Search, filter, and save the view.</h2>
+      <p>Every report grows an interactive toolbar: a <strong>search box</strong> matching across all visible
+      columns, and a <strong>column filter</strong> ("status contains Open"). Filters live in the URL, ride
+      along with the pagination cursors, and every value is a bind parameter &mdash; column names are
+      validated against the report's own column list, never spliced from the request.</p>
+      <p>The current filter state saves as a named <strong>view</strong> in <code>pgapp_meta.report_views</code>
+      &mdash; private to you, or public to every user of the app. Views render as one-click chips;
+      owners and admins can delete them.</p>
+    </div>
+    <div class="media">
+      <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/Tickets?r0_col=status&amp;r0_val=Open &mdash; two saved views as chips</span></div><img src="shots/report-filtered.png" alt="The tickets report filtered to Open status, with a search toolbar and two saved-view chips named High priority and Open only"></div>
     </div>
   </div>
 
@@ -407,6 +424,64 @@
       <div class="media-stack">
         <div class="frame crop"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/login &mdash; themed like every other page</span></div><img src="shots/auth-login.png" alt="The sign-in form, styled by the vivid theme" style="max-height:400px"></div>
         <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/users &mdash; built-in, admin role only</span></div><img src="shots/auth-users.png" alt="The built-in user management page listing the admin and a support user, with an add-user form"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="feature flip">
+    <div class="txt">
+      <span class="eyebrow">action &hellip; calls run_query &middot; on change of</span>
+      <h2>Server-side actions and client-side reactions.</h2>
+      <p><strong>Actions</strong> are pgapp's PL/SQL analog: named Rust modules in <code>src/actions/</code>,
+      called from a page as a button. The shipped <code>run_query</code> module executes a named query raw
+      &mdash; a plain <code>UPDATE</code> works &mdash; and its outcome comes back as a banner.</p>
+      <p><strong>Dynamic actions</strong> are declarative client-side behavior, dispatched by the DB-stored
+      runtime.js: in this form, picking <em>High</em> priority auto-checks <em>urgent</em>; unchecking
+      urgent hides the notes field; and choosing an agent re-fetches the region below with
+      <code>:agent</code> bound to the selection &mdash; no page reload, no hand-written JS.</p>
+    </div>
+    <div class="media">
+      <div class="media-stack">
+        <div class="code-card">
+          <div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">from the Tickets page definition</span></div>
+          <pre><span class="k">action</span> <span class="s">"Close all non-urgent open tickets"</span> <span class="k">calls</span> run_query (query: <span class="s">"close_nonurgent"</span>)
+
+<span class="k">on change of</span> priority {
+  <span class="k">set</span> urgent <span class="k">to</span> <span class="s">"pgapp.getItem('priority') === 'High'"</span>
+}
+<span class="k">on change of</span> agent {
+  <span class="k">refresh</span> agent_load
+}</pre>
+        </div>
+        <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">after clicking the action button</span></div><img src="shots/action-notice.png" alt="A green banner reading Done, 15 rows affected"></div>
+        <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">region refetched with :agent = the picked LOV value</span></div><img src="shots/da-region.png" alt="The open-tickets-for-selected-agent region showing 3"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="feature">
+    <div class="txt">
+      <span class="eyebrow">entity &hellip; from query</span>
+      <h2>Entities without tables. Tables without surprises.</h2>
+      <p>An entity can be backed by a <strong>named query</strong> instead of a table &mdash; the APEX "view"
+      pattern. It's read-only by construction: no table is created, and binding a form to it fails at
+      sync with a clear error. Reports and the JSON API work as usual.</p>
+      <p>And for entities that <em>do</em> own tables, every deployment now verifies the physical schema
+      against the declared fields: a type mismatch stops startup naming every offending column, instead
+      of failing as a confusing cast error at request time.</p>
+    </div>
+    <div class="media">
+      <div class="media-stack">
+        <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">a report over a query-backed entity</span></div><img src="shots/query-entity.png" alt="The status summary report driven by a query-backed entity"></div>
+        <div class="code-card">
+          <div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">startup, against a drifted table</span></div>
+          <pre><span class="c">$ pgapp examples/helpdesk.pgapp</span>
+Error: entity 'things' does not match its existing table:
+  - column 'amount' is <span class="s">text</span> in pgapp_data.things
+    but the entity declares <span class="s">integer</span> (expected int4)
+Fix the markup to match the table, or migrate the table
+(pgapp adds columns but never changes or drops them).</pre>
+        </div>
       </div>
     </div>
   </div>
