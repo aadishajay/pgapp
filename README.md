@@ -844,7 +844,7 @@ of a fixed set of classes — `pgapp-nav`, `pgapp-link`, `pgapp-title`,
 `pgapp-label`, `pgapp-input`, `pgapp-select`, `pgapp-btn` (+
 `pgapp-btn-primary` / `pgapp-btn-destructive` / `pgapp-btn-secondary` /
 `pgapp-btn-disabled`), `pgapp-inline-form`, `pgapp-alert` (+
-`pgapp-alert-error`), `pgapp-list`, `pgapp-navbar` (+
+`pgapp-alert-error`), `pgapp-navbar` (+
 `pgapp-navbar-item` / `pgapp-navbar-label` / `pgapp-navbar-submenu`),
 `pgapp-items`, `pgapp-text`, `pgapp-header`, `pgapp-footer`,
 `pgapp-checkbox`, `pgapp-readonly`, `pgapp-radio-group` (+
@@ -903,7 +903,7 @@ cargo run                     # serves examples/todo.pgapp on 127.0.0.1:8080
 On startup it prints the URL and component kinds for each page, e.g.
 `http://127.0.0.1:8080/Tasks  [report, form, text, region]`.
 
-- `GET  /`                              — index of pages in the app
+- `GET  /`                              — redirects to the app's first page (declaration order in the markup)
 - `GET  /:page`                         — renders every component on the page, in order
 - `POST /:page/c/:idx/create`           — create a row (`Form`/`EditableTable` only, by component index)
 - `POST /:page/c/:idx/update/:id`       — update a row

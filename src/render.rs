@@ -991,22 +991,3 @@ pub fn page_layout(
     full.push_str(body);
     layout(app_name, title, chrome, icons, chart_lib, user, &full)
 }
-
-pub fn index_page(
-    app_name: &str,
-    pages: &[String],
-    chrome: Chrome,
-    icons: &Icons,
-    chart_lib: &ChartLib,
-    user: Option<(&str, bool)>,
-) -> String {
-    let mut body = String::from(r#"<ul class="pgapp-list">"#);
-    for p in pages {
-        body.push_str(&format!(
-            r#"<li><a class="pgapp-link" href="/{p}">{p}</a></li>"#,
-            p = escape(p)
-        ));
-    }
-    body.push_str("</ul>");
-    layout(app_name, app_name, chrome, icons, chart_lib, user, &body)
-}

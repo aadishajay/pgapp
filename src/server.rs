@@ -438,22 +438,18 @@ fn build_value_exprs(
     Ok((columns, exprs, binds))
 }
 
-async fn index(
-    State(state): State<Arc<AppState>>,
-    Extension(auth_ctx): Extension<AuthCtx>,
-) -> Result<Html<String>, AppError> {
+/// `/` is just a redirect to the app's first page — there's no
+/// separate "homepage" content to render, so nothing here needs
+/// `auth_ctx`; `show` (the `/:page` handler) re-checks login/role
+/// requirements on the page it lands on.
+async fn index(State(state): State<Arc<AppState>>) -> Result<Redirect, AppError> {
     let data = state.data();
-    let pages: Vec<String> = data.app.pages.iter().map(|p| p.name.clone()).collect();
-    let ctx = HashMap::new();
-    let regions = resolve_regions(&state.pool, &data.app, None, &ctx).await.map_err(err_response)?;
-    Ok(Html(render::index_page(
-        &data.app.name,
-        &pages,
-        data.app.chrome(&regions),
-        &data.icons,
-        &data.chart_lib,
-        auth_ctx.display(),
-    )))
+    let first = data
+        .app
+        .pages
+        .first()
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "this app has no pages".to_string()))?;
+    Ok(Redirect::to(&format!("/{}", url_encode(&first.name))))
 }
 
 async fn theme_css(State(state): State<Arc<AppState>>) -> Response {
