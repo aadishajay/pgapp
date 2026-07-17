@@ -21,6 +21,7 @@ use sqlx::PgPool;
 
 use crate::meta::{RuntimeApp, RuntimePage};
 
+mod call_function;
 mod log_values;
 mod run_query;
 
@@ -52,6 +53,20 @@ pub trait ServerAction: Send + Sync {
     fn run<'a>(&'a self, ctx: ActionContext<'a>) -> BoxFuture<'a, anyhow::Result<String>>;
 }
 
+/// Strips sqlx's "error returned from database: " wrapper off a
+/// Postgres error, so a PL/pgSQL `raise exception 'Ticket already
+/// closed'` shows up on the page as exactly that — "Ticket already
+/// closed" — rather than as a client-library-flavored sentence. Only
+/// applies to actual database errors (a raised exception, a
+/// constraint violation, ...); anything else (a pool timeout, a
+/// connection drop) keeps its normal message.
+pub(crate) fn clean_db_error(e: sqlx::Error) -> anyhow::Error {
+    match e.as_database_error() {
+        Some(db_err) => anyhow::anyhow!("{}", db_err.message()),
+        None => e.into(),
+    }
+}
+
 pub type Registry = HashMap<&'static str, Box<dyn ServerAction>>;
 
 /// Builds the registry of every known action module — the one line a
@@ -59,6 +74,7 @@ pub type Registry = HashMap<&'static str, Box<dyn ServerAction>>;
 pub fn registry() -> Registry {
     let modules: Vec<Box<dyn ServerAction>> = vec![
         Box::new(run_query::RunQuery),
+        Box::new(call_function::CallFunction),
         Box::new(log_values::LogValues),
     ];
     modules.into_iter().map(|m| (m.name(), m)).collect()

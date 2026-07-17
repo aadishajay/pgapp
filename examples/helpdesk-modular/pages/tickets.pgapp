@@ -23,6 +23,15 @@ page "Tickets" {
   }
   action "Close all non-urgent open tickets" calls run_query (query: "close_nonurgent")
 
+  # call_function's PL/pgSQL-native sibling of run_query — see
+  # examples/helpdesk_functions.sql (must exist before this app's
+  # first sync) and the single-file examples/helpdesk.pgapp for the
+  # full commentary.
+  query close_stale {
+    sql: "select close_stale_tickets()"
+  }
+  action "Close stale open tickets (PL/pgSQL)" calls call_function (query: "close_stale")
+
   query agent_load {
     sql: "select count(*) as open_tickets from pgapp_data.helpdesk_tickets
           where agent = :agent and status = 'Open'"

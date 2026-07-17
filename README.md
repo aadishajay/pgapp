@@ -374,12 +374,51 @@ notice banner; an `Err` becomes the error banner.
 A page invokes a module with `action "Close old tickets" calls
 run_query (query: "close_old")` — rendered as a button posting to
 `/:page/c/:idx/run`, gated by the page's `requires:` role like every
-other write. Two modules ship:
+other write. Three modules ship:
 
 - `run_query` — executes a named query **raw** (not wrapped in
   `to_jsonb`), so the query may be a plain `UPDATE`/`DELETE`/`INSERT`;
-  binds still come from `:name` markers, never interpolation.
+  binds still come from `:name` markers, never interpolation. Its
+  outcome message is always generic ("N row(s) affected").
+- `call_function` — PL/pgSQL's own seat at this table: calls a plain
+  SQL/PL/pgSQL function (`action "Close stale tickets" calls
+  call_function (query: "close_stale")`, where `close_stale`'s SQL is
+  `select close_stale_tickets()`) and shows back whatever *the
+  function itself* returns, wrapped in `to_jsonb` the same generic way
+  a named query's own rows are, so the return type is never a
+  constraint. `raise exception '...'` inside the function becomes the
+  page's error banner — stripped of sqlx's "error returned from
+  database:" wrapper (see `actions::clean_db_error`), so a hand-written
+  validation message shows up exactly as written — and whatever the
+  function `return`s on success becomes the notice. The function has
+  to already exist when the app is (first) synced or reloaded — same
+  requirement as a query referencing a table — see
+  `examples/helpdesk_functions.sql`'s comment for the run order.
 - `log_values` — a trivial demo of custom Rust: logs the parameter map.
+
+**Rust or PL/pgSQL, not one instead of the other.** `run_query`/
+`call_function` are the two ends of a spectrum, not a migration path
+away from `src/actions/*.rs`: anything that needs to leave the
+database — HTTP calls, email, another service — stays Rust, where it's
+typed, testable, and has an actual compiler; anything that's already
+row-level logic living beside the data (validation, integrity checks,
+bulk recalculation) is cheaper to write as a function and invoke with
+`call_function` than to round-trip through Rust for no reason. Neither
+module reinvents bind handling — both go through the exact same
+`:name` → `Describe`-resolved-type compilation as every other named
+query (see "Named queries" above), so a PL/pgSQL function's arguments
+never need hand-written casts either.
+
+pgapp doesn't ship an APEX-style grab-bag utility package (an
+`apex_util`/`apex_error` equivalent), and deliberately so: most of what
+those packages exist for — session-state accessors, page-item
+plumbing — has no analog here, since pgapp has no server-side session
+state to expose in the first place (a page's state is its URL and the
+database, not a stateful package instance). The one piece that
+*genuinely* generalizes — "a function raises a clean, user-facing
+error and the framework shows it verbatim" — isn't a package at all;
+it's `clean_db_error` plus the ordinary Postgres `raise exception`
+statement. Nothing to import, nothing to learn.
 
 ## Dynamic actions
 

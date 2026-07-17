@@ -141,6 +141,18 @@ app "Helpdesk" {
     }
     action "Close all non-urgent open tickets" calls run_query (query: "close_nonurgent")
 
+    # call_function is run_query's PL/pgSQL-native sibling: instead of
+    # a raw statement, this calls a function (see
+    # examples/helpdesk_functions.sql — must exist before this app's
+    # first sync) and shows back whatever *it* returns. The function
+    # itself decides success (returns a message) vs. failure (raises
+    # an exception, which becomes the error banner) — the logic lives
+    # in PL/pgSQL, not in this markup or in Rust.
+    query close_stale {
+      sql: "select close_stale_tickets()"
+    }
+    action "Close stale open tickets (PL/pgSQL)" calls call_function (query: "close_stale")
+
     # Client-side dynamic actions, dispatched by the DB-stored
     # runtime.js. `set` and `toggle` take JS expressions; `refresh`
     # re-fetches a region with the page's current item values as binds

@@ -8,7 +8,7 @@
 //!
 //! Markup: `action "Close old tickets" calls run_query (query: "close_old")`.
 
-use crate::actions::{ActionContext, BoxFuture, ServerAction};
+use crate::actions::{clean_db_error, ActionContext, BoxFuture, ServerAction};
 
 pub struct RunQuery;
 
@@ -33,7 +33,7 @@ impl ServerAction for RunQuery {
             for name in &rq.bind_names {
                 query = query.bind(ctx.values.get(name).map(|s| s.as_str()));
             }
-            let result = query.execute(ctx.pool).await?;
+            let result = query.execute(ctx.pool).await.map_err(clean_db_error)?;
             Ok(format!("Done — {} row(s) affected.", result.rows_affected()))
         })
     }

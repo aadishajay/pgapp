@@ -160,6 +160,7 @@
   <div class="wrap">
     <h2>$ run the demo</h2>
     <div class="runbox">export DATABASE_URL=postgres://postgres:postgres@localhost:5432/pgapp
+psql "$DATABASE_URL" -f examples/helpdesk_functions.sql  <span class="c"># PL/pgSQL fns the call_function action calls</span>
 cargo run -- examples/helpdesk.pgapp                     <span class="c"># theme &amp; auth come from the file itself</span>
 psql "$DATABASE_URL" -f examples/helpdesk_seed.sql       <span class="c"># optional demo data</span></div>
     <p class="sig">pgapp &mdash; an Oracle APEX-inspired no/low-code framework built on Postgres, written in Rust.<br>
