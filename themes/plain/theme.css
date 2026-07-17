@@ -25,16 +25,22 @@ body {
   top: 100%;
   left: 0;
   min-width: 8rem;
-  margin: 0.25rem 0 0;
-  padding: 0.25rem;
+  /* No top margin: a gap here is empty space the pointer has to cross
+     between the link and the submenu, and :hover drops before it gets
+     there. padding-top keeps the same visual breathing room instead. */
+  margin: 0;
+  padding: 0.4rem 0.25rem 0.25rem;
   list-style: none;
   background: #fff;
   border: 1px solid #ddd;
 }
+.pgapp-navbar-item.pgapp-open > .pgapp-navbar-submenu,
 .pgapp-navbar-item:hover > .pgapp-navbar-submenu,
 .pgapp-navbar-item:focus-within > .pgapp-navbar-submenu { display: block; }
 .pgapp-navbar-submenu .pgapp-navbar-item { display: block; }
 .pgapp-navbar-submenu .pgapp-link { display: block; padding: 0.25rem; }
+.pgapp-navbar-row { display: inline-flex; align-items: center; }
+.pgapp-navbar-toggle { border: none; background: transparent; cursor: pointer; padding: 0.2rem 0.35rem; font-size: 0.65rem; color: #666; }
 
 .pgapp-nav-user { margin-left: auto; display: flex; align-items: center; gap: 0.6rem; }
 .pgapp-nav-user .pgapp-inline-form { margin-left: 0; }
@@ -118,3 +124,76 @@ body {
 .pgapp-view-public { font-size: 0.85rem; color: #555; }
 .pgapp-action { display: inline-block; margin-bottom: 1rem; }
 .pgapp-alert-success { color: #0a6; border: 1px solid #0a6; }
+
+/* Report header ("+ New" trigger next to the title) and table scroll
+   wrapper (narrow viewports scroll the table instead of blowing out the
+   page layout). */
+.pgapp-report-header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
+.pgapp-report-header .pgapp-subtitle { margin: 0; }
+.pgapp-table-wrap { overflow-x: auto; }
+
+/* A Report's edit/create Form renders as a floating, non-modal popup:
+   no dimming backdrop, the report stays visible and usable behind it. */
+.pgapp-form-floating {
+  position: fixed;
+  top: 6rem;
+  right: 1.5rem;
+  width: min(22rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 8rem);
+  overflow-y: auto;
+  z-index: 60;
+  background: #fff;
+  border: 1px solid #ccc;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.15);
+  padding: 0.9rem 1rem;
+}
+.pgapp-form-floating-close {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.7rem;
+  font-size: 1.3rem;
+  line-height: 1;
+  color: #666;
+  text-decoration: none;
+}
+.pgapp-form-floating-close:hover { color: #222; }
+
+/* Mobile: no per-app work required to get a usable narrow-viewport
+   layout — nav wraps, the report toolbar stacks, and the floating form
+   becomes a near-full-width sheet instead of a fixed-width corner card. */
+@media (max-width: 640px) {
+  body { padding: 0 0.75rem; margin: 1rem auto; }
+  .pgapp-nav { flex-wrap: wrap; row-gap: 0.5rem; }
+  .pgapp-navbar { flex-wrap: wrap; row-gap: 0.35rem; }
+  .pgapp-report-toolbar .pgapp-input[type="search"] { min-width: 0; flex: 1 1 100%; }
+  .pgapp-form-floating {
+    top: 1rem;
+    right: 0.75rem;
+    left: 0.75rem;
+    width: auto;
+    max-height: calc(100vh - 2rem);
+  }
+}
+
+/* Themed alert/confirm dialogs (runtime.js pgapp.alert/pgapp.confirm),
+   replacing the browser's native, unstyleable alert()/confirm(). */
+.pgapp-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 1rem;
+}
+.pgapp-dialog-box {
+  background: #fff;
+  border: 1px solid #ccc;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.2);
+  padding: 1rem 1.1rem;
+  max-width: 22rem;
+  width: 100%;
+}
+.pgapp-dialog-message { margin: 0 0 0.9rem; font-weight: 600; }
+.pgapp-dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }

@@ -147,11 +147,134 @@ window.pgapp = (function () {
     });
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", bindDynamicActions);
-  } else {
-    bindDynamicActions();
+  // Nested nav: a click-to-toggle affordance on the caret button, since
+  // CSS-only :hover has no equivalent on touch devices and a submenu is
+  // otherwise unreachable there.
+  function bindNavToggles() {
+    var toggles = document.querySelectorAll(".pgapp-navbar-toggle");
+    for (var i = 0; i < toggles.length; i++) {
+      toggles[i].addEventListener("click", function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        var li = this.closest(".pgapp-navbar-item");
+        if (!li) return;
+        var open = !li.classList.contains("pgapp-open");
+        var openItems = document.querySelectorAll(".pgapp-navbar-item.pgapp-open");
+        for (var j = 0; j < openItems.length; j++) {
+          if (openItems[j] !== li) openItems[j].classList.remove("pgapp-open");
+        }
+        li.classList.toggle("pgapp-open", open);
+        this.setAttribute("aria-expanded", open ? "true" : "false");
+      });
+    }
+    document.addEventListener("click", function (ev) {
+      if (ev.target.closest(".pgapp-navbar-item")) return;
+      var openItems = document.querySelectorAll(".pgapp-navbar-item.pgapp-open");
+      for (var j = 0; j < openItems.length; j++) openItems[j].classList.remove("pgapp-open");
+    });
   }
 
-  return { getItem: getItem, setItem: setItem, refreshRegion: refreshRegion };
+  // A small promise-based dialog used for both alert() and confirm()
+  // below — styled via the .pgapp-dialog-* theme classes instead of the
+  // browser's native (unstyleable, blocking) alert/confirm popups.
+  function showDialog(message, buttons) {
+    return new Promise(function (resolve) {
+      var overlay = document.createElement("div");
+      overlay.className = "pgapp-dialog-overlay";
+      var box = document.createElement("div");
+      box.className = "pgapp-dialog-box";
+      box.setAttribute("role", "alertdialog");
+      box.setAttribute("aria-modal", "true");
+      var p = document.createElement("p");
+      p.className = "pgapp-dialog-message";
+      p.textContent = message;
+      box.appendChild(p);
+      var actions = document.createElement("div");
+      actions.className = "pgapp-dialog-actions";
+      var focusTarget = null;
+      buttons.forEach(function (b) {
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "pgapp-btn " + b.cls;
+        btn.textContent = b.label;
+        btn.addEventListener("click", function () {
+          cleanup();
+          resolve(b.value);
+        });
+        actions.appendChild(btn);
+        if (b.primary) focusTarget = btn;
+      });
+      box.appendChild(actions);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+
+      function onKey(ev) {
+        if (ev.key === "Escape") {
+          cleanup();
+          resolve(false);
+        }
+      }
+      function cleanup() {
+        document.removeEventListener("keydown", onKey);
+        overlay.remove();
+      }
+      document.addEventListener("keydown", onKey);
+      if (focusTarget) focusTarget.focus();
+    });
+  }
+
+  // Drop-in, non-blocking replacements for window.alert/window.confirm —
+  // both return a Promise instead of blocking the thread, and render as
+  // a themed dialog instead of a browser-chrome popup.
+  function pgappAlert(message) {
+    return showDialog(message, [{ label: "OK", cls: "pgapp-btn-primary", value: true, primary: true }]);
+  }
+  function pgappConfirm(message) {
+    return showDialog(message, [
+      { label: "Cancel", cls: "pgapp-btn-secondary", value: false },
+      { label: "OK", cls: "pgapp-btn-destructive", value: true, primary: true },
+    ]);
+  }
+
+  // Delete/destructive forms carry `data-pgapp-confirm="<message>"`
+  // instead of a native onsubmit="return confirm(...)" — this intercepts
+  // the submit, shows the themed confirm dialog, and only actually
+  // submits once the user confirms.
+  function bindConfirmForms() {
+    var forms = document.querySelectorAll("form[data-pgapp-confirm]");
+    for (var i = 0; i < forms.length; i++) {
+      var form = forms[i];
+      if (form.__pgappConfirmBound) continue;
+      form.__pgappConfirmBound = true;
+      form.addEventListener("submit", function (ev) {
+        var f = ev.currentTarget;
+        if (f.__pgappConfirmed) return;
+        ev.preventDefault();
+        pgappConfirm(f.getAttribute("data-pgapp-confirm")).then(function (ok) {
+          if (!ok) return;
+          f.__pgappConfirmed = true;
+          if (f.requestSubmit) f.requestSubmit();
+          else f.submit();
+        });
+      });
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bindDynamicActions);
+    document.addEventListener("DOMContentLoaded", bindNavToggles);
+    document.addEventListener("DOMContentLoaded", bindConfirmForms);
+  } else {
+    bindDynamicActions();
+    bindNavToggles();
+    bindConfirmForms();
+  }
+
+  return {
+    getItem: getItem,
+    setItem: setItem,
+    refreshRegion: refreshRegion,
+    alert: pgappAlert,
+    confirm: pgappConfirm,
+  };
 })();

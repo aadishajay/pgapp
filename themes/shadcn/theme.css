@@ -103,8 +103,11 @@ body {
   top: 100%;
   left: 0;
   min-width: 10rem;
-  margin: 0.25rem 0 0;
-  padding: 0.25rem;
+  /* No top margin: a gap here is empty space the pointer has to cross
+     between the link and the submenu, and :hover drops before it gets
+     there. padding-top keeps the same visual breathing room instead. */
+  margin: 0;
+  padding: 0.375rem 0.25rem 0.25rem;
   list-style: none;
   background: hsl(var(--card));
   border: 1px solid hsl(var(--border));
@@ -112,6 +115,7 @@ body {
   box-shadow: 0 4px 12px rgb(0 0 0 / 0.08);
   z-index: 10;
 }
+.pgapp-navbar-item.pgapp-open > .pgapp-navbar-submenu,
 .pgapp-navbar-item:hover > .pgapp-navbar-submenu,
 .pgapp-navbar-item:focus-within > .pgapp-navbar-submenu {
   display: block;
@@ -128,6 +132,16 @@ body {
   background: hsl(var(--accent));
   text-decoration: none;
 }
+.pgapp-navbar-row { display: inline-flex; align-items: center; }
+.pgapp-navbar-toggle {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.65rem;
+  color: hsl(var(--muted-foreground));
+}
+.pgapp-navbar-toggle:hover { color: hsl(var(--foreground)); }
 
 /* Signed-in user corner: pushed to the right end of the nav. */
 .pgapp-nav-user { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; }
@@ -483,3 +497,81 @@ a.pgapp-link:has(.pgapp-icon):hover .pgapp-icon {
 .pgapp-view-public { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; color: hsl(var(--muted-foreground)); }
 .pgapp-action { display: inline-block; margin-bottom: 1.25rem; }
 .pgapp-alert-success { background: hsl(160 60% 40% / 0.1); color: hsl(160 70% 30%); border-color: hsl(160 60% 40% / 0.35); }
+
+/* Report header ("+ New" trigger next to the title) and table scroll
+   wrapper (narrow viewports scroll the table instead of blowing out the
+   page layout). */
+.pgapp-report-header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
+.pgapp-report-header .pgapp-subtitle { margin: 0; }
+.pgapp-table-wrap { overflow-x: auto; }
+
+/* A Report's edit/create Form renders as a floating, non-modal popup:
+   no dimming backdrop, the report stays visible and usable behind it. */
+.pgapp-form-floating {
+  position: fixed;
+  top: 6rem;
+  right: 1.5rem;
+  width: min(24rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 8rem);
+  overflow-y: auto;
+  z-index: 60;
+  /* .pgapp-form-panel has no card look of its own in this theme (it
+     normally just sits in page flow), but floating over a report needs
+     one — otherwise its content visually merges with the table below. */
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.15);
+  padding: 1.25rem 1.5rem;
+}
+.pgapp-form-floating-close {
+  position: absolute;
+  top: 0.7rem;
+  right: 0.9rem;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: hsl(var(--muted-foreground));
+  text-decoration: none;
+}
+.pgapp-form-floating-close:hover { color: hsl(var(--foreground)); }
+
+/* Mobile: no per-app work required to get a usable narrow-viewport
+   layout — nav wraps, the report toolbar stacks, and the floating form
+   becomes a near-full-width sheet instead of a fixed-width corner card. */
+@media (max-width: 640px) {
+  body { padding: 0 0.85rem; margin: 1.25rem auto; }
+  .pgapp-nav { flex-wrap: wrap; row-gap: 0.5rem; }
+  .pgapp-navbar { flex-wrap: wrap; row-gap: 0.35rem; }
+  .pgapp-report-toolbar .pgapp-input[type="search"] { min-width: 0; flex: 1 1 100%; }
+  .pgapp-form-floating {
+    top: 1rem;
+    right: 0.75rem;
+    left: 0.75rem;
+    width: auto;
+    max-height: calc(100vh - 2rem);
+  }
+}
+
+/* Themed alert/confirm dialogs (runtime.js pgapp.alert/pgapp.confirm),
+   replacing the browser's native, unstyleable alert()/confirm(). */
+.pgapp-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: hsl(0 0% 0% / 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 1rem;
+}
+.pgapp-dialog-box {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.15);
+  padding: 1.25rem 1.4rem;
+  max-width: 24rem;
+  width: 100%;
+}
+.pgapp-dialog-message { margin: 0 0 1.1rem; color: hsl(var(--card-foreground)); font-weight: 500; }
+.pgapp-dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }

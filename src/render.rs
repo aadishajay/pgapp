@@ -48,7 +48,9 @@ fn nav_html(nodes: &[NavNode]) -> String {
 }
 
 fn nav_node_html(node: &NavNode) -> String {
+    let has_children = !node.children.is_empty();
     let mut html = String::from(r#"<li class="pgapp-navbar-item">"#);
+    html.push_str(r#"<span class="pgapp-navbar-row">"#);
     match &node.target_page {
         Some(target) => html.push_str(&format!(
             r#"<a class="pgapp-link" href="/{target}">{label}</a>"#,
@@ -60,7 +62,17 @@ fn nav_node_html(node: &NavNode) -> String {
             escape(&node.label)
         )),
     }
-    if !node.children.is_empty() {
+    if has_children {
+        // A dedicated toggle, not the label/link itself: on touch
+        // devices there's no hover, so runtime.js binds a click on this
+        // button to show/hide the submenu without stealing clicks from
+        // a parent that's also a real link.
+        html.push_str(
+            r#"<button type="button" class="pgapp-navbar-toggle" aria-expanded="false" aria-label="Show submenu">&#9662;</button>"#,
+        );
+    }
+    html.push_str("</span>");
+    if has_children {
         html.push_str(r#"<ul class="pgapp-navbar-submenu">"#);
         for child in &node.children {
             html.push_str(&nav_node_html(child));
@@ -98,7 +110,7 @@ pub fn region_html(label: &str, query: &str, regions: &RegionRows) -> String {
             let mut cols: Vec<&String> = rows[0].keys().collect();
             cols.sort();
 
-            html.push_str(r#"<table class="pgapp-table"><thead><tr>"#);
+            html.push_str(r#"<div class="pgapp-table-wrap"><table class="pgapp-table"><thead><tr>"#);
             for c in &cols {
                 html.push_str(&format!("<th>{}</th>", escape(c)));
             }
@@ -111,7 +123,7 @@ pub fn region_html(label: &str, query: &str, regions: &RegionRows) -> String {
                 }
                 html.push_str("</tr>");
             }
-            html.push_str("</tbody></table>");
+            html.push_str("</tbody></table></div>");
         }
         None => html.push_str(r#"<p class="pgapp-text">No results.</p>"#),
     }
@@ -291,6 +303,7 @@ fn layout(
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <link rel="stylesheet" href="/theme.css">
 {icons_stylesheet}
@@ -329,6 +342,7 @@ fn bare_layout(title: &str, body: &str) -> String {
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
 <link rel="stylesheet" href="/theme.css">
 </head>
@@ -401,13 +415,13 @@ pub fn users_page(
         ));
     }
 
-    body.push_str(r#"<div class="pgapp-report"><h2 class="pgapp-subtitle">Accounts</h2><table class="pgapp-table"><thead><tr><th>username</th><th>role</th><th></th></tr></thead><tbody>"#);
+    body.push_str(r#"<div class="pgapp-report"><h2 class="pgapp-subtitle">Accounts</h2><div class="pgapp-table-wrap"><table class="pgapp-table"><thead><tr><th>username</th><th>role</th><th></th></tr></thead><tbody>"#);
     for (id, username, role) in users {
         let action = if *id == current_user_id {
             r#"<span class="pgapp-text">(you)</span>"#.to_string()
         } else {
             format!(
-                r#"<form class="pgapp-inline-form" method="post" action="/users/{id}/delete" onsubmit="return confirm('Delete this account?')"><button class="pgapp-btn pgapp-btn-destructive" type="submit" title="Delete">{}</button></form>"#,
+                r#"<form class="pgapp-inline-form" method="post" action="/users/{id}/delete" data-pgapp-confirm="Delete this account?"><button class="pgapp-btn pgapp-btn-destructive" type="submit" title="Delete">{}</button></form>"#,
                 icons.render("delete"),
             )
         };
@@ -417,7 +431,7 @@ pub fn users_page(
             escape(role),
         ));
     }
-    body.push_str("</tbody></table></div>");
+    body.push_str("</tbody></table></div></div>");
 
     body.push_str(
         r#"<div class="pgapp-form-panel"><h2 class="pgapp-subtitle">Add user</h2>
@@ -528,12 +542,22 @@ pub fn report_html(
     icons: &Icons,
     extras: &ReportExtras,
 ) -> String {
-    let mut body = format!(r#"<div class="pgapp-report"><h2 class="pgapp-subtitle">{}</h2>"#, escape(title));
+    let mut body = format!(r#"<div class="pgapp-report"><div class="pgapp-report-header"><h2 class="pgapp-subtitle">{}</h2>"#, escape(title));
+    if let Some(form_idx) = sibling_form_idx {
+        body.push_str(&format!(
+            r#"<a class="pgapp-link pgapp-btn pgapp-btn-primary" href="/{page}?new_{form_idx}=1#pgapp-c{idx}">+ New</a>"#,
+            page = escape(page_name),
+        ));
+    }
+    body.push_str("</div>");
 
     // Search toolbar: a GET form back to the page, so filters live in
-    // the URL (shareable, and exactly what a saved view bookmarks).
+    // the URL (shareable, and exactly what a saved view bookmarks). The
+    // `#pgapp-c{idx}` fragment on the action survives a GET submission
+    // (only the query is replaced), so Apply/Clear land back on this
+    // report instead of resetting scroll to the page top.
     body.push_str(&format!(
-        r#"<form class="pgapp-report-toolbar" method="get" action="/{page}">
+        r#"<form class="pgapp-report-toolbar" method="get" action="/{page}#pgapp-c{idx}">
 <input class="pgapp-input" type="search" name="r{idx}_q" value="{q}" placeholder="Search all columns">
 <select class="pgapp-select" name="r{idx}_col"><option value="">column&hellip;</option>"#,
         page = escape(page_name),
@@ -551,7 +575,7 @@ pub fn report_html(
         r#"</select>
 <input class="pgapp-input" type="text" name="r{idx}_val" value="{val}" placeholder="contains&hellip;">
 <button class="pgapp-btn pgapp-btn-secondary" type="submit">Apply</button>
-<a class="pgapp-link" href="/{page}">Clear</a>
+<a class="pgapp-link" href="/{page}#pgapp-c{idx}">Clear</a>
 </form>"#,
         idx = idx,
         val = escape(&extras.fval),
@@ -593,7 +617,7 @@ pub fn report_html(
         val = escape(&extras.fval),
     ));
 
-    body.push_str(r#"<table class="pgapp-table"><thead><tr>"#);
+    body.push_str(r#"<div class="pgapp-table-wrap"><table class="pgapp-table"><thead><tr>"#);
     for col in columns {
         body.push_str(&format!("<th>{}</th>", escape(col)));
     }
@@ -623,8 +647,8 @@ pub fn report_html(
         if let Some(form_idx) = sibling_form_idx {
             body.push_str(&format!(
                 r#"<td class="pgapp-row-actions">
-<a class="pgapp-link" href="/{page}?edit_{form_idx}={id}" title="Edit">{edit_icon}</a>
-<form class="pgapp-inline-form" method="post" action="/{page}/c/{form_idx}/delete/{id}" onsubmit="return confirm('Delete this row?')">
+<a class="pgapp-link" href="/{page}?edit_{form_idx}={id}#pgapp-c{idx}" title="Edit">{edit_icon}</a>
+<form class="pgapp-inline-form" method="post" action="/{page}/c/{form_idx}/delete/{id}" data-pgapp-confirm="Delete this row?">
 <button class="pgapp-btn pgapp-btn-destructive" type="submit" title="Delete">{delete_icon}</button>
 </form>
 </td>"#,
@@ -637,7 +661,7 @@ pub fn report_html(
         }
         body.push_str("</tr>");
     }
-    body.push_str("</tbody></table>");
+    body.push_str("</tbody></table></div>");
 
     if prev_href.is_some() || next_href.is_some() {
         body.push_str(r#"<div class="pgapp-pagination">"#);
@@ -663,7 +687,11 @@ pub fn report_html(
 }
 
 /// A `Form` component: blank (create mode) when `edit_id` is `None`,
-/// pre-filled with `row` and carrying a Delete button when `Some`.
+/// pre-filled with `row` and carrying a Delete button when `Some`. When
+/// `floating` is true (a Report's edit/create companion), it renders as
+/// a fixed-position popup rather than a block sitting in page flow — see
+/// `.pgapp-form-floating` in the theme CSS — with a close control going
+/// back to `close_href` instead of a plain page-top navigation.
 #[allow(clippy::too_many_arguments)]
 pub fn form_html(
     page_name: &str,
@@ -676,8 +704,22 @@ pub fn form_html(
     resolved_choices: &HashMap<String, Vec<(String, String)>>,
     item_types: &HashMap<String, FieldItem>,
     registry: &item_types::Registry,
+    floating: bool,
+    close_href: &str,
 ) -> String {
-    let mut body = format!(r#"<div class="pgapp-form-panel"><h2 class="pgapp-subtitle">{}</h2>"#, escape(title));
+    let panel_class = if floating {
+        "pgapp-form-panel pgapp-form-floating"
+    } else {
+        "pgapp-form-panel"
+    };
+    let mut body = format!(r#"<div class="{panel_class}">"#);
+    if floating {
+        body.push_str(&format!(
+            r#"<a class="pgapp-form-floating-close" href="{href}" title="Close" aria-label="Close">&times;</a>"#,
+            href = escape(close_href),
+        ));
+    }
+    body.push_str(&format!(r#"<h2 class="pgapp-subtitle">{}</h2>"#, escape(title)));
 
     let action = match edit_id {
         Some(id) => format!("/{}/c/{idx}/update/{}", escape(page_name), escape(id)),
@@ -695,13 +737,15 @@ pub fn form_html(
 
     if let Some(id) = edit_id {
         body.push_str(&format!(
-            r#"<form class="pgapp-inline-form" method="post" action="/{page}/c/{idx}/delete/{id}" onsubmit="return confirm('Delete this row?')">
-<button class="pgapp-btn pgapp-btn-destructive" type="submit">Delete</button></form>
-<a class="pgapp-link" href="/{page}">Cancel</a>"#,
+            r#"<form class="pgapp-inline-form" method="post" action="/{page}/c/{idx}/delete/{id}" data-pgapp-confirm="Delete this row?">
+<button class="pgapp-btn pgapp-btn-destructive" type="submit">Delete</button></form>"#,
             page = escape(page_name),
             idx = idx,
             id = escape(id),
         ));
+    }
+    if floating || edit_id.is_some() {
+        body.push_str(&format!(r#"<a class="pgapp-link" href="{}">Cancel</a>"#, escape(close_href)));
     }
 
     body.push_str("</div>");
@@ -743,7 +787,7 @@ pub fn editable_table_html(
         }
         body.push_str(&format!(
             r#"<button class="pgapp-btn pgapp-btn-primary" type="submit" title="Save">{save_icon}</button></form>
-<form class="pgapp-inline-form" method="post" action="/{page}/c/{idx}/delete/{id}" onsubmit="return confirm('Delete this row?')">
+<form class="pgapp-inline-form" method="post" action="/{page}/c/{idx}/delete/{id}" data-pgapp-confirm="Delete this row?">
 <button class="pgapp-btn pgapp-btn-destructive" type="submit" title="Delete">{delete_icon}</button></form>"#,
             save_icon = icons.render("edit"),
             delete_icon = icons.render("delete"),

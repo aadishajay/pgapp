@@ -590,6 +590,61 @@ checkbox, a radio group, or a popup LOV's hidden input. The popup LOV's
 the DOM directly — capturing/setting an item's value by a method call is
 the point, so any future custom action code has one consistent API.
 
+It also owns three UI behaviors that are deliberately *not* left to the
+browser's native, unstyleable dialogs:
+
+- `pgapp.alert(message)` / `pgapp.confirm(message)` — promise-based, and
+  rendered as a themed `.pgapp-dialog-*` overlay instead of
+  `window.alert`/`window.confirm`. Any `<form data-pgapp-confirm="...">`
+  (used by every delete button) is intercepted automatically: submit is
+  paused, the dialog shown, and the form actually submits only once the
+  user confirms.
+- Dynamic actions' `refresh` op and the nested-nav click-toggle (below).
+
+Since it's a database row rather than a static asset, editing it live
+only takes effect for *new* sessions of an app whose sync already ran —
+delete the app's row from `pgapp_meta.app_runtime_js` and restart to pick
+up a new built-in default after a `src/runtime.js` change.
+
+## Report edit/create popup
+
+A `Form` that's a `Report`'s edit/create companion (same entity, same
+page) doesn't render as a block sitting in page flow below the table —
+that pushes the table down and reappears on every load even when nobody
+asked to edit anything. Instead:
+
+- The report gets a **"+ New"** button next to its title.
+- The form renders only when its `edit_<idx>=<id>` or `new_<idx>=1` query
+  flag is present, as a `position: fixed` **non-modal** popup
+  (`.pgapp-form-floating`) — no dimming backdrop, so the report stays
+  visible and usable behind it. A `×` in the corner (and a "Cancel" link)
+  close it.
+- A standalone `Form` with no sibling `Report` on the page is unaffected
+  — it keeps rendering inline, since there's no table for it to sit
+  awkwardly below.
+- Every mutating action (save, delete, run a page action, apply a report
+  filter, save/delete a view) redirects to `#pgapp-c<idx>` — a stable
+  per-component anchor — instead of the bare page URL, so the browser
+  lands back near the component you were just looking at instead of
+  resetting scroll to the top.
+
+## Mobile
+
+No per-app work is required for a usable narrow-viewport layout: a
+`<meta name="viewport">` tag, tables wrapped in a horizontally-scrolling
+container instead of blowing out the page width, and each shipped theme
+carries the same `@media (max-width: 640px)` rules (nav wraps, the
+report toolbar stacks, the floating form becomes a near-full-width
+sheet). A custom theme only needs to add its own rules if it wants
+something other than this default behavior.
+
+Nested nav menus (multi-level `nav { ... }` chrome) also gained a
+click-to-toggle caret button next to any item with children, bound by
+`runtime.js`. The old hover-only behavior had two problems: no
+equivalent on touch devices at all, and a hover gap between the parent
+link and the submenu that could close the menu before a cursor reached
+it. The caret works with both mouse and touch; hovering still works too.
+
 ## Architecture
 
 ```

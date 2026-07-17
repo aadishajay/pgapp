@@ -119,6 +119,25 @@ fn sibling_form_idx(page: &RuntimePage, entity_name: &str) -> Option<usize> {
         .position(|c| matches!(c, RuntimeComponent::Form { entity, .. } if entity.name == entity_name))
 }
 
+/// The reverse of `sibling_form_idx`: the `Report` (if any) that a `Form`
+/// is the edit/create popup for.
+fn companion_report_idx(page: &RuntimePage, entity_name: &str) -> Option<usize> {
+    page.components
+        .iter()
+        .position(|c| matches!(c, RuntimeComponent::Report { entity, .. } if entity.name == entity_name))
+}
+
+/// Where a redirect after a component action should scroll back to: a
+/// popup Form's own container disappears once its `edit_{idx}`/`new_{idx}`
+/// query param is gone, so its companion Report (if any) is what the user
+/// actually wants to land back on; anything else anchors to itself.
+fn redirect_anchor(page: &RuntimePage, idx: usize) -> usize {
+    match page.components.get(idx) {
+        Some(RuntimeComponent::Form { entity, .. }) => companion_report_idx(page, &entity.name).unwrap_or(idx),
+        _ => idx,
+    }
+}
+
 /// All entity columns, cast to text, so the generic layer only ever deals
 /// with strings regardless of the underlying Postgres type.
 fn select_columns(entity: &RuntimeEntity) -> String {
@@ -539,7 +558,22 @@ async fn render_component(
         }
 
         RuntimeComponent::Form { title, entity, fields, item_types } => {
+            // A Form that's a Report's edit/create companion renders as a
+            // floating popup instead of a block sitting inline below the
+            // table: closed (nothing rendered) unless its edit_{idx}/
+            // new_{idx} query flag is present. A standalone Form (no
+            // sibling Report) keeps the old always-visible behavior.
+            let report_idx = companion_report_idx(page, &entity.name);
+            let floating = report_idx.is_some();
+            let close_href = match report_idx {
+                Some(ridx) => format!("/{page_name}#pgapp-c{ridx}"),
+                None => format!("/{page_name}"),
+            };
             let edit_param = format!("edit_{idx}");
+            let new_param = format!("new_{idx}");
+            if floating && !query.contains_key(&edit_param) && !query.contains_key(&new_param) {
+                return Ok(String::new());
+            }
             match query.get(&edit_param) {
                 Some(id) => {
                     let row = fetch_row(&state.pool, entity, id)
@@ -547,13 +581,19 @@ async fn render_component(
                         .ok_or_else(|| anyhow::anyhow!("row '{id}' not found"))?;
                     let ctx = bind_context(query, Some(&row));
                     let choices = resolve_field_choices(&state.pool, &state.app, page, item_types, &ctx).await?;
-                    Ok(render::form_html(page_name, idx, title, fields, entity, &row, Some(id), &choices, item_types, &state.item_types))
+                    Ok(render::form_html(
+                        page_name, idx, title, fields, entity, &row, Some(id), &choices, item_types, &state.item_types,
+                        floating, &close_href,
+                    ))
                 }
                 None => {
                     let ctx = bind_context(query, None);
                     let choices = resolve_field_choices(&state.pool, &state.app, page, item_types, &ctx).await?;
                     let empty = BTreeMap::new();
-                    Ok(render::form_html(page_name, idx, title, fields, entity, &empty, None, &choices, item_types, &state.item_types))
+                    Ok(render::form_html(
+                        page_name, idx, title, fields, entity, &empty, None, &choices, item_types, &state.item_types,
+                        floating, &close_href,
+                    ))
                 }
             }
         }
@@ -645,11 +685,15 @@ async fn show(
 
     let mut body = String::new();
     for (idx, component) in page.components.iter().enumerate() {
-        body.push_str(
-            &render_component(&state, &page_name, page, idx, component, &query, &regions, &auth_ctx)
-                .await
-                .map_err(err_response)?,
-        );
+        let html = render_component(&state, &page_name, page, idx, component, &query, &regions, &auth_ctx)
+            .await
+            .map_err(err_response)?;
+        // A stable per-component anchor: mutating actions (save/delete,
+        // running an action, applying a filter) redirect back to
+        // `#pgapp-c{idx}` instead of the bare page, so the browser lands
+        // near the component the user was just looking at rather than
+        // resetting scroll to the top.
+        body.push_str(&format!(r#"<div id="pgapp-c{idx}">{html}</div>"#));
     }
 
     // All the page's dynamic actions, as one JSON blob the runtime.js
@@ -751,9 +795,10 @@ async fn run_action(
         })
         .await;
 
+    let anchor = redirect_anchor(page, idx);
     match outcome {
-        Ok(msg) => Ok(Redirect::to(&format!("/{page_name}?notice={}", url_encode(&msg))).into_response()),
-        Err(e) => Ok(Redirect::to(&format!("/{page_name}?error={}", url_encode(&e.to_string()))).into_response()),
+        Ok(msg) => Ok(Redirect::to(&format!("/{page_name}?notice={}#pgapp-c{anchor}", url_encode(&msg))).into_response()),
+        Err(e) => Ok(Redirect::to(&format!("/{page_name}?error={}#pgapp-c{anchor}", url_encode(&e.to_string()))).into_response()),
     }
 }
 
@@ -775,7 +820,7 @@ async fn save_view(
     let name = values.get("name").map(|s| s.trim()).unwrap_or_default();
     if name.is_empty() {
         return Ok(Redirect::to(&format!(
-            "/{page_name}?error={}",
+            "/{page_name}?error={}#pgapp-c{idx}",
             url_encode("A saved view needs a name.")
         ))
         .into_response());
@@ -806,13 +851,13 @@ async fn save_view(
     .await
     .map_err(|e| err_response(e.into()))?;
 
-    Ok(Redirect::to(&format!("/{page_name}?notice={}", url_encode(&format!("View '{name}' saved.")))).into_response())
+    Ok(Redirect::to(&format!("/{page_name}?notice={}#pgapp-c{idx}", url_encode(&format!("View '{name}' saved.")))).into_response())
 }
 
 async fn delete_view(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
-    Path((page_name, _idx, view_id)): Path<(String, usize, i32)>,
+    Path((page_name, idx, view_id)): Path<(String, usize, i32)>,
 ) -> Result<Response, AppError> {
     let page = page_or_404(&state.app, &page_name)?;
     auth::authorize(&state, page.required_role.as_deref(), &auth_ctx)?;
@@ -825,7 +870,7 @@ async fn delete_view(
             .await
             .map_err(|e| err_response(e.into()))?;
     let Some(owner) = owner else {
-        return Ok(Redirect::to(&format!("/{page_name}")).into_response());
+        return Ok(Redirect::to(&format!("/{page_name}#pgapp-c{idx}")).into_response());
     };
 
     let allowed = !state.app.auth_enabled
@@ -840,7 +885,7 @@ async fn delete_view(
         .execute(&state.pool)
         .await
         .map_err(|e| err_response(e.into()))?;
-    Ok(Redirect::to(&format!("/{page_name}")).into_response())
+    Ok(Redirect::to(&format!("/{page_name}#pgapp-c{idx}")).into_response())
 }
 
 async fn create(
@@ -870,9 +915,15 @@ async fn create(
                 .execute(&state.pool)
                 .await
                 .map_err(|e| (StatusCode::BAD_REQUEST, format!("failed to create row: {e}")))?;
-            Ok(Redirect::to(&format!("/{page_name}")).into_response())
+            Ok(Redirect::to(&format!("/{page_name}#pgapp-c{}", redirect_anchor(page, idx))).into_response())
         }
-        Err(e) => Ok(Redirect::to(&format!("/{page_name}?error={}", url_encode(&e.to_string()))).into_response()),
+        // Reopen the popup in create mode (via new_{idx}) so the error is
+        // visible instead of silently closing.
+        Err(e) => Ok(Redirect::to(&format!(
+            "/{page_name}?error={}&new_{idx}=1#pgapp-c{idx}",
+            url_encode(&e.to_string())
+        ))
+        .into_response()),
     }
 }
 
@@ -909,17 +960,19 @@ async fn update(
                 .execute(&state.pool)
                 .await
                 .map_err(|e| (StatusCode::BAD_REQUEST, format!("failed to update row: {e}")))?;
-            Ok(Redirect::to(&format!("/{page_name}")).into_response())
+            Ok(Redirect::to(&format!("/{page_name}#pgapp-c{}", redirect_anchor(page, idx))).into_response())
         }
         Err(e) => {
             // A Form component re-enters edit mode on error (so the
             // user doesn't lose their place); an EditableTable has no
-            // separate edit mode to return to.
+            // separate edit mode to return to. The anchor stays on the
+            // form's own idx (not its companion report) since that's
+            // where it's reopening.
             let extra = match component {
                 RuntimeComponent::Form { .. } => format!("&edit_{idx}={}", url_encode(&id)),
                 _ => String::new(),
             };
-            Ok(Redirect::to(&format!("/{page_name}?error={}{extra}", url_encode(&e.to_string()))).into_response())
+            Ok(Redirect::to(&format!("/{page_name}?error={}{extra}#pgapp-c{idx}", url_encode(&e.to_string()))).into_response())
         }
     }
 }
@@ -940,7 +993,7 @@ async fn delete(
         .execute(&state.pool)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("failed to delete row: {e}")))?;
-    Ok(Redirect::to(&format!("/{page_name}")).into_response())
+    Ok(Redirect::to(&format!("/{page_name}#pgapp-c{}", redirect_anchor(page, idx))).into_response())
 }
 
 /// Minimal JSON API, keyed by entity rather than page — a stand-in for
