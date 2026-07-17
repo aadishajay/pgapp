@@ -104,11 +104,14 @@ app "Helpdesk" {
       x: label
       y: value
     }
+    # attrs (...) sets a custom id/class/attribute on this one chart's
+    # wrapper tag, on top of the pgapp-chart class every chart already
+    # gets — see README "Per-component overrides: attrs (...)".
     chart "Tickets by status (share)" from query by_status {
       type: donut
       x: label
       y: value
-    }
+    } attrs (id: "status-donut", class: "pgapp-chart-tall", data_testid: "status-donut-chart")
     chart "New tickets per day" from query by_day {
       type: line
       x: label
@@ -120,7 +123,11 @@ app "Helpdesk" {
       y: value
     }
     region "Busiest agents" from query top_agents
-    region "Latest tickets" from query recent
+    # columns: narrows a region to a subset of its query's result
+    # columns (here dropping id/agent) instead of showing every one.
+    region "Latest tickets" from query recent {
+      columns: subject, status, priority
+    }
     report "Status summary (a query-backed entity)" of status_summary {
       columns: label, value
       page_size: 5

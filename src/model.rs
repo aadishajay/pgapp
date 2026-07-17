@@ -123,6 +123,27 @@ pub struct FieldItem {
 /// sync-time error, not a silently blank chart.
 pub const CHART_TYPES: &[&str] = &["bar", "line", "area", "pie", "donut", "scatter"];
 
+/// Optional `id`/`class`/extra-attribute overrides on a component,
+/// parsed from a trailing `attrs (id: "...", class: "...", ...)` suffix
+/// (see `markup::Parser::parse_html_attrs`) and spliced onto that
+/// component's outer wrapper tag at render time (`render::merged_class`/
+/// `render::extra_attrs`). `id`/`class` are reserved keys; any other
+/// key becomes a plain HTML attribute, with `_` rewritten to `-` so
+/// `data_foo: "bar"` renders as `data-foo="bar"` (the grammar's
+/// identifiers can't contain hyphens directly).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct HtmlAttrs {
+    pub id: Option<String>,
+    pub class: Option<String>,
+    pub attrs: Vec<(String, String)>,
+}
+
+impl HtmlAttrs {
+    pub fn is_empty(&self) -> bool {
+        self.id.is_none() && self.class.is_none() && self.attrs.is_empty()
+    }
+}
+
 /// One independently-rendered piece of a page, or of the app-wide
 /// header/footer chrome (which reuses the same component kinds, though
 /// in practice only `Text`/`Link`/`Region` make sense there — enforced
@@ -147,6 +168,7 @@ pub enum ComponentDef {
         source_query: Option<String>,
         link_column: Option<LinkColumn>,
         page_size: i64,
+        html: HtmlAttrs,
     },
     /// A create/edit form for one entity. Renders blank (create mode) by
     /// default; switches to edit mode for one row when the page is
@@ -157,6 +179,7 @@ pub enum ComponentDef {
         entity: String,
         fields: Vec<String>,
         item_types: HashMap<String, FieldItem>,
+        html: HtmlAttrs,
     },
     /// Every row rendered inline-editable (one `<form>` per row), plus
     /// an "add new" row form — no separate list/edit split.
@@ -165,6 +188,7 @@ pub enum ComponentDef {
         entity: String,
         columns: Vec<String>,
         item_types: HashMap<String, FieldItem>,
+        html: HtmlAttrs,
     },
     /// Renders `query`'s rows as a chart; `chart_type` is one of
     /// `CHART_TYPES`, `x`/`y` name the columns used for each axis (for
@@ -176,18 +200,28 @@ pub enum ComponentDef {
         chart_type: String,
         x: String,
         y: String,
+        html: HtmlAttrs,
     },
-    Text(String),
+    Text {
+        text: String,
+        html: HtmlAttrs,
+    },
     Link {
         label: String,
         target_page: String,
+        html: HtmlAttrs,
     },
     /// Renders a named query's rows as a plain (non-paginated) table —
     /// sugar for a small, fixed-shape `Report` without entity/pagination
-    /// machinery.
+    /// machinery. `columns` narrows the displayed columns to a subset
+    /// of the query's result columns, in the given order; empty means
+    /// "show every column the query returns" (unlike `Report`, where an
+    /// explicit list is always required).
     Region {
         label: String,
         query: String,
+        columns: Vec<String>,
+        html: HtmlAttrs,
     },
     /// A button that runs a server-side action module — a Rust component
     /// registered in `src/actions.rs` (pgapp's PL/SQL analog). `config`
@@ -196,15 +230,37 @@ pub enum ComponentDef {
         label: String,
         name: String,
         config: serde_json::Value,
+        html: HtmlAttrs,
     },
     /// A client-side dynamic action: `on <event> of <item> { ops }`.
     /// Not rendered as visible content — the page emits all of these as
-    /// one JSON blob that the DB-stored runtime.js dispatcher binds.
+    /// one JSON blob that the DB-stored runtime.js dispatcher binds, so
+    /// (unlike every other variant) it carries no `html` — there's no
+    /// wrapper tag to put attributes on.
     DynamicAction {
         event: String,
         item: String,
         ops: Vec<DaOp>,
     },
+}
+
+impl ComponentDef {
+    /// Overwrites this component's `html` in place from a trailing
+    /// `attrs (...)` suffix (see `markup::Parser::parse_component`). A
+    /// no-op on `DynamicAction`, which has no wrapper tag to attach to.
+    pub(crate) fn set_html(&mut self, new_html: HtmlAttrs) {
+        match self {
+            ComponentDef::Report { html, .. }
+            | ComponentDef::Form { html, .. }
+            | ComponentDef::EditableTable { html, .. }
+            | ComponentDef::Chart { html, .. }
+            | ComponentDef::Text { html, .. }
+            | ComponentDef::Link { html, .. }
+            | ComponentDef::Region { html, .. }
+            | ComponentDef::Action { html, .. } => *html = new_html,
+            ComponentDef::DynamicAction { .. } => {}
+        }
+    }
 }
 
 /// One operation inside a dynamic action.

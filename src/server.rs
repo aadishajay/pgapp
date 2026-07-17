@@ -35,7 +35,7 @@ use crate::html::url_encode;
 use crate::icons::Icons;
 use crate::item_types;
 use crate::meta::{self, RegionRows, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimePage};
-use crate::model::FieldItem;
+use crate::model::{FieldItem, HtmlAttrs};
 use crate::render;
 use crate::theme::Theme;
 use query_engine::{bind_context, resolve_field_choices, resolve_regions, run_named_query_page, run_named_query_rows};
@@ -517,28 +517,30 @@ async fn render_component(
     auth_ctx: &AuthCtx,
 ) -> anyhow::Result<String> {
     match component {
-        RuntimeComponent::Text(text) => Ok(render::text_html(text)),
-        RuntimeComponent::Link { label, target_page } => Ok(render::link_html(label, target_page)),
-        RuntimeComponent::Region { label, query: qname } => Ok(render::region_html(label, qname, regions)),
+        RuntimeComponent::Text { text, html } => Ok(render::text_html(text, html)),
+        RuntimeComponent::Link { label, target_page, html } => Ok(render::link_html(label, target_page, html)),
+        RuntimeComponent::Region { label, query: qname, columns, html } => {
+            Ok(render::region_html(label, qname, regions, columns, html))
+        }
 
         // A dynamic action renders nothing in the body — show() gathers
         // them all into one JSON script for the runtime.js dispatcher.
         RuntimeComponent::DynamicAction { .. } => Ok(String::new()),
 
-        RuntimeComponent::Action { label, name, .. } => {
-            Ok(render::action_html(page_name, idx, label, name))
+        RuntimeComponent::Action { label, name, html, .. } => {
+            Ok(render::action_html(page_name, idx, label, name, html))
         }
 
-        RuntimeComponent::Chart { title, query: qname, chart_type, x, y } => {
+        RuntimeComponent::Chart { title, query: qname, chart_type, x, y, html } => {
             let rq = page
                 .resolve_query(&data.app, qname)
                 .ok_or_else(|| anyhow::anyhow!("chart '{title}' references unknown query '{qname}'"))?;
             let ctx = bind_context(query, None);
             let rows = run_named_query_rows(&state.pool, rq, &ctx).await?;
-            Ok(render::chart_html(title, chart_type, x, y, &rows, &data.chart_lib))
+            Ok(render::chart_html(title, chart_type, x, y, &rows, &data.chart_lib, html))
         }
 
-        RuntimeComponent::Report { title, entity, columns, source_query, link_column, page_size } => {
+        RuntimeComponent::Report { title, entity, columns, source_query, link_column, page_size, html } => {
             let form_idx = sibling_form_idx(page, &entity.name);
             let p_after = format!("r{idx}_after");
             let p_before = format!("r{idx}_before");
@@ -610,10 +612,11 @@ async fn render_component(
                 form_idx,
                 &data.icons,
                 &extras,
+                html,
             ))
         }
 
-        RuntimeComponent::Form { title, entity, fields, item_types } => {
+        RuntimeComponent::Form { title, entity, fields, item_types, html } => {
             // A Form that's a Report's edit/create companion renders as a
             // floating popup instead of a block sitting inline below the
             // table: closed (nothing rendered) unless its edit_{idx}/
@@ -639,7 +642,7 @@ async fn render_component(
                     let choices = resolve_field_choices(&state.pool, &data.app, page, item_types, &ctx).await?;
                     Ok(render::form_html(
                         page_name, idx, title, fields, entity, &row, Some(id), &choices, item_types, &state.item_types,
-                        floating, &close_href,
+                        floating, &close_href, html,
                     ))
                 }
                 None => {
@@ -648,13 +651,13 @@ async fn render_component(
                     let empty = BTreeMap::new();
                     Ok(render::form_html(
                         page_name, idx, title, fields, entity, &empty, None, &choices, item_types, &state.item_types,
-                        floating, &close_href,
+                        floating, &close_href, html,
                     ))
                 }
             }
         }
 
-        RuntimeComponent::EditableTable { title, entity, columns, item_types } => {
+        RuntimeComponent::EditableTable { title, entity, columns, item_types, html } => {
             let ctx = bind_context(query, None);
             let choices = resolve_field_choices(&state.pool, &data.app, page, item_types, &ctx).await?;
             let rows = fetch_rows(&state.pool, entity).await?;
@@ -669,6 +672,7 @@ async fn render_component(
                 item_types,
                 &state.item_types,
                 &data.icons,
+                html,
             ))
         }
     }
@@ -801,18 +805,17 @@ async fn region_fragment(
     let ctx = bind_context(&params, None);
     let rows = run_named_query_rows(&state.pool, rq, &ctx).await.map_err(err_response)?;
 
-    let label = page
-        .components
-        .iter()
-        .find_map(|c| match c {
-            RuntimeComponent::Region { label, query } if *query == query_name => Some(label.clone()),
-            _ => None,
-        })
-        .unwrap_or_else(|| query_name.clone());
+    let region = page.components.iter().find_map(|c| match c {
+        RuntimeComponent::Region { label, query, columns, html } if *query == query_name => {
+            Some((label.clone(), columns.clone(), html.clone()))
+        }
+        _ => None,
+    });
+    let (label, columns, html) = region.unwrap_or_else(|| (query_name.clone(), Vec::new(), HtmlAttrs::default()));
 
     let mut regions = RegionRows::new();
     regions.insert(query_name.clone(), rows);
-    Ok(Html(render::region_html(&label, &query_name, &regions)))
+    Ok(Html(render::region_html(&label, &query_name, &regions, &columns, &html)))
 }
 
 /// Runs a page's server-side action module (`action ... calls <name>`)

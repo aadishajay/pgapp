@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use crate::actions;
 use crate::item_types::{self, Registry};
-use crate::model::{AppDef, ComponentDef, EntityDef, FieldDef, FieldItem, FieldType, QueryDef};
+use crate::model::{AppDef, ComponentDef, EntityDef, FieldDef, FieldItem, FieldType, HtmlAttrs, QueryDef};
 
 fn slug(s: &str) -> String {
     let mut out = String::new();
@@ -177,7 +177,7 @@ pub async fn sync_app(
             let known_query = |name: &str| {
                 page.queries.iter().any(|q| q.name == name) || app.queries.iter().any(|q| q.name == name)
             };
-            let (kind, config) = build_component_config(
+            let (kind, mut config) = build_component_config(
                 component,
                 app,
                 &entity_ids,
@@ -187,6 +187,7 @@ pub async fn sync_app(
                 &known_query,
                 &format!("page '{}'", page.name),
             )?;
+            merge_html_into_config(&mut config, component_html(component));
 
             sqlx::query(
                 "insert into pgapp_meta.components (app_id, page_id, slot, kind, ordinal, config)
@@ -315,22 +316,24 @@ async fn sync_chrome(
         .await?;
 
     for (ordinal, component) in components.iter().enumerate() {
-        let (kind, config) = match component {
-            ComponentDef::Text(text) => ("text", serde_json::json!({ "text": text })),
-            ComponentDef::Link { label, target_page } => {
+        let (kind, mut config) = match component {
+            ComponentDef::Text { text, .. } => ("text", serde_json::json!({ "text": text })),
+            ComponentDef::Link { label, target_page, .. } => {
                 if !page_ids.contains_key(target_page) {
                     anyhow::bail!("app {slot} links to unknown page '{target_page}'");
                 }
                 ("link", serde_json::json!({ "label": label, "target_page": target_page }))
             }
-            ComponentDef::Region { label, query } => {
-                ("region", serde_json::json!({ "label": label, "query": query }))
-            }
+            ComponentDef::Region { label, query, columns, .. } => (
+                "region",
+                serde_json::json!({ "label": label, "query": query, "columns": columns }),
+            ),
             other => anyhow::bail!(
                 "app {slot} may only contain text/link/region components, found {}",
                 component_kind_name(other)
             ),
         };
+        merge_html_into_config(&mut config, component_html(component));
 
         sqlx::query(
             "insert into pgapp_meta.components (app_id, page_id, slot, kind, ordinal, config)
@@ -354,12 +357,51 @@ fn component_kind_name(c: &ComponentDef) -> &'static str {
         ComponentDef::Form { .. } => "form",
         ComponentDef::EditableTable { .. } => "editable_table",
         ComponentDef::Chart { .. } => "chart",
-        ComponentDef::Text(_) => "text",
+        ComponentDef::Text { .. } => "text",
         ComponentDef::Link { .. } => "link",
         ComponentDef::Region { .. } => "region",
         ComponentDef::Action { .. } => "action",
         ComponentDef::DynamicAction { .. } => "dynamic_action",
     }
+}
+
+/// Every component (except `DynamicAction`, which has no wrapper tag)
+/// carries an optional `html` override — `id`/`class`/extra attributes
+/// from a trailing `attrs (...)` suffix in the markup. Reading it here,
+/// independent of `kind`, means neither `sync_chrome` nor
+/// `build_component_config`'s per-kind match has to plumb it through
+/// individually.
+fn component_html(c: &ComponentDef) -> &HtmlAttrs {
+    static EMPTY: HtmlAttrs = HtmlAttrs { id: None, class: None, attrs: Vec::new() };
+    match c {
+        ComponentDef::Report { html, .. }
+        | ComponentDef::Form { html, .. }
+        | ComponentDef::EditableTable { html, .. }
+        | ComponentDef::Chart { html, .. }
+        | ComponentDef::Text { html, .. }
+        | ComponentDef::Link { html, .. }
+        | ComponentDef::Region { html, .. }
+        | ComponentDef::Action { html, .. } => html,
+        ComponentDef::DynamicAction { .. } => &EMPTY,
+    }
+}
+
+/// Splices `html`'s `id`/`class`/extra attributes into `config` under a
+/// reserved `"html"` key — read back generically in `meta::load`,
+/// independent of `kind`, the same way it's written here.
+fn merge_html_into_config(config: &mut serde_json::Value, html: &HtmlAttrs) {
+    if html.is_empty() {
+        return;
+    }
+    let attrs_obj: serde_json::Map<String, serde_json::Value> =
+        html.attrs.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect();
+    config
+        .as_object_mut()
+        .expect("component config is always a JSON object")
+        .insert(
+            "html".to_string(),
+            serde_json::json!({ "id": html.id, "class": html.class, "attrs": attrs_obj }),
+        );
 }
 
 /// Resolves every field's item (kind + config), falling back to
@@ -425,6 +467,7 @@ fn build_component_config(
             source_query,
             link_column,
             page_size,
+            ..
         } => {
             if !entity_ids.contains_key(entity) {
                 anyhow::bail!("{owner_label} report '{title}' references unknown entity '{entity}'");
@@ -473,6 +516,7 @@ fn build_component_config(
             entity,
             fields,
             item_types,
+            ..
         } => {
             if !entity_ids.contains_key(entity) {
                 anyhow::bail!("{owner_label} form '{title}' references unknown entity '{entity}'");
@@ -506,6 +550,7 @@ fn build_component_config(
             entity,
             columns,
             item_types,
+            ..
         } => {
             if !entity_ids.contains_key(entity) {
                 anyhow::bail!(
@@ -542,6 +587,7 @@ fn build_component_config(
             chart_type,
             x,
             y,
+            ..
         } => {
             if !known_query(query) {
                 anyhow::bail!("{owner_label} chart '{title}' references unknown query '{query}'");
@@ -557,20 +603,20 @@ fn build_component_config(
                 }),
             ))
         }
-        ComponentDef::Text(text) => Ok(("text", serde_json::json!({ "text": text }))),
-        ComponentDef::Link { label, target_page } => {
+        ComponentDef::Text { text, .. } => Ok(("text", serde_json::json!({ "text": text }))),
+        ComponentDef::Link { label, target_page, .. } => {
             if !page_ids.contains_key(target_page) {
                 anyhow::bail!("{owner_label} links to unknown page '{target_page}'");
             }
             Ok(("link", serde_json::json!({ "label": label, "target_page": target_page })))
         }
-        ComponentDef::Region { label, query } => {
+        ComponentDef::Region { label, query, columns, .. } => {
             if !known_query(query) {
                 anyhow::bail!("{owner_label} region '{label}' references unknown query '{query}'");
             }
-            Ok(("region", serde_json::json!({ "label": label, "query": query })))
+            Ok(("region", serde_json::json!({ "label": label, "query": query, "columns": columns })))
         }
-        ComponentDef::Action { label, name, config } => {
+        ComponentDef::Action { label, name, config, .. } => {
             if !action_registry.contains_key(name.as_str()) {
                 let known: Vec<&str> = action_registry.keys().copied().collect();
                 anyhow::bail!(

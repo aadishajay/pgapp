@@ -331,6 +331,9 @@ a.pgapp-link:hover .pgapp-icon { color: var(--v-fuchsia); }
 .pgapp-region .pgapp-table { margin-bottom: 0; box-shadow: none; }
 .pgapp-chart-svg { width: 100%; height: auto; color: var(--v-violet); }
 .pgapp-chart canvas { max-width: 100%; }
+/* Demo of a per-instance override via markup's `attrs (class: "...")` —
+   see examples/helpdesk.pgapp's "Tickets by status (share)" chart. */
+.pgapp-chart-tall .pgapp-chart-svg { max-height: 340px; }
 
 .pgapp-alert { border-radius: var(--v-radius); padding: 0.8rem 1.1rem; margin-bottom: 1rem; font-size: 0.9rem; }
 .pgapp-alert-error { background: rgb(225 29 72 / 0.08); color: var(--v-rose); border: 1.5px solid rgb(225 29 72 / 0.3); }

@@ -10,7 +10,7 @@ use super::types::{
     wrap_to_jsonb, LinkColumn, NavNode, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimeField,
     RuntimePage, RuntimeQuery,
 };
-use crate::model::{FieldItem, FieldType};
+use crate::model::{FieldItem, FieldType, HtmlAttrs};
 
 /// One piece of a named query's SQL text, as split by `tokenize_binds`:
 /// either literal SQL or a `:name` bind marker.
@@ -340,6 +340,28 @@ fn json_str(v: &serde_json::Value, key: &str) -> String {
     v.get(key).and_then(|x| x.as_str()).unwrap_or_default().to_string()
 }
 
+/// Decodes the `"html"` key `meta::sync::merge_html_into_config` writes
+/// into every component's config, back into an [`HtmlAttrs`]. Missing
+/// (no `attrs (...)` in the markup) decodes to the all-`None`/empty
+/// default, same as a freshly-parsed component that never set one.
+fn decode_html_attrs(config: &serde_json::Value) -> HtmlAttrs {
+    let Some(html) = config.get("html") else {
+        return HtmlAttrs::default();
+    };
+    let attrs = html
+        .get("attrs")
+        .and_then(|v| v.as_object())
+        .into_iter()
+        .flatten()
+        .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+        .collect();
+    HtmlAttrs {
+        id: html.get("id").and_then(|v| v.as_str()).map(String::from),
+        class: html.get("class").and_then(|v| v.as_str()).map(String::from),
+        attrs,
+    }
+}
+
 fn decode_item_types(v: &serde_json::Value) -> HashMap<String, FieldItem> {
     v.as_object()
         .into_iter()
@@ -369,6 +391,7 @@ fn decode_component(
     config: serde_json::Value,
     entities: &HashMap<String, RuntimeEntity>,
 ) -> Result<RuntimeComponent> {
+    let html = decode_html_attrs(&config);
     match kind {
         "report" => {
             let entity = resolve_entity(entities, &json_str(&config, "entity"))?;
@@ -399,6 +422,7 @@ fn decode_component(
                 source_query: config.get("source_query").and_then(|v| v.as_str()).map(String::from),
                 link_column,
                 page_size: config.get("page_size").and_then(|v| v.as_i64()).unwrap_or(20),
+                html,
             })
         }
         "form" => Ok(RuntimeComponent::Form {
@@ -406,12 +430,14 @@ fn decode_component(
             entity: resolve_entity(entities, &json_str(&config, "entity"))?,
             fields: json_strings(&config["fields"]),
             item_types: decode_item_types(&config["item_types"]),
+            html,
         }),
         "editable_table" => Ok(RuntimeComponent::EditableTable {
             title: json_str(&config, "title"),
             entity: resolve_entity(entities, &json_str(&config, "entity"))?,
             columns: json_strings(&config["columns"]),
             item_types: decode_item_types(&config["item_types"]),
+            html,
         }),
         "chart" => Ok(RuntimeComponent::Chart {
             title: json_str(&config, "title"),
@@ -419,20 +445,25 @@ fn decode_component(
             chart_type: json_str(&config, "chart_type"),
             x: json_str(&config, "x"),
             y: json_str(&config, "y"),
+            html,
         }),
-        "text" => Ok(RuntimeComponent::Text(json_str(&config, "text"))),
+        "text" => Ok(RuntimeComponent::Text { text: json_str(&config, "text"), html }),
         "link" => Ok(RuntimeComponent::Link {
             label: json_str(&config, "label"),
             target_page: json_str(&config, "target_page"),
+            html,
         }),
         "region" => Ok(RuntimeComponent::Region {
             label: json_str(&config, "label"),
             query: json_str(&config, "query"),
+            columns: json_strings(&config["columns"]),
+            html,
         }),
         "action" => Ok(RuntimeComponent::Action {
             label: json_str(&config, "label"),
             name: json_str(&config, "name"),
             config: config.get("config").cloned().unwrap_or(serde_json::json!({})),
+            html,
         }),
         "dynamic_action" => Ok(RuntimeComponent::DynamicAction { config }),
         other => anyhow::bail!("unknown component kind '{other}' in pgapp_meta.components"),

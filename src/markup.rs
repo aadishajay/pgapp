@@ -32,7 +32,10 @@
 //!            | "set" Ident "to" String
 //!            | "refresh" Ident
 //!
-//! component := report | form | editable_table | chart | text | link | region | action
+//! component := (report | form | editable_table | chart | text | link | region | action) htmlattrs?
+//! htmlattrs := "attrs" "(" Ident ":" (String | Ident) ("," Ident ":" (String | Ident))* ")"
+//!            ("id"/"class" reserved; any other key -> a plain attribute,
+//!            its "_" rewritten to "-")
 //!
 //! action    := "action" String "calls" Ident itemconfig?
 //!
@@ -57,7 +60,7 @@
 //!
 //! text      := "text" String
 //! link      := "link" String "->" "page" Ident
-//! region    := "region" String "from" "query" Ident
+//! region    := "region" String "from" "query" Ident ( "{" "columns" ":" identlist "}" )?
 //!
 //! fielditem  := Ident itemconfig?
 //! itemconfig := "(" arglist ")" | "from" "query" Ident
@@ -109,8 +112,8 @@
 use anyhow::{bail, Context, Result};
 
 use crate::model::{
-    AppDef, ComponentDef, DaOp, EntityDef, FieldDef, FieldItem, FieldType, LinkColumn, NavItem,
-    PageDef, QueryDef, CHART_TYPES,
+    AppDef, ComponentDef, DaOp, EntityDef, FieldDef, FieldItem, FieldType, HtmlAttrs, LinkColumn,
+    NavItem, PageDef, QueryDef, CHART_TYPES,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -490,7 +493,20 @@ impl Parser {
         })
     }
 
+    /// Parses one component, then an optional trailing `attrs (...)`
+    /// suffix (see `parse_html_attrs`) shared by every kind — so a new
+    /// component variant never has to reimplement id/class/attribute
+    /// support itself.
     fn parse_component(&mut self) -> Result<ComponentDef> {
+        let mut def = self.parse_component_kind()?;
+        if self.at_keyword("attrs") {
+            self.advance()?;
+            def.set_html(self.parse_html_attrs()?);
+        }
+        Ok(def)
+    }
+
+    fn parse_component_kind(&mut self) -> Result<ComponentDef> {
         if self.at_keyword("report") {
             self.parse_report()
         } else if self.at_keyword("form") {
@@ -501,19 +517,47 @@ impl Parser {
             self.parse_chart()
         } else if self.at_keyword("text") {
             self.advance()?;
-            Ok(ComponentDef::Text(self.expect_string()?))
+            Ok(ComponentDef::Text {
+                text: self.expect_string()?,
+                html: HtmlAttrs::default(),
+            })
         } else if self.at_keyword("link") {
             self.advance()?;
             let label = self.expect_string()?;
             let target_page = self.parse_page_target()?;
-            Ok(ComponentDef::Link { label, target_page })
+            Ok(ComponentDef::Link {
+                label,
+                target_page,
+                html: HtmlAttrs::default(),
+            })
         } else if self.at_keyword("region") {
             self.advance()?;
             let label = self.expect_string()?;
             self.expect_keyword("from")?;
             self.expect_keyword("query")?;
             let query = self.expect_ident()?;
-            Ok(ComponentDef::Region { label, query })
+            let columns = if self.at_symbol('{') {
+                self.advance()?;
+                let mut columns = Vec::new();
+                while !self.at_symbol('}') {
+                    let prop = self.expect_ident()?;
+                    self.expect_symbol(':')?;
+                    match prop.as_str() {
+                        "columns" => columns = self.parse_ident_list()?,
+                        other => bail!("unknown region property '{other}' (line {})", self.cur_line()),
+                    }
+                }
+                self.expect_symbol('}')?;
+                columns
+            } else {
+                Vec::new()
+            };
+            Ok(ComponentDef::Region {
+                label,
+                query,
+                columns,
+                html: HtmlAttrs::default(),
+            })
         } else if self.at_keyword("action") {
             self.advance()?;
             let label = self.expect_string()?;
@@ -524,7 +568,12 @@ impl Parser {
             } else {
                 serde_json::json!({})
             };
-            Ok(ComponentDef::Action { label, name, config })
+            Ok(ComponentDef::Action {
+                label,
+                name,
+                config,
+                html: HtmlAttrs::default(),
+            })
         } else {
             bail!(
                 "expected a component ('report', 'form', 'editable_table', 'chart', 'text', \
@@ -533,6 +582,33 @@ impl Parser {
                 self.cur_line()
             );
         }
+    }
+
+    /// Parses `"(" Ident ":" value ("," Ident ":" value)* ")"` after the
+    /// `attrs` keyword. `id`/`class` are reserved; every other key
+    /// becomes a plain HTML attribute on the component's wrapper tag,
+    /// with `_` rewritten to `-` (identifiers can't contain hyphens
+    /// directly, so `data_foo: "bar"` renders as `data-foo="bar"`).
+    fn parse_html_attrs(&mut self) -> Result<HtmlAttrs> {
+        self.expect_symbol('(')?;
+        let mut html = HtmlAttrs::default();
+        loop {
+            let key = self.expect_ident()?;
+            self.expect_symbol(':')?;
+            let value = self.expect_config_value()?;
+            match key.as_str() {
+                "id" => html.id = Some(value),
+                "class" => html.class = Some(value),
+                other => html.attrs.push((other.replace('_', "-"), value)),
+            }
+            if self.at_symbol(',') {
+                self.advance()?;
+            } else {
+                break;
+            }
+        }
+        self.expect_symbol(')')?;
+        Ok(html)
     }
 
     /// Parses `"on" Ident "of" Ident "{" daop* "}"` — a client-side
@@ -633,6 +709,7 @@ impl Parser {
             source_query,
             link_column,
             page_size,
+            html: HtmlAttrs::default(),
         })
     }
 
@@ -665,6 +742,7 @@ impl Parser {
             entity,
             fields,
             item_types,
+            html: HtmlAttrs::default(),
         })
     }
 
@@ -697,6 +775,7 @@ impl Parser {
             entity,
             columns,
             item_types,
+            html: HtmlAttrs::default(),
         })
     }
 
@@ -739,6 +818,7 @@ impl Parser {
             chart_type,
             x,
             y,
+            html: HtmlAttrs::default(),
         })
     }
 
@@ -915,9 +995,9 @@ mod tests {
         assert_eq!(tasks.fields.len(), 8);
 
         assert_eq!(app.header.len(), 1);
-        assert!(matches!(&app.header[0], ComponentDef::Text(_)));
+        assert!(matches!(&app.header[0], ComponentDef::Text { .. }));
         assert_eq!(app.footer.len(), 2);
-        assert!(matches!(&app.footer[0], ComponentDef::Text(_)));
+        assert!(matches!(&app.footer[0], ComponentDef::Text { .. }));
         assert!(matches!(&app.footer[1], ComponentDef::Link { .. }));
 
         assert_eq!(app.queries.len(), 3);
@@ -1008,7 +1088,7 @@ mod tests {
         assert!(about_page
             .components
             .iter()
-            .any(|c| matches!(c, ComponentDef::Text(_))));
+            .any(|c| matches!(c, ComponentDef::Text { .. })));
         assert!(about_page
             .components
             .iter()
@@ -1184,7 +1264,7 @@ mod tests {
             .components
             .iter()
             .find_map(|c| match c {
-                ComponentDef::Action { label, name, config } => Some((label, name, config)),
+                ComponentDef::Action { label, name, config, .. } => Some((label, name, config)),
                 _ => None,
             })
             .unwrap();
@@ -1277,5 +1357,65 @@ mod tests {
         "#;
         let err = parse_app(src).unwrap_err().to_string();
         assert!(err.contains("unknown type 'bubble'"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn parses_trailing_attrs_suffix_on_any_component() {
+        let src = r#"
+            app "Demo" {
+                query q { sql: "select 1 as label, 2 as value" }
+                page "P" {
+                    text "hi" attrs (class: "lead", id: "intro", data_foo: "bar")
+                    region "R" from query q attrs (id: "sidebar")
+                }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+        let page = &app.pages[0];
+
+        let text_html = page
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Text { html, .. } => Some(html),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(text_html.class.as_deref(), Some("lead"));
+        assert_eq!(text_html.id.as_deref(), Some("intro"));
+        assert_eq!(text_html.attrs, vec![("data-foo".to_string(), "bar".to_string())]);
+
+        let region_html = page
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Region { html, .. } => Some(html),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(region_html.id.as_deref(), Some("sidebar"));
+        assert!(region_html.class.is_none());
+    }
+
+    #[test]
+    fn parses_region_columns_filter() {
+        let src = r#"
+            app "Demo" {
+                query q { sql: "select 1 as a, 2 as b, 3 as c" }
+                page "P" {
+                    region "R" from query q { columns: a, c }
+                }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+        let columns = app.pages[0]
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Region { columns, .. } => Some(columns),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(columns, &vec!["a".to_string(), "c".to_string()]);
     }
 }

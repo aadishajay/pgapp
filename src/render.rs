@@ -17,7 +17,7 @@ use crate::html::{escape, url_encode};
 use crate::icons::Icons;
 use crate::item_types::{self, RenderArgs};
 use crate::meta::{Chrome, LinkColumn, NavNode, RegionRows, RuntimeComponent, RuntimeEntity};
-use crate::model::FieldItem;
+use crate::model::{FieldItem, HtmlAttrs};
 use std::collections::{BTreeMap, HashMap};
 
 /// Extra `<link>`/`<script>` tags for user-supplied assets, if present —
@@ -83,52 +83,93 @@ fn nav_node_html(node: &NavNode) -> String {
     html
 }
 
-pub fn text_html(text: &str) -> String {
-    format!(r#"<p class="pgapp-text">{}</p>"#, escape(text))
+/// `class="pgapp-x extra"` — merges a component's own required
+/// wrapper class(es) with any user override from a trailing
+/// `attrs (class: "...")` suffix in the markup.
+fn merged_class(base: &str, html: &HtmlAttrs) -> String {
+    match &html.class {
+        Some(extra) => format!("{base} {extra}"),
+        None => base.to_string(),
+    }
 }
 
-pub fn link_html(label: &str, target_page: &str) -> String {
+/// `id="..." data-foo="bar"` — the id plus any extra (non-class/id)
+/// attributes from `attrs (...)`, ready to splice right after a
+/// wrapper tag's class attribute.
+fn extra_attrs(html: &HtmlAttrs) -> String {
+    let mut out = String::new();
+    if let Some(id) = &html.id {
+        out.push_str(&format!(r#" id="{}""#, escape(id)));
+    }
+    for (k, v) in &html.attrs {
+        out.push_str(&format!(r#" {}="{}""#, escape(k), escape(v)));
+    }
+    out
+}
+
+pub fn text_html(text: &str, html: &HtmlAttrs) -> String {
     format!(
-        r#"<p><a class="pgapp-link" href="/{target}">{label}</a></p>"#,
+        r#"<p class="{class}"{extra}>{text}</p>"#,
+        class = merged_class("pgapp-text", html),
+        extra = extra_attrs(html),
+        text = escape(text),
+    )
+}
+
+pub fn link_html(label: &str, target_page: &str, html: &HtmlAttrs) -> String {
+    format!(
+        r#"<p><a class="{class}" href="/{target}"{extra}>{label}</a></p>"#,
+        class = merged_class("pgapp-link", html),
+        extra = extra_attrs(html),
         target = escape(target_page),
         label = escape(label),
     )
 }
 
 /// Renders one `Region` component: a named query's (already-resolved)
-/// rows as a plain table, with column headers taken from the row keys.
-pub fn region_html(label: &str, query: &str, regions: &RegionRows) -> String {
+/// rows as a plain table. `columns` narrows/orders which of the row's
+/// keys are shown; empty shows every column, alphabetically (the only
+/// order available when it's not spelled out, since a query's result
+/// columns have no inherent display order).
+pub fn region_html(label: &str, query: &str, regions: &RegionRows, columns: &[String], html: &HtmlAttrs) -> String {
     // data-pgapp-region lets a dynamic action's `refresh` op find and
     // replace this container with a freshly fetched fragment.
-    let mut html = format!(
-        r#"<div class="pgapp-region" data-pgapp-region="{query}"><h3 class="pgapp-region-title">{label}</h3>"#,
+    let mut out = format!(
+        r#"<div class="{class}" data-pgapp-region="{query}"{extra}><h3 class="pgapp-region-title">{label}</h3>"#,
+        class = merged_class("pgapp-region", html),
+        extra = extra_attrs(html),
         query = escape(query),
         label = escape(label),
     );
     match regions.get(query).filter(|rows| !rows.is_empty()) {
         Some(rows) => {
-            let mut cols: Vec<&String> = rows[0].keys().collect();
-            cols.sort();
+            let cols: Vec<&String> = if columns.is_empty() {
+                let mut cols: Vec<&String> = rows[0].keys().collect();
+                cols.sort();
+                cols
+            } else {
+                columns.iter().collect()
+            };
 
-            html.push_str(r#"<div class="pgapp-table-wrap"><table class="pgapp-table"><thead><tr>"#);
+            out.push_str(r#"<div class="pgapp-table-wrap"><table class="pgapp-table"><thead><tr>"#);
             for c in &cols {
-                html.push_str(&format!("<th>{}</th>", escape(c)));
+                out.push_str(&format!("<th>{}</th>", escape(c)));
             }
-            html.push_str("</tr></thead><tbody>");
+            out.push_str("</tr></thead><tbody>");
             for row in rows {
-                html.push_str("<tr>");
+                out.push_str("<tr>");
                 for c in &cols {
                     let val = row.get(*c).and_then(|v| v.as_deref()).unwrap_or("");
-                    html.push_str(&format!("<td>{}</td>", escape(val)));
+                    out.push_str(&format!("<td>{}</td>", escape(val)));
                 }
-                html.push_str("</tr>");
+                out.push_str("</tr>");
             }
-            html.push_str("</tbody></table></div>");
+            out.push_str("</tbody></table></div>");
         }
-        None => html.push_str(r#"<p class="pgapp-text">No results.</p>"#),
+        None => out.push_str(r#"<p class="pgapp-text">No results.</p>"#),
     }
-    html.push_str("</div>");
-    html
+    out.push_str("</div>");
+    out
 }
 
 /// Renders a header/footer chrome list — restricted at sync time to
@@ -140,9 +181,13 @@ fn chrome_items_html(items: &[RuntimeComponent], regions: &RegionRows) -> String
     let mut html = String::from(r#"<div class="pgapp-items">"#);
     for item in items {
         match item {
-            RuntimeComponent::Text(text) => html.push_str(&text_html(text)),
-            RuntimeComponent::Link { label, target_page } => html.push_str(&link_html(label, target_page)),
-            RuntimeComponent::Region { label, query } => html.push_str(&region_html(label, query, regions)),
+            RuntimeComponent::Text { text, html: attrs } => html.push_str(&text_html(text, attrs)),
+            RuntimeComponent::Link { label, target_page, html: attrs } => {
+                html.push_str(&link_html(label, target_page, attrs))
+            }
+            RuntimeComponent::Region { label, query, columns, html: attrs } => {
+                html.push_str(&region_html(label, query, regions, columns, attrs))
+            }
             _ => {}
         }
     }
@@ -293,14 +338,16 @@ fn radial_chart_svg(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTr
 /// A dependency-free chart rendered straight to inline SVG — the
 /// built-in `PGAPP_CHART_LIB=inline` backend (see `src/chart_lib.rs`).
 /// No JS, no network fetch. Supports every type in `model::CHART_TYPES`.
-fn inline_svg_chart(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTreeMap<String, Option<String>>]) -> String {
+fn inline_svg_chart(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTreeMap<String, Option<String>>], html: &HtmlAttrs) -> String {
     let svg = match chart_type {
         "pie" | "donut" => radial_chart_svg(title, chart_type, x, y, rows),
         _ => cartesian_chart_svg(title, chart_type, x, y, rows),
     };
     format!(
-        r#"<div class="pgapp-chart"><h3 class="pgapp-region-title">{}</h3>{svg}</div>"#,
-        escape(title)
+        r#"<div class="{class}"{extra}><h3 class="pgapp-region-title">{title}</h3>{svg}</div>"#,
+        class = merged_class("pgapp-chart", html),
+        extra = extra_attrs(html),
+        title = escape(title),
     )
 }
 
@@ -308,7 +355,14 @@ fn inline_svg_chart(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTr
 /// `src/chart_lib.rs`): the library's JS (served at `/chart-lib.js`)
 /// reads this data and renders into the surrounding `.pgapp-chart` div
 /// however it likes.
-fn pluggable_chart_placeholder(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTreeMap<String, Option<String>>]) -> String {
+fn pluggable_chart_placeholder(
+    title: &str,
+    chart_type: &str,
+    x: &str,
+    y: &str,
+    rows: &[BTreeMap<String, Option<String>>],
+    html: &HtmlAttrs,
+) -> String {
     let json_rows: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
@@ -324,15 +378,26 @@ fn pluggable_chart_placeholder(title: &str, chart_type: &str, x: &str, y: &str, 
     // it early, regardless of the script's declared type.
     let safe_json = data.to_string().replace("</", "<\\/");
     format!(
-        r#"<div class="pgapp-chart"><h3 class="pgapp-region-title">{}</h3><script type="application/json" class="pgapp-chart-data">{safe_json}</script></div>"#,
-        escape(title)
+        r#"<div class="{class}"{extra}><h3 class="pgapp-region-title">{title}</h3><script type="application/json" class="pgapp-chart-data">{safe_json}</script></div>"#,
+        class = merged_class("pgapp-chart", html),
+        extra = extra_attrs(html),
+        title = escape(title),
     )
 }
 
-pub fn chart_html(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTreeMap<String, Option<String>>], chart_lib: &ChartLib) -> String {
+#[allow(clippy::too_many_arguments)]
+pub fn chart_html(
+    title: &str,
+    chart_type: &str,
+    x: &str,
+    y: &str,
+    rows: &[BTreeMap<String, Option<String>>],
+    chart_lib: &ChartLib,
+    html: &HtmlAttrs,
+) -> String {
     match &chart_lib.js_path {
-        None => inline_svg_chart(title, chart_type, x, y, rows),
-        Some(_) => pluggable_chart_placeholder(title, chart_type, x, y, rows),
+        None => inline_svg_chart(title, chart_type, x, y, rows, html),
+        Some(_) => pluggable_chart_placeholder(title, chart_type, x, y, rows, html),
     }
 }
 
@@ -635,9 +700,11 @@ fn input_for_field(
 
 /// A server-side action component: a button posting to the action's
 /// run route. The outcome comes back as a notice/error banner.
-pub fn action_html(page_name: &str, idx: usize, label: &str, module: &str) -> String {
+pub fn action_html(page_name: &str, idx: usize, label: &str, module: &str, html: &HtmlAttrs) -> String {
     format!(
-        r#"<form class="pgapp-action" method="post" action="/{page}/c/{idx}/run" title="runs the '{module}' module"><button class="pgapp-btn pgapp-btn-primary" type="submit">{label}</button></form>"#,
+        r#"<form class="{class}" method="post" action="/{page}/c/{idx}/run" title="runs the '{module}' module"{extra}><button class="pgapp-btn pgapp-btn-primary" type="submit">{label}</button></form>"#,
+        class = merged_class("pgapp-action", html),
+        extra = extra_attrs(html),
         page = escape(page_name),
         idx = idx,
         module = escape(module),
@@ -688,8 +755,14 @@ pub fn report_html(
     sibling_form_idx: Option<usize>,
     icons: &Icons,
     extras: &ReportExtras,
+    html: &HtmlAttrs,
 ) -> String {
-    let mut body = format!(r#"<div class="pgapp-report"><div class="pgapp-report-header"><h2 class="pgapp-subtitle">{}</h2>"#, escape(title));
+    let mut body = format!(
+        r#"<div class="{class}"{extra}><div class="pgapp-report-header"><h2 class="pgapp-subtitle">{title}</h2>"#,
+        class = merged_class("pgapp-report", html),
+        extra = extra_attrs(html),
+        title = escape(title),
+    );
     if let Some(form_idx) = sibling_form_idx {
         body.push_str(&format!(
             r#"<a class="pgapp-link pgapp-btn pgapp-btn-primary" href="/{page}?new_{form_idx}=1#pgapp-c{idx}">+ New</a>"#,
@@ -853,13 +926,18 @@ pub fn form_html(
     registry: &item_types::Registry,
     floating: bool,
     close_href: &str,
+    html: &HtmlAttrs,
 ) -> String {
     let panel_class = if floating {
         "pgapp-form-panel pgapp-form-floating"
     } else {
         "pgapp-form-panel"
     };
-    let mut body = format!(r#"<div class="{panel_class}">"#);
+    let mut body = format!(
+        r#"<div class="{class}"{extra}>"#,
+        class = merged_class(panel_class, html),
+        extra = extra_attrs(html),
+    );
     if floating {
         body.push_str(&format!(
             r#"<a class="pgapp-form-floating-close" href="{href}" title="Close" aria-label="Close">&times;</a>"#,
@@ -916,8 +994,14 @@ pub fn editable_table_html(
     item_types: &HashMap<String, FieldItem>,
     registry: &item_types::Registry,
     icons: &Icons,
+    html: &HtmlAttrs,
 ) -> String {
-    let mut body = format!(r#"<div class="pgapp-editable-table"><h2 class="pgapp-subtitle">{}</h2>"#, escape(title));
+    let mut body = format!(
+        r#"<div class="{class}"{extra}><h2 class="pgapp-subtitle">{title}</h2>"#,
+        class = merged_class("pgapp-editable-table", html),
+        extra = extra_attrs(html),
+        title = escape(title),
+    );
 
     for row in rows {
         let id = row.get("id").and_then(|v| v.as_deref()).unwrap_or("");

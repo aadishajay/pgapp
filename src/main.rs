@@ -80,7 +80,7 @@ async fn main() -> anyhow::Result<()> {
                 crate::meta::RuntimeComponent::Form { .. } => "form",
                 crate::meta::RuntimeComponent::EditableTable { .. } => "editable_table",
                 crate::meta::RuntimeComponent::Chart { .. } => "chart",
-                crate::meta::RuntimeComponent::Text(_) => "text",
+                crate::meta::RuntimeComponent::Text { .. } => "text",
                 crate::meta::RuntimeComponent::Link { .. } => "link",
                 crate::meta::RuntimeComponent::Region { .. } => "region",
                 crate::meta::RuntimeComponent::Action { .. } => "action",

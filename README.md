@@ -287,14 +287,20 @@ separate "page kind" the way there used to be. Seven kinds:
   types and the pluggable rendering backend.
 - **`text "..."`** — static text.
 - **`link "Label" -> page <Name>`** — a link to another page.
-- **`region "Label" from query <name>`** — a named query's rows
-  rendered as a plain, non-paginated table; sugar for a small
-  fixed-shape report without entity/pagination machinery.
+- **`region "Label" from query <name> { columns: ... }`** — a named
+  query's rows rendered as a plain, non-paginated table; sugar for a
+  small fixed-shape report without entity/pagination machinery.
+  `columns:` narrows/orders which of the query's result columns are
+  shown; omit it to show every column, alphabetically (a query result
+  has no inherent column order to fall back to otherwise).
 - **`action "Label" calls <module> (config...)`** — a button running a
   registered server-side action module; see "Server-side actions".
 - **`on <event> of <item> { ... }`** — a client-side dynamic action;
   not visible content, but stored/synced like any other component. See
   "Dynamic actions".
+- Any component above can end with **`attrs (id: "...", class: "...", data_foo: "bar")`**
+  to set a custom `id`/extra CSS class/arbitrary HTML attributes on its
+  outer wrapper tag — see "Theming" below.
 
 ## Pagination
 
@@ -856,6 +862,38 @@ of a fixed set of classes — `pgapp-nav`, `pgapp-link`, `pgapp-title`,
 and nothing else. A **theme** is what gives those classes an actual
 appearance. This is the whole contract; anything that satisfies it is a
 valid theme, regardless of what design system it's built on.
+
+### Per-component overrides: `attrs (...)`
+
+The class list above is *kind*-level — every `report` gets
+`pgapp-report`, every `chart` gets `pgapp-chart`, and so on — which is
+enough for a theme to style a kind consistently, but not enough to
+single out one specific instance (e.g. "make just the Dashboard's
+status chart taller" or "give this one report a JS hook to find it
+by"). Any component (and only components — not individual form fields)
+can end with a trailing `attrs (...)`:
+
+```
+chart "Tickets by status" from query by_status {
+  type: donut  x: label  y: value
+} attrs (id: "status-chart", class: "pgapp-chart-tall")
+
+report "Open backlog" of tickets {
+  columns: subject, priority, agent
+} attrs (data_testid: "backlog-report")
+```
+
+`id` and `class` are reserved: `id` sets the wrapper tag's `id`
+attribute; `class` is *appended* to the component's own required
+`pgapp-*` class(es), never replacing them, so existing theme selectors
+still match. Every other key becomes a plain attribute on the wrapper
+tag, with `_` rewritten to `-` (grammar identifiers can't contain
+hyphens directly) — `data_testid: "backlog-report"` renders as
+`data-testid="backlog-report"`. Unset entirely, a component renders
+exactly as before — `attrs (...)` is pure opt-in, synced/reloaded the
+same as everything else (see `model::HtmlAttrs`, threaded through
+`meta::sync`/`meta::load` and applied in `render.rs`'s `merged_class`/
+`extra_attrs`).
 
 ### The contract
 

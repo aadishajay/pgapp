@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::model::FieldItem;
+use crate::model::{FieldItem, HtmlAttrs};
 
 /// A named query, compiled at load time: `sql` already uses positional
 /// `$N::TYPE` parameters, and `bind_names[i]` is the bind context key
@@ -81,18 +81,21 @@ pub enum RuntimeComponent {
         source_query: Option<String>,
         link_column: Option<LinkColumn>,
         page_size: i64,
+        html: HtmlAttrs,
     },
     Form {
         title: String,
         entity: RuntimeEntity,
         fields: Vec<String>,
         item_types: HashMap<String, FieldItem>,
+        html: HtmlAttrs,
     },
     EditableTable {
         title: String,
         entity: RuntimeEntity,
         columns: Vec<String>,
         item_types: HashMap<String, FieldItem>,
+        html: HtmlAttrs,
     },
     Chart {
         title: String,
@@ -100,25 +103,37 @@ pub enum RuntimeComponent {
         chart_type: String,
         x: String,
         y: String,
+        html: HtmlAttrs,
     },
-    Text(String),
+    Text {
+        text: String,
+        html: HtmlAttrs,
+    },
     Link {
         label: String,
         target_page: String,
+        html: HtmlAttrs,
     },
+    /// `columns` narrows the displayed columns to a subset of the
+    /// query's result columns, in the given order; empty means "show
+    /// every column the query returns."
     Region {
         label: String,
         query: String,
+        columns: Vec<String>,
+        html: HtmlAttrs,
     },
     /// A button running a registered server-side action module.
     Action {
         label: String,
         name: String,
         config: serde_json::Value,
+        html: HtmlAttrs,
     },
     /// A client-side dynamic action; `config` is the full
     /// `{event, item, ops}` blob, emitted verbatim into the page's
-    /// dynamic-actions JSON for the runtime.js dispatcher.
+    /// dynamic-actions JSON for the runtime.js dispatcher. No `html` —
+    /// there's no wrapper tag to attach it to.
     DynamicAction {
         config: serde_json::Value,
     },
