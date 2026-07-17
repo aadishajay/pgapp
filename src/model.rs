@@ -71,6 +71,13 @@ pub struct FieldDef {
 pub struct EntityDef {
     pub name: String,
     pub fields: Vec<FieldDef>,
+    /// `entity "x" from query <name>` — a read-only entity backed by a
+    /// named query instead of a physical table. No table is created, no
+    /// Form/EditableTable may bind to it (checked at sync), and reports
+    /// over it paginate by OFFSET since arbitrary SQL has no assumed
+    /// sort key. The declared fields describe the query's columns for
+    /// rendering/typing purposes.
+    pub source_query: Option<String>,
 }
 
 /// A named, reusable SQL query. Declared at app scope (visible to every
@@ -175,6 +182,50 @@ pub enum ComponentDef {
         label: String,
         query: String,
     },
+    /// A button that runs a server-side action module — a Rust component
+    /// registered in `src/actions.rs` (pgapp's PL/SQL analog). `config`
+    /// is the module's own generic blob, same pattern as item types.
+    Action {
+        label: String,
+        name: String,
+        config: serde_json::Value,
+    },
+    /// A client-side dynamic action: `on <event> of <item> { ops }`.
+    /// Not rendered as visible content — the page emits all of these as
+    /// one JSON blob that the DB-stored runtime.js dispatcher binds.
+    DynamicAction {
+        event: String,
+        item: String,
+        ops: Vec<DaOp>,
+    },
+}
+
+/// One operation inside a dynamic action.
+#[derive(Debug, Clone)]
+pub enum DaOp {
+    Show(String),
+    Hide(String),
+    /// Show `item` when the JS expression `when` is truthy, hide it
+    /// otherwise.
+    Toggle { item: String, when: String },
+    /// Set `item` to the result of evaluating the JS expression `expr`
+    /// (which may call `pgapp.getItem(...)`).
+    Set { item: String, expr: String },
+    /// Re-fetch one region's rows (by query name), sending the page's
+    /// current item values as bind parameters.
+    Refresh(String),
+}
+
+impl DaOp {
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            DaOp::Show(item) => serde_json::json!({"op": "show", "item": item}),
+            DaOp::Hide(item) => serde_json::json!({"op": "hide", "item": item}),
+            DaOp::Toggle { item, when } => serde_json::json!({"op": "toggle", "item": item, "when": when}),
+            DaOp::Set { item, expr } => serde_json::json!({"op": "set", "item": item, "expr": expr}),
+            DaOp::Refresh(query) => serde_json::json!({"op": "refresh", "query": query}),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

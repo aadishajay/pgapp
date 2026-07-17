@@ -108,3 +108,13 @@ body {
 .pgapp-chart { margin: 0 0 1rem; padding: 0.75rem; border: 1px solid #ddd; }
 .pgapp-chart-svg { width: 100%; height: auto; color: #06c; }
 .pgapp-chart canvas { max-width: 100%; }
+
+/* Report toolbar, saved views, actions, notices */
+.pgapp-report-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-bottom: 0.6rem; }
+.pgapp-report-views { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.8rem; }
+.pgapp-view-chip { display: inline-flex; align-items: center; gap: 0.2rem; border: 1px solid #ccc; border-radius: 999px; padding: 0.15rem 0.6rem; font-size: 0.85rem; }
+.pgapp-btn-viewdel { border: none; background: transparent; color: #a00; font-weight: 700; cursor: pointer; }
+.pgapp-view-save { display: inline-flex; align-items: center; gap: 0.35rem; }
+.pgapp-view-public { font-size: 0.85rem; color: #555; }
+.pgapp-action { display: inline-block; margin-bottom: 1rem; }
+.pgapp-alert-success { color: #0a6; border: 1px solid #0a6; }

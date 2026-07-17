@@ -1,3 +1,4 @@
+mod actions;
 mod chart_lib;
 mod html;
 mod icons;
@@ -34,9 +35,10 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("failed to connect to database '{database_url}'"))?;
 
     let item_types = item_types::registry();
+    let action_registry = actions::registry();
 
     meta::ensure_schema(&pool).await?;
-    meta::sync_app(&pool, &app_def, &item_types).await?;
+    meta::sync_app(&pool, &app_def, &item_types, &action_registry).await?;
     let runtime_app = meta::load_app(&pool, &app_def.name).await?;
     let runtime_js = meta::load_runtime_js(&pool, &app_def.name).await?;
 
@@ -80,6 +82,8 @@ async fn main() -> anyhow::Result<()> {
                 crate::meta::RuntimeComponent::Text(_) => "text",
                 crate::meta::RuntimeComponent::Link { .. } => "link",
                 crate::meta::RuntimeComponent::Region { .. } => "region",
+                crate::meta::RuntimeComponent::Action { .. } => "action",
+                crate::meta::RuntimeComponent::DynamicAction { .. } => "dynamic_action",
             })
             .collect();
         println!("  http://{bind_addr}/{}  [{}]", page.name, kinds.join(", "));
@@ -91,6 +95,7 @@ async fn main() -> anyhow::Result<()> {
         theme,
         runtime_js,
         item_types,
+        actions: action_registry,
         icons,
         chart_lib,
     });

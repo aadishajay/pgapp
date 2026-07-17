@@ -15,6 +15,7 @@ use anyhow::{Context, Result};
 use sqlx::PgPool;
 use std::collections::HashMap;
 
+use crate::actions;
 use crate::item_types::{self, Registry};
 use crate::model::{AppDef, ComponentDef, EntityDef, FieldDef, FieldItem, FieldType, QueryDef};
 
@@ -38,13 +39,18 @@ fn slug(s: &str) -> String {
 const DEFAULT_RUNTIME_JS: &str = include_str!("../runtime.js");
 
 /// Upserts the app/entity/field/page/component/nav/query metadata and
-/// makes sure the physical data table for each entity exists.
-/// `registry` is used to validate that every `item ... as <kind>` names
-/// a component that actually exists, and to fill in the default kind
-/// for fields that don't declare one — so a typo (or a kind whose file
-/// was never registered) fails at sync time with a clear message
-/// instead of silently rendering nothing later.
-pub async fn sync_app(pool: &PgPool, app: &AppDef, registry: &Registry) -> Result<()> {
+/// makes sure the physical data table for each entity exists (and, when
+/// it already existed, that its column types still match the declared
+/// fields — see `verify_data_table`). `registry` validates every
+/// `item ... as <kind>` and `action_registry` every `action ... calls
+/// <name>` against the compiled-in modules, so a typo fails at sync
+/// time with a clear message instead of silently rendering nothing.
+pub async fn sync_app(
+    pool: &PgPool,
+    app: &AppDef,
+    registry: &Registry,
+    action_registry: &actions::Registry,
+) -> Result<()> {
     let app_id: i32 = sqlx::query_scalar(
         "insert into pgapp_meta.apps (name, theme, icons, chart_lib, auth_enabled)
          values ($1, $2, $3, $4, $5)
@@ -76,19 +82,35 @@ pub async fn sync_app(pool: &PgPool, app: &AppDef, registry: &Registry) -> Resul
     .execute(pool)
     .await?;
 
-    // Phase 1: entities, fields, physical data tables.
+    // Phase 1: entities, fields, physical data tables. A query-backed
+    // entity (`from query <name>`) gets metadata but no table — it's
+    // read-only by construction.
     let mut entity_ids: HashMap<String, i32> = HashMap::new();
     for entity in &app.entities {
         let table_name = format!("{}_{}", slug(&app.name), slug(&entity.name));
 
+        if let Some(query_name) = &entity.source_query {
+            if !app.queries.iter().any(|q| &q.name == query_name) {
+                anyhow::bail!(
+                    "entity '{}' is backed by unknown query '{query_name}' \
+                     (query-backed entities can only use app-scoped queries)",
+                    entity.name
+                );
+            }
+        }
+
         let entity_id: i32 = sqlx::query_scalar(
-            "insert into pgapp_meta.entities (app_id, name, table_name) values ($1, $2, $3)
-             on conflict (app_id, name) do update set table_name = excluded.table_name
+            "insert into pgapp_meta.entities (app_id, name, table_name, source_query)
+             values ($1, $2, $3, $4)
+             on conflict (app_id, name) do update set
+                table_name = excluded.table_name,
+                source_query = excluded.source_query
              returning id",
         )
         .bind(app_id)
         .bind(&entity.name)
         .bind(&table_name)
+        .bind(&entity.source_query)
         .fetch_one(pool)
         .await?;
 
@@ -113,7 +135,10 @@ pub async fn sync_app(pool: &PgPool, app: &AppDef, registry: &Registry) -> Resul
             .await?;
         }
 
-        ensure_data_table(pool, &table_name, entity).await?;
+        if entity.source_query.is_none() {
+            ensure_data_table(pool, &table_name, entity).await?;
+            verify_data_table(pool, &table_name, entity).await?;
+        }
         entity_ids.insert(entity.name.clone(), entity_id);
     }
 
@@ -158,6 +183,7 @@ pub async fn sync_app(pool: &PgPool, app: &AppDef, registry: &Registry) -> Resul
                 &entity_ids,
                 &page_ids,
                 registry,
+                action_registry,
                 &known_query,
                 &format!("page '{}'", page.name),
             )?;
@@ -331,6 +357,8 @@ fn component_kind_name(c: &ComponentDef) -> &'static str {
         ComponentDef::Text(_) => "text",
         ComponentDef::Link { .. } => "link",
         ComponentDef::Region { .. } => "region",
+        ComponentDef::Action { .. } => "action",
+        ComponentDef::DynamicAction { .. } => "dynamic_action",
     }
 }
 
@@ -378,12 +406,14 @@ fn resolve_item_types(
 /// Validates one page component and turns it into `(kind, config)` for
 /// storage. `known_query` reports whether a name is visible (page- or
 /// app-scoped) from the page this component lives on.
+#[allow(clippy::too_many_arguments)]
 fn build_component_config(
     component: &ComponentDef,
     app: &AppDef,
     entity_ids: &HashMap<String, i32>,
     page_ids: &HashMap<String, i32>,
     registry: &Registry,
+    action_registry: &actions::Registry,
     known_query: &impl Fn(&str) -> bool,
     owner_label: &str,
 ) -> Result<(&'static str, serde_json::Value)> {
@@ -448,6 +478,12 @@ fn build_component_config(
                 anyhow::bail!("{owner_label} form '{title}' references unknown entity '{entity}'");
             }
             let entity_def = app.entity(entity).expect("checked above");
+            if entity_def.source_query.is_some() {
+                anyhow::bail!(
+                    "{owner_label} form '{title}' binds to entity '{entity}', which is \
+                     query-backed and read-only — forms need a real table"
+                );
+            }
             let resolved = resolve_item_types(
                 entity_def,
                 fields,
@@ -477,6 +513,12 @@ fn build_component_config(
                 );
             }
             let entity_def = app.entity(entity).expect("checked above");
+            if entity_def.source_query.is_some() {
+                anyhow::bail!(
+                    "{owner_label} editable_table '{title}' binds to entity '{entity}', which is \
+                     query-backed and read-only — editable tables need a real table"
+                );
+            }
             let resolved = resolve_item_types(
                 entity_def,
                 columns,
@@ -528,6 +570,35 @@ fn build_component_config(
             }
             Ok(("region", serde_json::json!({ "label": label, "query": query })))
         }
+        ComponentDef::Action { label, name, config } => {
+            if !action_registry.contains_key(name.as_str()) {
+                let known: Vec<&str> = action_registry.keys().copied().collect();
+                anyhow::bail!(
+                    "{owner_label} action '{label}' calls unknown module '{name}' (known: {})",
+                    known.join(", ")
+                );
+            }
+            Ok((
+                "action",
+                serde_json::json!({ "label": label, "name": name, "config": config }),
+            ))
+        }
+        ComponentDef::DynamicAction { event, item, ops } => {
+            let ops_json: Vec<serde_json::Value> = ops.iter().map(|op| op.to_json()).collect();
+            for op in ops {
+                if let crate::model::DaOp::Refresh(query) = op {
+                    if !known_query(query) {
+                        anyhow::bail!(
+                            "{owner_label} dynamic action on '{item}' refreshes unknown query '{query}'"
+                        );
+                    }
+                }
+            }
+            Ok((
+                "dynamic_action",
+                serde_json::json!({ "event": event, "item": item, "ops": ops_json }),
+            ))
+        }
     }
 }
 
@@ -563,6 +634,70 @@ async fn ensure_data_table(pool: &PgPool, table_name: &str, entity: &EntityDef) 
             .with_context(|| {
                 format!("failed to add column '{}' to pgapp_data.{table_name}", field.name)
             })?;
+    }
+
+    Ok(())
+}
+
+/// The deployment check: after `ensure_data_table`, compare the
+/// physical table's actual columns (via information_schema) against the
+/// declared fields. A column with a *different type* than declared is a
+/// hard startup error — the metadata would promise casts the table
+/// can't honor, failing confusingly at request time instead. Columns
+/// present in the table but absent from the entity (removed fields,
+/// manual additions) are only warned about: they hold real data pgapp
+/// shouldn't judge.
+async fn verify_data_table(pool: &PgPool, table_name: &str, entity: &EntityDef) -> Result<()> {
+    let actual: Vec<(String, String)> = sqlx::query_as(
+        "select column_name, udt_name from information_schema.columns
+          where table_schema = 'pgapp_data' and table_name = $1",
+    )
+    .bind(table_name)
+    .fetch_all(pool)
+    .await?;
+    let actual: HashMap<String, String> = actual.into_iter().collect();
+
+    let expected_udt = |ty: FieldType| match ty {
+        FieldType::Id | FieldType::Integer => "int4",
+        FieldType::Text => "text",
+        FieldType::Boolean => "bool",
+        FieldType::Timestamp => "timestamptz",
+    };
+
+    let mut mismatches = Vec::new();
+    for field in &entity.fields {
+        match actual.get(&field.name) {
+            None => mismatches.push(format!(
+                "column '{}' is missing from pgapp_data.{table_name}",
+                field.name
+            )),
+            Some(udt) if udt != expected_udt(field.ty) => mismatches.push(format!(
+                "column '{}' is {udt} in pgapp_data.{table_name} but the entity declares {} (expected {})",
+                field.name,
+                field.ty.as_str(),
+                expected_udt(field.ty),
+            )),
+            Some(_) => {}
+        }
+    }
+    if !mismatches.is_empty() {
+        anyhow::bail!(
+            "entity '{}' does not match its existing table:\n  - {}\n\
+             Fix the markup to match the table, or migrate the table \
+             (pgapp adds columns but never changes or drops them).",
+            entity.name,
+            mismatches.join("\n  - "),
+        );
+    }
+
+    for column in actual.keys() {
+        if entity.fields.iter().all(|f| &f.name != column) {
+            println!(
+                "pgapp: warning: pgapp_data.{table_name} has column '{column}' that entity '{}' \
+                 no longer declares (left untouched)",
+                entity.name
+            );
+        }
     }
 
     Ok(())

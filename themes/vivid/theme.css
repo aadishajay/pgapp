@@ -331,3 +331,15 @@ a.pgapp-link:hover .pgapp-icon { color: var(--v-fuchsia); }
   box-shadow: var(--v-shadow);
 }
 .pgapp-list .pgapp-link:hover { border-color: var(--v-violet); }
+
+/* Report toolbar, saved views, actions, notices */
+.pgapp-report-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.8rem; }
+.pgapp-report-toolbar .pgapp-input[type="search"] { min-width: 14rem; }
+.pgapp-report-views { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin-bottom: 0.9rem; }
+.pgapp-view-chip { display: inline-flex; align-items: center; gap: 0.25rem; background: var(--v-surface); border: 1.5px solid var(--v-border); border-radius: 999px; padding: 0.25rem 0.75rem; font-size: 0.82rem; box-shadow: var(--v-shadow); }
+.pgapp-btn-viewdel { border: none; background: transparent; color: var(--v-rose); font-weight: 800; cursor: pointer; padding: 0 0.15rem; }
+.pgapp-view-save { display: inline-flex; align-items: center; gap: 0.45rem; }
+.pgapp-view-save .pgapp-input { padding: 0.35rem 0.7rem; font-size: 0.82rem; }
+.pgapp-view-public { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; color: var(--v-muted); }
+.pgapp-action { display: inline-block; margin-bottom: 1.25rem; }
+.pgapp-alert-success { background: rgb(13 148 136 / 0.1); color: var(--v-teal); border: 1.5px solid rgb(13 148 136 / 0.35); }

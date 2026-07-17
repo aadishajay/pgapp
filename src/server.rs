@@ -29,6 +29,7 @@ use sqlx::{PgPool, Row};
 
 use auth::AuthCtx;
 
+use crate::actions::{self, ActionContext};
 use crate::chart_lib::ChartLib;
 use crate::html::url_encode;
 use crate::icons::Icons;
@@ -45,6 +46,7 @@ pub struct AppState {
     pub theme: Theme,
     pub runtime_js: String,
     pub item_types: item_types::Registry,
+    pub actions: actions::Registry,
     pub icons: Icons,
     pub chart_lib: ChartLib,
 }
@@ -63,9 +65,13 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/users", get(auth::users_page).post(auth::users_create))
         .route("/users/:id/delete", post(auth::users_delete))
         .route("/:page", get(show))
+        .route("/:page/region/:query", get(region_fragment))
         .route("/:page/c/:idx/create", post(create))
         .route("/:page/c/:idx/update/:id", post(update))
         .route("/:page/c/:idx/delete/:id", post(delete))
+        .route("/:page/c/:idx/run", post(run_action))
+        .route("/:page/c/:idx/views", post(save_view))
+        .route("/:page/c/:idx/views/:vid/delete", post(delete_view))
         .layer(middleware::from_fn_with_state(state.clone(), auth::require_login))
         .with_state(state)
 }
@@ -170,6 +176,69 @@ struct ReportPage {
     has_next: bool,
 }
 
+/// A report's live filter state, from its `r<idx>_q` (search across
+/// visible columns) and `r<idx>_col`/`r<idx>_val` (single-column
+/// filter) URL parameters.
+#[derive(Debug, Clone, Default)]
+struct ReportFilters {
+    q: Option<String>,
+    col: Option<(String, String)>,
+}
+
+impl ReportFilters {
+    /// Extracts and validates filters for report `idx`. A `col` that
+    /// isn't one of the report's own columns is rejected (the column
+    /// name gets spliced into SQL, so it must come from the markup's
+    /// validated set, never from the request).
+    fn from_query(query: &HashMap<String, String>, idx: usize, columns: &[String]) -> Result<Self, AppError> {
+        let get = |suffix: &str| {
+            query
+                .get(&format!("r{idx}_{suffix}"))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        };
+        let col = match (get("col"), get("val")) {
+            (Some(col), Some(val)) => {
+                if !columns.contains(&col) {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        format!("cannot filter on '{col}': not a column of this report"),
+                    ));
+                }
+                Some((col, val))
+            }
+            _ => None,
+        };
+        Ok(ReportFilters { q: get("q"), col })
+    }
+
+    /// Builds the SQL conditions for these filters. `prefix` qualifies
+    /// column references (e.g. `"t."`); `first_param` is the number the
+    /// first added `$N` placeholder should use. Column names come from
+    /// the report's markup-validated column list only.
+    fn to_sql(&self, prefix: &str, columns: &[String], first_param: usize) -> (Vec<String>, Vec<String>) {
+        let mut conditions = Vec::new();
+        let mut binds = Vec::new();
+        if let Some(q) = &self.q {
+            if !columns.is_empty() {
+                let n = first_param + binds.len();
+                let ors: Vec<String> = columns
+                    .iter()
+                    .map(|c| format!("({prefix}{c})::text ilike ${n}"))
+                    .collect();
+                conditions.push(format!("({})", ors.join(" or ")));
+                binds.push(format!("%{q}%"));
+            }
+        }
+        if let Some((col, val)) = &self.col {
+            let n = first_param + binds.len();
+            conditions.push(format!("({prefix}{col})::text ilike ${n}"));
+            binds.push(format!("%{val}%"));
+        }
+        (conditions, binds)
+    }
+}
+
 /// Keyset ("seek") pagination for an entity-backed `Report`: `after`/
 /// `before` cursor on `id`, fetching `page_size + 1` rows in the
 /// query's own direction. Zero extra queries: the direction we fetched
@@ -181,47 +250,50 @@ struct ReportPage {
 async fn fetch_report_rows(
     pool: &PgPool,
     entity: &RuntimeEntity,
+    filters: &ReportFilters,
+    filter_columns: &[String],
     page_size: i64,
     after: Option<&str>,
     before: Option<&str>,
 ) -> anyhow::Result<ReportPage> {
     let cols = select_columns(entity);
     let lim = page_size + 1;
+
+    // Filter conditions first ($1..), then the keyset cursor.
+    let (mut conditions, binds) = filters.to_sql("t.", filter_columns, 1);
+    let cursor_param = binds.len() + 1;
+
     // ORDER BY is qualified (`t.id`) for the same reason as in
     // `fetch_rows`: the select list re-exports `id` as text, and the
     // cursor comparison below is numeric — mixing the two orderings
     // would make pages skip/repeat rows.
-    let (sql, bind, reverse) = if let Some(after) = after {
-        (
-            format!(
-                "select {cols} from pgapp_data.{} t where t.id > $1::integer order by t.id asc limit {lim}",
-                entity.table_name
-            ),
-            Some(after),
-            false,
-        )
+    let (cursor_bind, order, reverse) = if let Some(after) = after {
+        conditions.push(format!("t.id > ${cursor_param}::integer"));
+        (Some(after), "asc", false)
     } else if let Some(before) = before {
-        (
-            format!(
-                "select {cols} from pgapp_data.{} t where t.id < $1::integer order by t.id desc limit {lim}",
-                entity.table_name
-            ),
-            Some(before),
-            true,
-        )
+        conditions.push(format!("t.id < ${cursor_param}::integer"));
+        (Some(before), "desc", true)
     } else {
-        (
-            format!("select {cols} from pgapp_data.{} t order by t.id asc limit {lim}", entity.table_name),
-            None,
-            false,
-        )
+        (None, "asc", false)
     };
 
-    let query = sqlx::query(&sql);
-    let query = match bind {
-        Some(b) => query.bind(b),
-        None => query,
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("where {}", conditions.join(" and "))
     };
+    let sql = format!(
+        "select {cols} from pgapp_data.{} t {where_clause} order by t.id {order} limit {lim}",
+        entity.table_name
+    );
+
+    let mut query = sqlx::query(&sql);
+    for b in &binds {
+        query = query.bind(b.as_str());
+    }
+    if let Some(b) = cursor_bind {
+        query = query.bind(b);
+    }
     let db_rows = query.fetch_all(pool).await?;
     let mut rows: Vec<BTreeMap<String, Option<String>>> = db_rows.iter().map(|r| row_from_sqlx(r, entity)).collect::<anyhow::Result<_>>()?;
 
@@ -367,11 +439,20 @@ async fn render_component(
     component: &RuntimeComponent,
     query: &HashMap<String, String>,
     regions: &RegionRows,
+    auth_ctx: &AuthCtx,
 ) -> anyhow::Result<String> {
     match component {
         RuntimeComponent::Text(text) => Ok(render::text_html(text)),
         RuntimeComponent::Link { label, target_page } => Ok(render::link_html(label, target_page)),
         RuntimeComponent::Region { label, query: qname } => Ok(render::region_html(label, qname, regions)),
+
+        // A dynamic action renders nothing in the body — show() gathers
+        // them all into one JSON script for the runtime.js dispatcher.
+        RuntimeComponent::DynamicAction { .. } => Ok(String::new()),
+
+        RuntimeComponent::Action { label, name, .. } => {
+            Ok(render::action_html(page_name, idx, label, name))
+        }
 
         RuntimeComponent::Chart { title, query: qname, chart_type, x, y } => {
             let rq = page
@@ -388,18 +469,34 @@ async fn render_component(
             let p_before = format!("r{idx}_before");
             let p_page = format!("r{idx}_page");
 
-            let (rows, prev_href, next_href) = match source_query {
+            let filters = ReportFilters::from_query(query, idx, columns)
+                .map_err(|(_, msg)| anyhow::anyhow!(msg))?;
+            // Filter params re-serialized for pagination links, so
+            // Prev/Next stay inside the filtered result set.
+            let mut filter_qs = String::new();
+            if let Some(q) = &filters.q {
+                filter_qs.push_str(&format!("&r{idx}_q={}", url_encode(q)));
+            }
+            if let Some((col, val)) = &filters.col {
+                filter_qs.push_str(&format!("&r{idx}_col={}&r{idx}_val={}", url_encode(col), url_encode(val)));
+            }
+
+            // A report is query-paginated when it declares `source:` or
+            // its entity is query-backed (`entity ... from query`).
+            let effective_query = source_query.as_deref().or(entity.source_query.as_deref());
+
+            let (rows, prev_href, next_href) = match effective_query {
                 None => {
                     let after = query.get(&p_after).map(|s| s.as_str());
                     let before = query.get(&p_before).map(|s| s.as_str());
-                    let rp = fetch_report_rows(&state.pool, entity, *page_size, after, before).await?;
+                    let rp = fetch_report_rows(&state.pool, entity, &filters, columns, *page_size, after, before).await?;
                     let prev_href = rp.has_prev.then(|| {
                         let id = rp.rows.first().and_then(|r| r.get("id")).and_then(|v| v.clone()).unwrap_or_default();
-                        format!("/{page_name}?{p_before}={}", url_encode(&id))
+                        format!("/{page_name}?{p_before}={}{filter_qs}", url_encode(&id))
                     });
                     let next_href = rp.has_next.then(|| {
                         let id = rp.rows.last().and_then(|r| r.get("id")).and_then(|v| v.clone()).unwrap_or_default();
-                        format!("/{page_name}?{p_after}={}", url_encode(&id))
+                        format!("/{page_name}?{p_after}={}{filter_qs}", url_encode(&id))
                     });
                     (rp.rows, prev_href, next_href)
                 }
@@ -409,16 +506,26 @@ async fn render_component(
                         .ok_or_else(|| anyhow::anyhow!("report '{title}' sources from unknown query '{qname}'"))?;
                     let ctx = bind_context(query, None);
                     let page_num: i64 = query.get(&p_page).and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
-                    let (json_rows, has_next) = run_named_query_page(&state.pool, rq, &ctx, *page_size, page_num).await?;
+                    let (conditions, binds) = filters.to_sql("t.", columns, rq.bind_names.len() + 1);
+                    let where_clause = if conditions.is_empty() {
+                        String::new()
+                    } else {
+                        format!("where {}", conditions.join(" and "))
+                    };
+                    let (json_rows, has_next) =
+                        run_named_query_page(&state.pool, rq, &ctx, &where_clause, &binds, *page_size, page_num).await?;
                     let rows: Vec<_> = json_rows.into_iter().map(query_engine::json_row_to_map).collect();
-                    let prev_href = (page_num > 1).then(|| format!("/{page_name}?{p_page}={}", page_num - 1));
-                    let next_href = has_next.then(|| format!("/{page_name}?{p_page}={}", page_num + 1));
+                    let prev_href = (page_num > 1).then(|| format!("/{page_name}?{p_page}={}{filter_qs}", page_num - 1));
+                    let next_href = has_next.then(|| format!("/{page_name}?{p_page}={}{filter_qs}", page_num + 1));
                     (rows, prev_href, next_href)
                 }
             };
 
+            let extras = report_extras(state, page_name, idx, &filters, auth_ctx).await?;
+
             Ok(render::report_html(
                 page_name,
+                idx,
                 title,
                 columns,
                 &rows,
@@ -427,6 +534,7 @@ async fn render_component(
                 next_href.as_deref(),
                 form_idx,
                 &state.icons,
+                &extras,
             ))
         }
 
@@ -470,6 +578,58 @@ async fn render_component(
     }
 }
 
+/// Fetches the saved views visible to the current user for one report
+/// (their own plus public ones) and packages the toolbar state for
+/// rendering.
+async fn report_extras(
+    state: &AppState,
+    page_name: &str,
+    idx: usize,
+    filters: &ReportFilters,
+    auth_ctx: &AuthCtx,
+) -> anyhow::Result<render::ReportExtras> {
+    let user_id = auth_ctx.0.as_ref().map(|u| u.id);
+    let is_admin = auth_ctx.0.as_ref().is_some_and(|u| u.is_admin());
+
+    let rows: Vec<(i32, String, serde_json::Value, Option<i32>)> = sqlx::query_as(
+        "select id, name, params, owner_user_id from pgapp_meta.report_views
+          where app_id = $1 and page_name = $2 and component_idx = $3
+            and (is_public or owner_user_id is not distinct from $4)
+          order by name",
+    )
+    .bind(state.app.id)
+    .bind(page_name)
+    .bind(idx as i32)
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let views = rows
+        .into_iter()
+        .map(|(id, name, params, owner)| {
+            let mut href = format!("/{page_name}?");
+            for (key, param) in [("q", "q"), ("col", "col"), ("val", "val")] {
+                if let Some(v) = params.get(key).and_then(|v| v.as_str()) {
+                    href.push_str(&format!("r{idx}_{param}={}&", url_encode(v)));
+                }
+            }
+            render::ReportViewLink {
+                id,
+                name,
+                href: href.trim_end_matches(['&', '?']).to_string(),
+                can_delete: !state.app.auth_enabled || is_admin || owner == user_id,
+            }
+        })
+        .collect();
+
+    Ok(render::ReportExtras {
+        q: filters.q.clone().unwrap_or_default(),
+        fcol: filters.col.as_ref().map(|(c, _)| c.clone()).unwrap_or_default(),
+        fval: filters.col.as_ref().map(|(_, v)| v.clone()).unwrap_or_default(),
+        views,
+    })
+}
+
 async fn show(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
@@ -486,21 +646,201 @@ async fn show(
     let mut body = String::new();
     for (idx, component) in page.components.iter().enumerate() {
         body.push_str(
-            &render_component(&state, &page_name, page, idx, component, &query, &regions)
+            &render_component(&state, &page_name, page, idx, component, &query, &regions, &auth_ctx)
                 .await
                 .map_err(err_response)?,
         );
+    }
+
+    // All the page's dynamic actions, as one JSON blob the runtime.js
+    // dispatcher binds on DOMContentLoaded.
+    let dyn_actions: Vec<&serde_json::Value> = page
+        .components
+        .iter()
+        .filter_map(|c| match c {
+            RuntimeComponent::DynamicAction { config } => Some(config),
+            _ => None,
+        })
+        .collect();
+    if !dyn_actions.is_empty() {
+        body.push_str(&render::dynamic_actions_script(&dyn_actions));
     }
 
     Ok(Html(render::page_layout(
         &page.name,
         &body,
         query.get("error").map(|s| s.as_str()),
+        query.get("notice").map(|s| s.as_str()),
         state.app.chrome(&regions),
         &state.icons,
         &state.chart_lib,
         auth_ctx.display(),
     )))
+}
+
+/// One region's rows re-rendered as an HTML fragment — what a dynamic
+/// action's `refresh` op fetches. The page's current item values arrive
+/// as query parameters and become the query's bind context, so a
+/// region can follow a form field the user just changed.
+async fn region_fragment(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((page_name, query_name)): Path<(String, String)>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Html<String>, AppError> {
+    let page = page_or_404(&state.app, &page_name)?;
+    auth::authorize(&state, page.required_role.as_deref(), &auth_ctx)?;
+    let rq = page.resolve_query(&state.app, &query_name).ok_or_else(|| {
+        (StatusCode::NOT_FOUND, format!("no query '{query_name}' visible from page '{page_name}'"))
+    })?;
+
+    let ctx = bind_context(&params, None);
+    let rows = run_named_query_rows(&state.pool, rq, &ctx).await.map_err(err_response)?;
+
+    let label = page
+        .components
+        .iter()
+        .find_map(|c| match c {
+            RuntimeComponent::Region { label, query } if *query == query_name => Some(label.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| query_name.clone());
+
+    let mut regions = RegionRows::new();
+    regions.insert(query_name.clone(), rows);
+    Ok(Html(render::region_html(&label, &query_name, &regions)))
+}
+
+/// Runs a page's server-side action module (`action ... calls <name>`)
+/// and redirects back with its outcome as a notice or error banner.
+async fn run_action(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((page_name, idx)): Path<(String, usize)>,
+    Query(query): Query<HashMap<String, String>>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let page = page_or_404(&state.app, &page_name)?;
+    auth::authorize(&state, page.required_role.as_deref(), &auth_ctx)?;
+    let component = component_at(page, idx)?;
+    let RuntimeComponent::Action { name, config, .. } = component else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("page '{page_name}' component #{idx} is not an action"),
+        ));
+    };
+    let module = state.actions.get(name.as_str()).ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("action module '{name}' is in metadata but not registered (rebuild?)"),
+        )
+    })?;
+
+    // URL parameters plus the POSTed form fields (form wins) — the same
+    // merged shape named-query bind contexts use.
+    let mut merged = query.clone();
+    merged.extend(values);
+
+    let outcome = module
+        .run(ActionContext {
+            pool: &state.pool,
+            app: &state.app,
+            page,
+            config,
+            values: &merged,
+        })
+        .await;
+
+    match outcome {
+        Ok(msg) => Ok(Redirect::to(&format!("/{page_name}?notice={}", url_encode(&msg))).into_response()),
+        Err(e) => Ok(Redirect::to(&format!("/{page_name}?error={}", url_encode(&e.to_string()))).into_response()),
+    }
+}
+
+/// Saves the current filter state of one report as a named view —
+/// private by default, public when the checkbox says so.
+async fn save_view(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((page_name, idx)): Path<(String, usize)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let page = page_or_404(&state.app, &page_name)?;
+    auth::authorize(&state, page.required_role.as_deref(), &auth_ctx)?;
+    let component = component_at(page, idx)?;
+    if !matches!(component, RuntimeComponent::Report { .. }) {
+        return Err((StatusCode::BAD_REQUEST, format!("component #{idx} is not a report")));
+    }
+
+    let name = values.get("name").map(|s| s.trim()).unwrap_or_default();
+    if name.is_empty() {
+        return Ok(Redirect::to(&format!(
+            "/{page_name}?error={}",
+            url_encode("A saved view needs a name.")
+        ))
+        .into_response());
+    }
+
+    let get = |k: &str| values.get(&format!("r{idx}_{k}")).map(|s| s.trim()).filter(|s| !s.is_empty());
+    let mut params = serde_json::Map::new();
+    if let Some(q) = get("q") {
+        params.insert("q".into(), q.into());
+    }
+    if let (Some(col), Some(val)) = (get("col"), get("val")) {
+        params.insert("col".into(), col.into());
+        params.insert("val".into(), val.into());
+    }
+
+    sqlx::query(
+        "insert into pgapp_meta.report_views (app_id, page_name, component_idx, name, owner_user_id, is_public, params)
+         values ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(state.app.id)
+    .bind(&page_name)
+    .bind(idx as i32)
+    .bind(name)
+    .bind(auth_ctx.0.as_ref().map(|u| u.id))
+    .bind(values.contains_key("is_public"))
+    .bind(serde_json::Value::Object(params))
+    .execute(&state.pool)
+    .await
+    .map_err(|e| err_response(e.into()))?;
+
+    Ok(Redirect::to(&format!("/{page_name}?notice={}", url_encode(&format!("View '{name}' saved.")))).into_response())
+}
+
+async fn delete_view(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((page_name, _idx, view_id)): Path<(String, usize, i32)>,
+) -> Result<Response, AppError> {
+    let page = page_or_404(&state.app, &page_name)?;
+    auth::authorize(&state, page.required_role.as_deref(), &auth_ctx)?;
+
+    let owner: Option<Option<i32>> =
+        sqlx::query_scalar("select owner_user_id from pgapp_meta.report_views where id = $1 and app_id = $2")
+            .bind(view_id)
+            .bind(state.app.id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(|e| err_response(e.into()))?;
+    let Some(owner) = owner else {
+        return Ok(Redirect::to(&format!("/{page_name}")).into_response());
+    };
+
+    let allowed = !state.app.auth_enabled
+        || auth_ctx.0.as_ref().is_some_and(|u| u.is_admin() || Some(u.id) == owner);
+    if !allowed {
+        return Err((StatusCode::FORBIDDEN, "only the view's owner or an admin can delete it".to_string()));
+    }
+
+    sqlx::query("delete from pgapp_meta.report_views where id = $1 and app_id = $2")
+        .bind(view_id)
+        .bind(state.app.id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| err_response(e.into()))?;
+    Ok(Redirect::to(&format!("/{page_name}")).into_response())
 }
 
 async fn create(
@@ -606,6 +946,7 @@ async fn delete(
 /// Minimal JSON API, keyed by entity rather than page — a stand-in for
 /// the REST routing PostgREST would otherwise provide. Looks for the
 /// entity on any Report/Form/EditableTable component across every page.
+/// Query-backed entities serve their query's rows.
 async fn api_list(
     State(state): State<Arc<AppState>>,
     Path(entity_name): Path<String>,
@@ -622,6 +963,19 @@ async fn api_list(
             _ => None,
         })
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("no such entity '{entity_name}'")))?;
-    let rows = fetch_rows(&state.pool, entity).await.map_err(err_response)?;
+
+    let rows = match &entity.source_query {
+        None => fetch_rows(&state.pool, entity).await.map_err(err_response)?,
+        Some(qname) => {
+            let rq = state.app.queries.get(qname).ok_or_else(|| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("entity '{entity_name}' is backed by unknown query '{qname}'"),
+                )
+            })?;
+            let ctx = HashMap::new();
+            run_named_query_rows(&state.pool, rq, &ctx).await.map_err(err_response)?
+        }
+    };
     Ok(axum::Json(json!(rows)).into_response())
 }

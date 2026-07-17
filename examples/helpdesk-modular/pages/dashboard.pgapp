@@ -15,4 +15,8 @@ page "Dashboard" {
   }
   region "Busiest agents" from query top_agents
   region "Latest tickets" from query recent
+  report "Status summary (a query-backed entity)" of status_summary {
+    columns: label, value
+    page_size: 5
+  }
 }

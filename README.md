@@ -30,8 +30,18 @@ Postgres, written in Rust.
   plus a named alternative selected in the markup. See "Charts" and
   "Icons" below.
 - **Named queries**: reusable SQL, declared once (app-wide or scoped to
-  one page) and referenced by name from LOVs, regions, charts, and a
-  report's row source — see "Named queries" below.
+  one page) and referenced by name from LOVs, regions, charts, report
+  row sources, and whole read-only entities (`entity ... from query`) —
+  see "Named queries" below.
+- **Server-side actions** (the PL/SQL analog): named Rust modules in
+  `src/actions/`, invoked from a page by an `action "Label" calls
+  <name>` button — see "Server-side actions" below.
+- **Dynamic actions**: declarative client-side behavior — `on change of
+  <item> { show/hide/toggle/set/refresh }` — dispatched by the
+  DB-stored runtime.js. See "Dynamic actions" below.
+- **Interactive reports**: every report gets a search box, a per-column
+  filter, and named **saved views** (private or public) stored in
+  metadata — see "Report search & saved views" below.
 - **Authentication & authorization**: an `auth { }` block in the markup
   puts the whole app behind a login (argon2-hashed passwords,
   server-side sessions, a first-run admin setup screen, a built-in
@@ -278,6 +288,11 @@ separate "page kind" the way there used to be. Seven kinds:
 - **`region "Label" from query <name>`** — a named query's rows
   rendered as a plain, non-paginated table; sugar for a small
   fixed-shape report without entity/pagination machinery.
+- **`action "Label" calls <module> (config...)`** — a button running a
+  registered server-side action module; see "Server-side actions".
+- **`on <event> of <item> { ... }`** — a client-side dynamic action;
+  not visible content, but stored/synced like any other component. See
+  "Dynamic actions".
 
 ## Pagination
 
@@ -296,6 +311,100 @@ table), via `server::fetch_report_rows` / `query_engine::run_named_query_page`:
   assumed stable sort key, so this falls back to `?r<n>_page=<n>`
   (`OFFSET`-based), but still avoids `COUNT(*)` by fetching
   `page_size + 1` rows the same way.
+
+## Report search & saved views
+
+Every `Report` renders an interactive toolbar:
+
+- **Search** (`r<n>_q`): case-insensitive substring match across all of
+  the report's visible columns.
+- **Column filter** (`r<n>_col` + `r<n>_val`): "column contains value",
+  with the column name validated against the report's own column list
+  (never spliced from raw request input).
+- Filters live in the URL, compose with both pagination modes (the
+  keyset cursor and OFFSET pages both stay inside the filtered set),
+  and all filter *values* are bind parameters.
+- **Saved views**: the current filter state can be saved under a name
+  into `pgapp_meta.report_views` — private to the signed-in user by
+  default, or **public** (visible to every user of the app) via the
+  checkbox. Views render as chips that apply their bookmarked filters;
+  a view's owner (or an admin) can delete it. Without auth enabled,
+  views are anonymous and shared.
+
+## Query-backed entities
+
+`entity "status_summary" from query <name> { field ... }` declares a
+**read-only entity** backed by an app-scoped named query instead of a
+physical table — the APEX "view" pattern. No table is created; binding
+a `form` or `editable_table` to it is a sync-time error; reports over
+it paginate by OFFSET (arbitrary SQL has no assumed sort key) and
+`/api/:entity` serves the query's rows. The declared fields describe
+the query's columns for rendering.
+
+## Deployment checks
+
+On every sync, each table-backed entity's physical table is verified
+against its declared fields via `information_schema`: a column whose
+*type* differs from the declaration (or is missing) fails startup with
+a message naming every mismatch — the alternative is a confusing cast
+error at request time. Columns present in the table but no longer
+declared are only warned about; they hold real data pgapp won't judge.
+(pgapp adds columns, but never changes or drops them.)
+
+## Server-side actions
+
+The PL/SQL analog: a named piece of server-side Rust, one file per
+module under `src/actions/`, registered in `src/actions.rs` (same
+compile-time plugin pattern as item types):
+
+```rust
+pub trait ServerAction: Send + Sync {
+    fn name(&self) -> &'static str;
+    fn run<'a>(&'a self, ctx: ActionContext<'a>) -> BoxFuture<'a, anyhow::Result<String>>;
+}
+```
+
+`ActionContext` carries the pool, the app, the page (so page-scoped
+queries resolve), the component's generic JSON config, and the
+request's merged parameter map. The returned string becomes a success
+notice banner; an `Err` becomes the error banner.
+
+A page invokes a module with `action "Close old tickets" calls
+run_query (query: "close_old")` — rendered as a button posting to
+`/:page/c/:idx/run`, gated by the page's `requires:` role like every
+other write. Two modules ship:
+
+- `run_query` — executes a named query **raw** (not wrapped in
+  `to_jsonb`), so the query may be a plain `UPDATE`/`DELETE`/`INSERT`;
+  binds still come from `:name` markers, never interpolation.
+- `log_values` — a trivial demo of custom Rust: logs the parameter map.
+
+## Dynamic actions
+
+Declarative client-side behavior, APEX-style, in the page markup:
+
+```text
+on change of priority {
+  set urgent to "pgapp.getItem('priority') === 'High'"
+}
+on change of urgent {
+  toggle notes when "pgapp.getItem('urgent') === 'true'"
+}
+on change of agent {
+  refresh agent_load
+}
+```
+
+Ops: `show <item>` / `hide <item>`, `toggle <item> when "<js expr>"`,
+`set <item> to "<js expr>"` (expressions may call `pgapp.getItem`),
+and `refresh <query>` — which re-fetches one region's rows from
+`GET /:page/region/:query`, sending the page's current item values as
+query parameters, so the region's `:binds` follow what the user just
+typed or picked. Pages emit their dynamic actions as one JSON blob;
+the DB-stored runtime.js binds and dispatches them (`setItem` fires
+`change` events, so actions chain — with a depth guard). Note:
+runtime.js is seeded once per app; existing deployments must delete
+their `pgapp_meta.app_runtime_js` row to pick up a newer seed.
 
 ## Item types
 
@@ -532,6 +641,8 @@ src/
   runtime.js          seed content for the DB-stored JS runtime
   item_types.rs       the ItemType trait + registry() (see "Item types")
   item_types/         one file per component: text, readonly, checkbox, radio, popup, slider
+  actions.rs          the ServerAction trait + registry() (see "Server-side actions")
+  actions/            one file per module: run_query, log_values
   meta.rs             module root: ensure_schema + re-exports
   meta/
     types.rs          the runtime model (RuntimeApp, RuntimePage, RuntimeComponent, Chrome, ...)
@@ -619,6 +730,9 @@ On startup it prints the URL and component kinds for each page, e.g.
 - `POST /:page/c/:idx/update/:id`       — update a row
 - `POST /:page/c/:idx/delete/:id`       — delete a row
 - `GET  /api/:entity`                   — JSON list for that entity
+- `GET  /:page/region/:query`           — one region re-rendered as a fragment (dynamic-action refresh)
+- `POST /:page/c/:idx/run`              — run an `action` component's server-side module
+- `POST /:page/c/:idx/views` (+ delete) — save / delete a report's saved view
 - `GET  /login` / `POST /login`         — sign-in page (or first-run admin setup) — apps with `auth { }` only
 - `POST /setup`                         — one-time admin bootstrap; refuses once any user exists
 - `POST /logout`                        — deletes the server-side session
@@ -638,12 +752,13 @@ or `?r<n>_page=` (query-sourced) the same way — see "Pagination" above.
   queries cover ad hoc joins/filters today, but there's no schema-level
   concept of one entity referencing another yet
 - A real drag-and-drop builder UI that edits the markup/metadata
-- `action`/`flow` blocks in the markup for pluggable server-side logic
-  (theming, charts, icons, the CSS/JS asset hooks, nav/components/
-  linking, named queries, the JS runtime, and item types are the
-  pluggable extension points so far; actions and flows are next —
-  likely a second runtime.js convention plus a way to declare which
-  item/event triggers which named query or action)
+- Multi-step `flow` blocks (server-side actions and client-side
+  dynamic actions exist now; chaining them into declarative multi-step
+  flows with conditions is the next layer)
+- runtime.js is seeded once per app and then owned by the database —
+  picking up a newer built-in seed (e.g. the dynamic-action
+  dispatcher) requires deleting the `pgapp_meta.app_runtime_js` row;
+  a versioned-seed upgrade story is missing
 - Field-level authorization (page-level `requires:` exists; hiding
   individual columns/fields by role doesn't yet), plus password change/
   reset flows — today a forgotten password means an admin deletes and

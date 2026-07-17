@@ -45,23 +45,35 @@ pub async fn run_named_query(
 /// (rather than keyset pagination) is what backs them — see
 /// `fetch_report_rows` for the keyset version used for entity-backed
 /// reports.
+///
+/// `where_clause` (may be empty) filters the wrapped query — its `$N`
+/// placeholders must start *after* the query's own binds, and
+/// `extra_binds` supplies their values in order. The clause's column
+/// references are `t.<name>` where `<name>` came from markup
+/// identifiers (lexer-restricted charset), never from request input.
 pub async fn run_named_query_page(
     pool: &PgPool,
     rq: &RuntimeQuery,
     ctx: &HashMap<String, String>,
+    where_clause: &str,
+    extra_binds: &[String],
     page_size: i64,
     page_num: i64,
 ) -> anyhow::Result<(Vec<serde_json::Value>, bool)> {
     let offset = (page_num - 1).max(0) * page_size;
     let wrapped = format!(
-        "select to_jsonb(t) as j from ({}) as t limit {} offset {}",
+        "select to_jsonb(t) as j from ({}) as t {} limit {} offset {}",
         rq.sql,
+        where_clause,
         page_size + 1,
         offset
     );
     let mut query = sqlx::query_scalar::<_, serde_json::Value>(&wrapped);
     for name in &rq.bind_names {
         query = query.bind(ctx.get(name).map(|s| s.as_str()));
+    }
+    for bind in extra_binds {
+        query = query.bind(bind.as_str());
     }
     let mut rows = query.fetch_all(pool).await?;
     let has_next = rows.len() as i64 > page_size;

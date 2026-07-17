@@ -86,9 +86,12 @@ pub fn link_html(label: &str, target_page: &str) -> String {
 /// Renders one `Region` component: a named query's (already-resolved)
 /// rows as a plain table, with column headers taken from the row keys.
 pub fn region_html(label: &str, query: &str, regions: &RegionRows) -> String {
+    // data-pgapp-region lets a dynamic action's `refresh` op find and
+    // replace this container with a freshly fetched fragment.
     let mut html = format!(
-        r#"<div class="pgapp-region"><h3 class="pgapp-region-title">{}</h3>"#,
-        escape(label)
+        r#"<div class="pgapp-region" data-pgapp-region="{query}"><h3 class="pgapp-region-title">{label}</h3>"#,
+        query = escape(query),
+        label = escape(label),
     );
     match regions.get(query).filter(|rows| !rows.is_empty()) {
         Some(rows) => {
@@ -461,10 +464,50 @@ fn input_for_field(
         choices,
     });
 
+    // data-pgapp-item lets dynamic actions show/hide/toggle the whole
+    // field (label included), not just its input.
     format!(
-        r#"<div class="pgapp-field"><label class="pgapp-label">{label}</label>{input}</div>"#,
+        r#"<div class="pgapp-field" data-pgapp-item="{label}"><label class="pgapp-label">{label}</label>{input}</div>"#,
         label = escape(field_name),
     )
+}
+
+/// A server-side action component: a button posting to the action's
+/// run route. The outcome comes back as a notice/error banner.
+pub fn action_html(page_name: &str, idx: usize, label: &str, module: &str) -> String {
+    format!(
+        r#"<form class="pgapp-action" method="post" action="/{page}/c/{idx}/run" title="runs the '{module}' module"><button class="pgapp-btn pgapp-btn-primary" type="submit">{label}</button></form>"#,
+        page = escape(page_name),
+        idx = idx,
+        module = escape(module),
+        label = escape(label),
+    )
+}
+
+/// All of a page's dynamic actions as one JSON script for the
+/// runtime.js dispatcher (`pgapp` binds them on DOMContentLoaded).
+pub fn dynamic_actions_script(actions: &[&serde_json::Value]) -> String {
+    let json = serde_json::Value::Array(actions.iter().map(|v| (*v).clone()).collect());
+    // `</` inside a <script> body would end it early regardless of type.
+    let safe = json.to_string().replace("</", "<\\/");
+    format!(r#"<script type="application/json" class="pgapp-dynamic-actions">{safe}</script>"#)
+}
+
+/// One saved-view chip on a report's toolbar.
+pub struct ReportViewLink {
+    pub id: i32,
+    pub name: String,
+    pub href: String,
+    pub can_delete: bool,
+}
+
+/// A report's toolbar state: current filter values plus the saved views
+/// visible to this user.
+pub struct ReportExtras {
+    pub q: String,
+    pub fcol: String,
+    pub fval: String,
+    pub views: Vec<ReportViewLink>,
 }
 
 /// A read-only, paginated table — the `Report` component. Edit/delete
@@ -474,6 +517,7 @@ fn input_for_field(
 #[allow(clippy::too_many_arguments)]
 pub fn report_html(
     page_name: &str,
+    idx: usize,
     title: &str,
     columns: &[String],
     rows: &[BTreeMap<String, Option<String>>],
@@ -482,8 +526,73 @@ pub fn report_html(
     next_href: Option<&str>,
     sibling_form_idx: Option<usize>,
     icons: &Icons,
+    extras: &ReportExtras,
 ) -> String {
     let mut body = format!(r#"<div class="pgapp-report"><h2 class="pgapp-subtitle">{}</h2>"#, escape(title));
+
+    // Search toolbar: a GET form back to the page, so filters live in
+    // the URL (shareable, and exactly what a saved view bookmarks).
+    body.push_str(&format!(
+        r#"<form class="pgapp-report-toolbar" method="get" action="/{page}">
+<input class="pgapp-input" type="search" name="r{idx}_q" value="{q}" placeholder="Search all columns">
+<select class="pgapp-select" name="r{idx}_col"><option value="">column&hellip;</option>"#,
+        page = escape(page_name),
+        idx = idx,
+        q = escape(&extras.q),
+    ));
+    for col in columns {
+        let selected = if *col == extras.fcol { " selected" } else { "" };
+        body.push_str(&format!(
+            r#"<option value="{c}"{selected}>{c}</option>"#,
+            c = escape(col)
+        ));
+    }
+    body.push_str(&format!(
+        r#"</select>
+<input class="pgapp-input" type="text" name="r{idx}_val" value="{val}" placeholder="contains&hellip;">
+<button class="pgapp-btn pgapp-btn-secondary" type="submit">Apply</button>
+<a class="pgapp-link" href="/{page}">Clear</a>
+</form>"#,
+        idx = idx,
+        val = escape(&extras.fval),
+        page = escape(page_name),
+    ));
+
+    // Saved views: chips applying a bookmarked filter state, plus the
+    // save-current-state form.
+    body.push_str(r#"<div class="pgapp-report-views">"#);
+    for view in &extras.views {
+        body.push_str(&format!(
+            r#"<span class="pgapp-view-chip"><a class="pgapp-link" href="{href}">{name}</a>"#,
+            href = escape(&view.href),
+            name = escape(&view.name),
+        ));
+        if view.can_delete {
+            body.push_str(&format!(
+                r#"<form class="pgapp-inline-form" method="post" action="/{page}/c/{idx}/views/{id}/delete"><button class="pgapp-btn-viewdel" type="submit" title="Delete view">&times;</button></form>"#,
+                page = escape(page_name),
+                idx = idx,
+                id = view.id,
+            ));
+        }
+        body.push_str("</span>");
+    }
+    body.push_str(&format!(
+        r#"<form class="pgapp-view-save" method="post" action="/{page}/c/{idx}/views">
+<input type="hidden" name="r{idx}_q" value="{q}">
+<input type="hidden" name="r{idx}_col" value="{col}">
+<input type="hidden" name="r{idx}_val" value="{val}">
+<input class="pgapp-input" type="text" name="name" placeholder="Save view as&hellip;">
+<label class="pgapp-view-public"><input type="checkbox" name="is_public"> public</label>
+<button class="pgapp-btn pgapp-btn-secondary" type="submit">Save</button>
+</form></div>"#,
+        page = escape(page_name),
+        idx = idx,
+        q = escape(&extras.q),
+        col = escape(&extras.fcol),
+        val = escape(&extras.fval),
+    ));
+
     body.push_str(r#"<table class="pgapp-table"><thead><tr>"#);
     for col in columns {
         body.push_str(&format!("<th>{}</th>", escape(col)));
@@ -668,6 +777,7 @@ pub fn page_layout(
     title: &str,
     body: &str,
     error: Option<&str>,
+    notice: Option<&str>,
     chrome: Chrome,
     icons: &Icons,
     chart_lib: &ChartLib,
@@ -678,6 +788,12 @@ pub fn page_layout(
         full.push_str(&format!(
             r#"<div class="pgapp-alert pgapp-alert-error"><strong>Error:</strong> {}</div>"#,
             escape(err)
+        ));
+    }
+    if let Some(msg) = notice {
+        full.push_str(&format!(
+            r#"<div class="pgapp-alert pgapp-alert-success">{}</div>"#,
+            escape(msg)
         ));
     }
     full.push_str(body);

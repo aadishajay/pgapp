@@ -49,6 +49,10 @@ create table if not exists pgapp_meta.entities (
     table_name text not null,
     unique (app_id, name)
 );
+-- Non-null = a read-only entity backed by a named query instead of a
+-- physical table: no table is created and no Form/EditableTable may
+-- bind to it (enforced at sync time).
+alter table pgapp_meta.entities add column if not exists source_query text;
 
 create table if not exists pgapp_meta.fields (
     id            serial primary key,
@@ -138,6 +142,24 @@ create table if not exists pgapp_meta.named_queries (
 );
 create unique index if not exists named_queries_scope_name_idx
     on pgapp_meta.named_queries (app_id, coalesce(page_id, 0), name);
+
+-- Saved report views: a named bookmark of one report's filter state
+-- (the r<idx>_q / r<idx>_col / r<idx>_val parameters, as a params
+-- blob). owner_user_id null = saved outside auth (or by a deleted
+-- user); is_public makes a view visible to every signed-in user, not
+-- just its owner. Component_idx pins the view to one report on one
+-- page.
+create table if not exists pgapp_meta.report_views (
+    id            serial primary key,
+    app_id        integer not null references pgapp_meta.apps(id) on delete cascade,
+    page_name     text not null,
+    component_idx integer not null,
+    name          text not null,
+    owner_user_id integer references pgapp_meta.users(id) on delete cascade,
+    is_public     boolean not null default false,
+    params        jsonb not null default '{}',
+    created_at    timestamptz not null default now()
+);
 
 -- The pgapp runtime JS library (item value capture, etc.) lives here,
 -- not as a static file: seeded from a built-in default the first time

@@ -15,6 +15,28 @@ page "Tickets" {
     item agent as popup from query agent_names
     item satisfaction as slider (min: "1", max: "5", step: "1")
   }
+
+  # Server-side action module + client-side dynamic actions — see the
+  # single-file examples/helpdesk.pgapp for the full commentary.
+  query close_nonurgent {
+    sql: "update pgapp_data.helpdesk_tickets set status = 'Resolved' where status = 'Open' and urgent = false"
+  }
+  action "Close all non-urgent open tickets" calls run_query (query: "close_nonurgent")
+
+  query agent_load {
+    sql: "select count(*) as open_tickets from pgapp_data.helpdesk_tickets
+          where agent = :agent and status = 'Open'"
+  }
+  region "Open tickets for the selected agent" from query agent_load
+  on change of priority {
+    set urgent to "pgapp.getItem('priority') === 'High'"
+  }
+  on change of agent {
+    refresh agent_load
+  }
+  on change of urgent {
+    toggle notes when "pgapp.getItem('urgent') === 'true'"
+  }
 }
 
 page "TicketDetail" {

@@ -19,13 +19,22 @@
 //!
 //! query     := "query" Ident "{" "sql" ":" String "}"
 //!
-//! entity    := "entity" String "{" field* "}"
+//! entity    := "entity" String ("from" "query" Ident)? "{" field* "}"
 //! field     := "field" Ident ":" Ident ("required")? ("default" Value)?
 //!
-//! page      := "page" String "{" (pageprop | component | query)* "}"
+//! page      := "page" String "{" (pageprop | component | query | dynaction)* "}"
 //! pageprop  := "requires" ":" Ident
 //!
-//! component := report | form | editable_table | chart | text | link | region
+//! dynaction := "on" Ident "of" Ident "{" daop* "}"
+//! daop      := "show" Ident
+//!            | "hide" Ident
+//!            | "toggle" Ident "when" String
+//!            | "set" Ident "to" String
+//!            | "refresh" Ident
+//!
+//! component := report | form | editable_table | chart | text | link | region | action
+//!
+//! action    := "action" String "calls" Ident itemconfig?
 //!
 //! report    := "report" String "of" Ident "{" reportprop* "}"
 //! reportprop := "columns" ":" identlist
@@ -100,8 +109,8 @@
 use anyhow::{bail, Context, Result};
 
 use crate::model::{
-    AppDef, ComponentDef, EntityDef, FieldDef, FieldItem, FieldType, LinkColumn, NavItem, PageDef,
-    QueryDef,
+    AppDef, ComponentDef, DaOp, EntityDef, FieldDef, FieldItem, FieldType, LinkColumn, NavItem,
+    PageDef, QueryDef,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -401,15 +410,23 @@ impl Parser {
     fn parse_entity(&mut self) -> Result<EntityDef> {
         self.expect_keyword("entity")?;
         let name = self.expect_string()?;
-        self.expect_symbol('{')?;
 
+        let source_query = if self.at_keyword("from") {
+            self.advance()?;
+            self.expect_keyword("query")?;
+            Some(self.expect_ident()?)
+        } else {
+            None
+        };
+
+        self.expect_symbol('{')?;
         let mut fields = Vec::new();
         while !self.at_symbol('}') {
             fields.push(self.parse_field()?);
         }
         self.expect_symbol('}')?;
 
-        Ok(EntityDef { name, fields })
+        Ok(EntityDef { name, fields, source_query })
     }
 
     fn parse_field(&mut self) -> Result<FieldDef> {
@@ -457,6 +474,8 @@ impl Parser {
                 self.advance()?;
                 self.expect_symbol(':')?;
                 required_role = Some(self.expect_ident()?);
+            } else if self.at_keyword("on") {
+                components.push(self.parse_dynamic_action()?);
             } else {
                 components.push(self.parse_component()?);
             }
@@ -495,14 +514,71 @@ impl Parser {
             self.expect_keyword("query")?;
             let query = self.expect_ident()?;
             Ok(ComponentDef::Region { label, query })
+        } else if self.at_keyword("action") {
+            self.advance()?;
+            let label = self.expect_string()?;
+            self.expect_keyword("calls")?;
+            let name = self.expect_ident()?;
+            let config = if self.at_symbol('(') {
+                self.parse_item_config()?
+            } else {
+                serde_json::json!({})
+            };
+            Ok(ComponentDef::Action { label, name, config })
         } else {
             bail!(
                 "expected a component ('report', 'form', 'editable_table', 'chart', 'text', \
-                 'link', or 'region'), found {:?} (line {})",
+                 'link', 'region', or 'action'), found {:?} (line {})",
                 self.peek(),
                 self.cur_line()
             );
         }
+    }
+
+    /// Parses `"on" Ident "of" Ident "{" daop* "}"` — a client-side
+    /// dynamic action (see `model::DaOp` and the runtime.js dispatcher).
+    fn parse_dynamic_action(&mut self) -> Result<ComponentDef> {
+        self.expect_keyword("on")?;
+        let event = self.expect_ident()?;
+        self.expect_keyword("of")?;
+        let item = self.expect_ident()?;
+        self.expect_symbol('{')?;
+
+        let mut ops = Vec::new();
+        while !self.at_symbol('}') {
+            if self.at_keyword("show") {
+                self.advance()?;
+                ops.push(DaOp::Show(self.expect_ident()?));
+            } else if self.at_keyword("hide") {
+                self.advance()?;
+                ops.push(DaOp::Hide(self.expect_ident()?));
+            } else if self.at_keyword("toggle") {
+                self.advance()?;
+                let target = self.expect_ident()?;
+                self.expect_keyword("when")?;
+                let when = self.expect_string()?;
+                ops.push(DaOp::Toggle { item: target, when });
+            } else if self.at_keyword("set") {
+                self.advance()?;
+                let target = self.expect_ident()?;
+                self.expect_keyword("to")?;
+                let expr = self.expect_string()?;
+                ops.push(DaOp::Set { item: target, expr });
+            } else if self.at_keyword("refresh") {
+                self.advance()?;
+                ops.push(DaOp::Refresh(self.expect_ident()?));
+            } else {
+                bail!(
+                    "expected 'show', 'hide', 'toggle', 'set', or 'refresh' inside an \
+                     'on ... of ...' block, found {:?} (line {})",
+                    self.peek(),
+                    self.cur_line()
+                );
+            }
+        }
+        self.expect_symbol('}')?;
+
+        Ok(ComponentDef::DynamicAction { event, item, ops })
     }
 
     fn parse_report(&mut self) -> Result<ComponentDef> {
@@ -1064,6 +1140,65 @@ mod tests {
         assert!(app.icons.is_none());
         assert!(app.chart_lib.is_none());
         assert!(!app.auth);
+    }
+
+    #[test]
+    fn parses_query_entities_actions_and_dynamic_actions() {
+        let src = r#"
+            app "Demo" {
+                query stats { sql: "select 'a' as label, 1 as value" }
+
+                entity "t" { field id: id field name: text }
+                entity "stats_view" from query stats {
+                    field label: text
+                    field value: integer
+                }
+
+                page "P" {
+                    report "Stats" of stats_view { columns: label, value }
+                    action "Do it" calls run_query (query: "stats")
+                    on change of name {
+                        set name to "'x'"
+                        show name
+                        hide name
+                        toggle name when "true"
+                        refresh stats
+                    }
+                }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+
+        let stats_view = app.entities.iter().find(|e| e.name == "stats_view").unwrap();
+        assert_eq!(stats_view.source_query.as_deref(), Some("stats"));
+        assert!(app.entities.iter().find(|e| e.name == "t").unwrap().source_query.is_none());
+
+        let page = &app.pages[0];
+        let action = page
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Action { label, name, config } => Some((label, name, config)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(action.0, "Do it");
+        assert_eq!(action.1, "run_query");
+        assert_eq!(action.2["query"], "stats");
+
+        let da = page
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::DynamicAction { event, item, ops } => Some((event, item, ops)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(da.0, "change");
+        assert_eq!(da.1, "name");
+        assert_eq!(da.2.len(), 5);
+        assert!(matches!(&da.2[0], DaOp::Set { item, expr } if item == "name" && expr == "'x'"));
+        assert!(matches!(&da.2[4], DaOp::Refresh(q) if q == "stats"));
     }
 
     #[test]

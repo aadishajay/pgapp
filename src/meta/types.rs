@@ -31,6 +31,9 @@ pub struct RuntimeEntity {
     pub name: String,
     pub table_name: String,
     pub fields: Vec<RuntimeField>,
+    /// Non-null = read-only, query-backed entity (no physical table);
+    /// see `model::EntityDef::source_query`.
+    pub source_query: Option<String>,
 }
 
 impl RuntimeEntity {
@@ -87,6 +90,18 @@ pub enum RuntimeComponent {
     Region {
         label: String,
         query: String,
+    },
+    /// A button running a registered server-side action module.
+    Action {
+        label: String,
+        name: String,
+        config: serde_json::Value,
+    },
+    /// A client-side dynamic action; `config` is the full
+    /// `{event, item, ops}` blob, emitted verbatim into the page's
+    /// dynamic-actions JSON for the runtime.js dispatcher.
+    DynamicAction {
+        config: serde_json::Value,
     },
 }
 

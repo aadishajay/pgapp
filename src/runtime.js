@@ -47,5 +47,111 @@ window.pgapp = (function () {
     if (display) display.textContent = value;
   }
 
-  return { getItem: getItem, setItem: setItem };
+  // ---- dynamic actions ----
+  //
+  // Pages emit their `on <event> of <item> { ... }` blocks as a JSON
+  // <script class="pgapp-dynamic-actions"> blob; this dispatcher binds
+  // them. Ops: show/hide/toggle a field wrapper ([data-pgapp-item]),
+  // set another item from a JS expression, or refresh a region
+  // ([data-pgapp-region]) by re-fetching its rows with the page's
+  // current item values as query bind parameters.
+
+  var daDepth = 0; // guard: setItem fires change events, which may chain
+
+  function evalExpr(expr) {
+    try {
+      return new Function("pgapp", "return (" + expr + ");")(window.pgapp);
+    } catch (e) {
+      console.error("pgapp: dynamic action expression failed:", expr, e);
+      return null;
+    }
+  }
+
+  function setItemVisible(name, visible) {
+    var wrappers = document.querySelectorAll('[data-pgapp-item="' + name + '"]');
+    for (var i = 0; i < wrappers.length; i++) {
+      wrappers[i].style.display = visible ? "" : "none";
+    }
+  }
+
+  function collectItemParams() {
+    var params = new URLSearchParams();
+    var named = document.querySelectorAll("[name]");
+    var seen = {};
+    for (var i = 0; i < named.length; i++) {
+      var name = named[i].getAttribute("name");
+      if (!name || seen[name]) continue;
+      seen[name] = true;
+      var value = getItem(name);
+      if (value !== null && value !== "") params.set(name, value);
+    }
+    // Cross-page parameters (?id=, forwarded link params) still apply.
+    new URLSearchParams(location.search).forEach(function (v, k) {
+      if (!params.has(k)) params.set(k, v);
+    });
+    return params;
+  }
+
+  function refreshRegion(query) {
+    var container = document.querySelector('[data-pgapp-region="' + query + '"]');
+    if (!container) return;
+    var url =
+      location.pathname + "/region/" + encodeURIComponent(query) + "?" + collectItemParams().toString();
+    fetch(url)
+      .then(function (r) {
+        if (!r.ok) throw new Error("region refresh failed: " + r.status);
+        return r.text();
+      })
+      .then(function (html) {
+        container.outerHTML = html;
+      })
+      .catch(function (e) {
+        console.error("pgapp:", e);
+      });
+  }
+
+  function runOps(ops) {
+    if (daDepth > 8) return; // break show/set feedback loops
+    daDepth++;
+    try {
+      for (var i = 0; i < ops.length; i++) {
+        var op = ops[i];
+        if (op.op === "show") setItemVisible(op.item, true);
+        else if (op.op === "hide") setItemVisible(op.item, false);
+        else if (op.op === "toggle") setItemVisible(op.item, !!evalExpr(op.when));
+        else if (op.op === "set") setItem(op.item, String(evalExpr(op.expr)));
+        else if (op.op === "refresh") refreshRegion(op.query);
+      }
+    } finally {
+      daDepth--;
+    }
+  }
+
+  function bindDynamicActions() {
+    var script = document.querySelector("script.pgapp-dynamic-actions");
+    if (!script) return;
+    var actions;
+    try {
+      actions = JSON.parse(script.textContent);
+    } catch (e) {
+      console.error("pgapp: bad dynamic-actions JSON", e);
+      return;
+    }
+    actions.forEach(function (da) {
+      var els = elements(da.item);
+      for (var i = 0; i < els.length; i++) {
+        els[i].addEventListener(da.event, function () {
+          runOps(da.ops);
+        });
+      }
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bindDynamicActions);
+  } else {
+    bindDynamicActions();
+  }
+
+  return { getItem: getItem, setItem: setItem, refreshRegion: refreshRegion };
 })();

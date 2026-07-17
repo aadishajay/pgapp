@@ -37,3 +37,9 @@ query open_backlog {
   sql: "select id, subject, priority, agent, satisfaction from pgapp_data.helpdesk_tickets
         where status = 'Open' order by id"
 }
+
+# A query-backed, read-only entity: no physical table, no forms allowed.
+entity "status_summary" from query by_status {
+  field label: text
+  field value: integer
+}

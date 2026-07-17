@@ -82,6 +82,14 @@ app "Helpdesk" {
     field active: boolean default true
   }
 
+  # A query-backed, read-only entity: no physical table is created, and
+  # binding a form or editable_table to it is a sync-time error. The
+  # declared fields describe the query's columns.
+  entity "status_summary" from query by_status {
+    field label: text
+    field value: integer
+  }
+
   # ---- Pages ----
 
   # A dashboard is just a page whose components happen to all be
@@ -101,6 +109,10 @@ app "Helpdesk" {
     }
     region "Busiest agents" from query top_agents
     region "Latest tickets" from query recent
+    report "Status summary (a query-backed entity)" of status_summary {
+      columns: label, value
+      page_size: 5
+    }
   }
 
   # The classic CRUD pattern: a keyset-paginated Report next to a Form
@@ -119,6 +131,33 @@ app "Helpdesk" {
       item priority as radio ("Low", "Medium", "High")
       item agent as popup from query agent_names
       item satisfaction as slider (min: "1", max: "5", step: "1")
+    }
+
+    # A server-side action module (see src/actions/): the button posts
+    # to the module, which executes this named query raw — so it may be
+    # a plain UPDATE. The outcome comes back as a notice banner.
+    query close_nonurgent {
+      sql: "update pgapp_data.helpdesk_tickets set status = 'Resolved' where status = 'Open' and urgent = false"
+    }
+    action "Close all non-urgent open tickets" calls run_query (query: "close_nonurgent")
+
+    # Client-side dynamic actions, dispatched by the DB-stored
+    # runtime.js. `set` and `toggle` take JS expressions; `refresh`
+    # re-fetches a region with the page's current item values as binds
+    # (so :agent below follows the popup LOV).
+    query agent_load {
+      sql: "select count(*) as open_tickets from pgapp_data.helpdesk_tickets
+            where agent = :agent and status = 'Open'"
+    }
+    region "Open tickets for the selected agent" from query agent_load
+    on change of priority {
+      set urgent to "pgapp.getItem('priority') === 'High'"
+    }
+    on change of agent {
+      refresh agent_load
+    }
+    on change of urgent {
+      toggle notes when "pgapp.getItem('urgent') === 'true'"
     }
   }
 
