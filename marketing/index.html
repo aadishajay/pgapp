@@ -433,6 +433,46 @@
     </div>
   </div>
 
+  <div class="feature">
+    <div class="txt">
+      <span class="eyebrow">one file &rarr; a directory</span>
+      <h2>Start with one file. Split it when it grows.</h2>
+      <p>An app is a single <code>.pgapp</code> file &mdash; until it isn't. Point pgapp at a
+      <strong>directory</strong> and every file under it merges into one app, Terraform-style: one file owns
+      the app shell (settings, <code>auth</code>, nav, chrome); the rest hold entities, pages, and queries,
+      referencing each other by name. No <code>include</code> statements, no import graph, no ordering.</p>
+      <p>The same name declared in two files is a startup error naming both, and every parse error reports
+      its <strong>file and line</strong>. Same grammar in both modes &mdash; splitting is a file move, not a
+      refactor. And either way, the layout is purely an authoring convenience: after sync, the database has
+      never heard of your files.</p>
+    </div>
+    <div class="media">
+      <div class="media-stack">
+        <div class="code-card">
+          <div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">examples/helpdesk-modular/ &mdash; the same app, split</span></div>
+          <pre>helpdesk-modular/
+├─ app.pgapp        <span class="c"># app "Helpdesk" { theme, auth { }, nav, chrome }</span>
+├─ tickets.pgapp    <span class="c"># entity "tickets" + its app-scoped queries</span>
+├─ agents.pgapp     <span class="c"># entity "agents" + the agent_names LOV</span>
+└─ pages/
+   ├─ dashboard.pgapp  <span class="c"># page "Dashboard"</span>
+   ├─ tickets.pgapp    <span class="c"># pages "Tickets" + "TicketDetail"</span>
+   ├─ agents.pgapp     <span class="c"># page "Agents" (requires: admin)</span>
+   └─ backlog.pgapp    <span class="c"># pages "Backlog" + "About"</span></pre>
+        </div>
+        <div class="code-card">
+          <div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">pages/agents.pgapp &mdash; a whole fragment file</span></div>
+          <pre><span class="k">page</span> <span class="s">"Agents"</span> {
+  <span class="k">requires</span>: admin
+  <span class="k">editable_table</span> <span class="s">"Support agents"</span> <span class="k">of</span> agents {
+    columns: name, team, active
+  }
+}</pre>
+        </div>
+      </div>
+    </div>
+  </div>
+
 </main>
 
 <section class="arch">
