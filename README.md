@@ -193,7 +193,12 @@ app "Todo" {
 - `nav { }` (optional, top-level) declares the app's navigation bar.
   Each `item "Label"` is either a leaf (`-> page <Name>`) or a group
   (`{ ... }` of nested items) — nesting groups gives you a multi-level
-  menu, rendered site-wide.
+  menu, rendered site-wide. A leaf whose target page has `requires:
+  <role>` only shows up for a signed-in user who holds that role (or
+  is admin) — no separate markup for this, it's the same check the
+  page itself enforces on a direct visit. A group with every child
+  hidden this way disappears too, instead of rendering an empty
+  dropdown.
 - `entity` blocks describe a table: each `field` has a type, and
   optionally `required` and/or a `default`.
 - `page "Name" { ... }` is just a name plus an ordered list of

@@ -32,8 +32,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::query_engine::resolve_regions;
-use super::{err_response, AppData, AppError, AppState};
+use super::{err_response, visible_nav, AppData, AppError, AppState};
 use crate::html::url_encode;
+use crate::meta::Chrome;
 use crate::render;
 
 pub const SESSION_COOKIE: &str = "pgapp_session";
@@ -328,12 +329,13 @@ pub async fn users_page(
         .await
         .map_err(err_response)?;
 
+    let nav = visible_nav(&data.app, &data.app.nav, &data, &auth);
     Ok(Html(render::users_page(
         &data.app.name,
         &users,
         current.id,
         query.get("error").map(|s| s.as_str()),
-        data.app.chrome(&regions),
+        Chrome { nav: &nav, ..data.app.chrome(&regions) },
         &data.icons,
         &data.chart_lib,
         auth.display(),

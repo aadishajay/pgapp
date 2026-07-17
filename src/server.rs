@@ -34,7 +34,7 @@ use crate::chart_lib::ChartLib;
 use crate::html::url_encode;
 use crate::icons::Icons;
 use crate::item_types;
-use crate::meta::{self, RegionRows, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimePage};
+use crate::meta::{self, Chrome, NavNode, RegionRows, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimePage};
 use crate::model::{FieldItem, HtmlAttrs};
 use crate::render;
 use crate::theme::Theme;
@@ -141,6 +141,32 @@ fn err_response(e: anyhow::Error) -> AppError {
 
 fn page_or_404<'a>(app: &'a RuntimeApp, name: &str) -> Result<&'a RuntimePage, AppError> {
     app.page(name).ok_or_else(|| (StatusCode::NOT_FOUND, format!("no such page '{name}'")))
+}
+
+/// Filters a nav tree down to what the signed-in user (or public
+/// visitor) is actually allowed to open — a leaf whose target page
+/// has a `requires: <role>` the user doesn't hold is dropped the same
+/// way `show`/etc. would reject a direct visit to it (same
+/// `auth::authorize` check), and a group with no surviving children
+/// disappears too rather than rendering an empty dropdown.
+fn visible_nav(app: &RuntimeApp, nodes: &[NavNode], data: &AppData, auth: &AuthCtx) -> Vec<NavNode> {
+    nodes
+        .iter()
+        .filter_map(|node| match &node.target_page {
+            Some(target) => {
+                let required_role = app.page(target).and_then(|p| p.required_role.as_deref());
+                auth::authorize(data, required_role, auth).is_ok().then(|| node.clone())
+            }
+            None => {
+                let children = visible_nav(app, &node.children, data, auth);
+                (!children.is_empty()).then(|| NavNode {
+                    label: node.label.clone(),
+                    target_page: None,
+                    children,
+                })
+            }
+        })
+        .collect()
 }
 
 fn component_at<'a>(page: &'a RuntimePage, idx: usize) -> Result<&'a RuntimeComponent, AppError> {
@@ -773,13 +799,14 @@ async fn show(
         body.push_str(&render::dynamic_actions_script(&dyn_actions));
     }
 
+    let nav = visible_nav(&data.app, &data.app.nav, &data, &auth_ctx);
     Ok(Html(render::page_layout(
         &data.app.name,
         &page.name,
         &body,
         query.get("error").map(|s| s.as_str()),
         query.get("notice").map(|s| s.as_str()),
-        data.app.chrome(&regions),
+        Chrome { nav: &nav, ..data.app.chrome(&regions) },
         &data.icons,
         &data.chart_lib,
         auth_ctx.display(),
@@ -1124,13 +1151,14 @@ async fn admin_reload_page(
     let ctx = HashMap::new();
     let regions = resolve_regions(&state.pool, &data.app, None, &ctx).await.map_err(err_response)?;
 
+    let nav = visible_nav(&data.app, &data.app.nav, &data, &auth_ctx);
     Ok(Html(render::reload_page(
         &data.app.name,
         &state.markup_path,
         markup_text.as_deref(),
         query.get("error").map(|s| s.as_str()),
         query.get("notice").map(|s| s.as_str()),
-        data.app.chrome(&regions),
+        Chrome { nav: &nav, ..data.app.chrome(&regions) },
         &data.icons,
         &data.chart_lib,
         auth_ctx.display(),
