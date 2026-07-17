@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Search, filter, and save the view — pgapp tutorial</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<div class="wrap sitenav">
+  <a class="back" href="../index.html">&larr; pgapp</a>
+  <span class="crumb">Tutorial 2 / 11 &middot; <strong>Search, filter, and save the view</strong></span>
+</div>
+
+<header class="wrap tut-head">
+  <span class="eyebrow">?r0_q=&hellip; &middot; saved views</span>
+  <h1>Search, filter, and save the view.</h1>
+  <p class="lede">Every report grows a search box, a column filter, and a way to bookmark the current filter state as a named, shareable view.</p>
+</header>
+
+<main class="wrap tut-body feature">
+
+<div class="txt">
+  <p>Every report grows an interactive toolbar: a <strong>search box</strong> matching across all visible
+  columns, and a <strong>column filter</strong> ("status contains Open"). Filters live in the URL, ride
+  along with the pagination cursors, and every value is a bind parameter &mdash; column names are
+  validated against the report's own column list, never spliced from the request.</p>
+  <p>The current filter state saves as a named <strong>view</strong> in <code>pgapp_meta.report_views</code>
+  &mdash; private to you, or public to every user of the app. Views render as one-click chips;
+  owners and admins can delete them.</p>
+</div>
+<div class="media">
+  <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/Tickets?r0_col=status&amp;r0_val=Open &mdash; two saved views as chips</span></div><img src="../shots/report-filtered.png" alt="The tickets report filtered to Open status, with a search toolbar and two saved-view chips named High priority and Open only"></div>
+</div>
+
+</main>
+
+<nav class="wrap pager">
+  <a class="pager-link prev" href="reports.html">&larr; Reports</a>
+  <a class="pager-link home" href="../index.html">All topics</a>
+  <a class="pager-link next" href="forms.html">Forms &rarr;</a>
+</nav>
+
+</body>
+</html>

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Server-side actions and client-side reactions — pgapp tutorial</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<div class="wrap sitenav">
+  <a class="back" href="../index.html">&larr; pgapp</a>
+  <span class="crumb">Tutorial 8 / 11 &middot; <strong>Server-side actions and client-side reactions</strong></span>
+</div>
+
+<header class="wrap tut-head">
+  <span class="eyebrow">action &hellip; calls run_query &middot; on change of</span>
+  <h1>Server-side actions and client-side reactions.</h1>
+  <p class="lede">Actions are pgapp's PL/SQL analog on the server; dynamic actions are declarative reactivity on the client &mdash; neither needs hand-written JS.</p>
+</header>
+
+<main class="wrap tut-body feature">
+
+<div class="txt">
+  <p><strong>Actions</strong> are pgapp's PL/SQL analog: named Rust modules in <code>src/actions/</code>,
+  called from a page as a button. The shipped <code>run_query</code> module executes a named query raw
+  &mdash; a plain <code>UPDATE</code> works &mdash; and its outcome comes back as a banner.</p>
+  <p><strong>Dynamic actions</strong> are declarative client-side behavior, dispatched by the DB-stored
+  runtime.js: in this form, picking <em>High</em> priority auto-checks <em>urgent</em>; unchecking
+  urgent hides the notes field; and choosing an agent re-fetches the region below with
+  <code>:agent</code> bound to the selection &mdash; no page reload, no hand-written JS.</p>
+</div>
+<div class="media">
+  <div class="media-stack">
+    <div class="code-card">
+      <div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">from the Tickets page definition</span></div>
+      <pre><span class="k">action</span> <span class="s">"Close all non-urgent open tickets"</span> <span class="k">calls</span> run_query (query: <span class="s">"close_nonurgent"</span>)
+
+<span class="k">on change of</span> priority {
+  <span class="k">set</span> urgent <span class="k">to</span> <span class="s">"pgapp.getItem('priority') === 'High'"</span>
+}
+<span class="k">on change of</span> agent {
+  <span class="k">refresh</span> agent_load
+}</pre>
+    </div>
+    <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">after clicking the action button</span></div><img src="../shots/action-notice.png" alt="A green banner reading Done, 15 rows affected"></div>
+    <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">region refetched with :agent = the picked LOV value</span></div><img src="../shots/da-region.png" alt="The open-tickets-for-selected-agent region showing 3"></div>
+  </div>
+</div>
+
+</main>
+
+<nav class="wrap pager">
+  <a class="pager-link prev" href="auth.html">&larr; A login and roles</a>
+  <a class="pager-link home" href="../index.html">All topics</a>
+  <a class="pager-link next" href="query-entities.html">Query Entities &rarr;</a>
+</nav>
+
+</body>
+</html>

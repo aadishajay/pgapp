@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paginated reports the database is happy about — pgapp tutorial</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<div class="wrap sitenav">
+  <a class="back" href="../index.html">&larr; pgapp</a>
+  <span class="crumb">Tutorial 1 / 11 &middot; <strong>Paginated reports the database is happy about</strong></span>
+</div>
+
+<header class="wrap tut-head">
+  <span class="eyebrow">report &hellip; of tickets</span>
+  <h1>Paginated reports the database is happy about.</h1>
+  <p class="lede">A <strong>Report</strong> is a read-only table over an entity &mdash; and its pagination is keyset, not offset, so it stays cheap at any table size.</p>
+</header>
+
+<main class="wrap tut-body feature">
+
+<div class="txt">
+  <p>A <strong>Report</strong> is a read-only table over an entity. Pagination is keyset ("seek") on the primary key
+  &mdash; no <code>COUNT(*)</code>, no <code>OFFSET</code> scans &mdash; so page 50 costs the same as page 1.</p>
+  <p>Columns can link to other pages, forwarding row values as URL parameters. And because a Form for the
+  same entity sits on this page, every row automatically gets edit and delete actions.</p>
+  <p class="fine">Icons are pluggable too: these are the built-in inline SVGs; drop in a Font&nbsp;Awesome or
+  Material pack with <code>icons: fontawesome</code> in the markup.</p>
+</div>
+<div class="media">
+  <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/Tickets &mdash; page 2 via ?r0_after=8</span></div><img src="../shots/report-page2.png" alt="The All tickets report on its second page, with edit and delete icons on each row and Prev/Next controls"></div>
+  <div class="caption"># the extra fetched row answers "is there a next page?" &mdash; zero extra queries</div>
+</div>
+
+</main>
+
+<nav class="wrap pager">
+  <span class="pager-link prev" style="visibility:hidden">placeholder</span>
+  <a class="pager-link home" href="../index.html">All topics</a>
+  <a class="pager-link next" href="search-and-views.html">Search &rarr;</a>
+</nav>
+
+</body>
+</html>

@@ -4,248 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>pgapp — your Postgres is the app</title>
-<style>
-  :root {
-    --ink0: #0b1220;
-    --ink1: #121b2e;
-    --ink2: #1a2740;
-    --line: #24304a;
-    --text: #dce4f2;
-    --muted: #8b97ad;
-    --accent: #6db3e8;
-    --accent-deep: #336791;
-    --amber: #e8a13d;
-    --good: #58c496;
-    --frame-bar: #1a2438;
-    --shadow: 0 24px 60px rgb(0 0 0 / 0.45);
-    --radius: 12px;
-    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
-    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
-  }
-  @media (prefers-color-scheme: light) {
-    :root {
-      --ink0: #f5f7fb;
-      --ink1: #ffffff;
-      --ink2: #eef2f9;
-      --line: #dbe2ee;
-      --text: #17233a;
-      --muted: #5b6880;
-      --accent: #336791;
-      --accent-deep: #336791;
-      --amber: #a86408;
-      --good: #1e7a54;
-      --frame-bar: #e7ecf5;
-      --shadow: 0 18px 44px rgb(23 35 58 / 0.14);
-    }
-  }
-  :root[data-theme="dark"] {
-    --ink0: #0b1220; --ink1: #121b2e; --ink2: #1a2740; --line: #24304a;
-    --text: #dce4f2; --muted: #8b97ad; --accent: #6db3e8; --accent-deep: #336791;
-    --amber: #e8a13d; --good: #58c496; --frame-bar: #1a2438;
-    --shadow: 0 24px 60px rgb(0 0 0 / 0.45);
-  }
-  :root[data-theme="light"] {
-    --ink0: #f5f7fb; --ink1: #ffffff; --ink2: #eef2f9; --line: #dbe2ee;
-    --text: #17233a; --muted: #5b6880; --accent: #336791; --accent-deep: #336791;
-    --amber: #a86408; --good: #1e7a54; --frame-bar: #e7ecf5;
-    --shadow: 0 18px 44px rgb(23 35 58 / 0.14);
-  }
-
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--ink0);
-    color: var(--text);
-    font-family: var(--sans);
-    line-height: 1.6;
-    font-size: 16px;
-  }
-  a { color: var(--accent); }
-  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-
-  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 1.5rem; }
-
-  /* ---------- hero ---------- */
-  .hero { padding: 4.5rem 0 3.5rem; border-bottom: 1px solid var(--line); }
-  .brand {
-    font-family: var(--mono);
-    font-size: 0.85rem;
-    color: var(--muted);
-    letter-spacing: 0.08em;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 2.25rem;
-  }
-  .brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--good); }
-  h1 {
-    font-family: var(--mono);
-    font-size: clamp(2rem, 5vw, 3.3rem);
-    line-height: 1.12;
-    letter-spacing: -0.02em;
-    margin: 0 0 1.1rem;
-    max-width: 21ch;
-    text-wrap: balance;
-    font-weight: 700;
-  }
-  h1 .a { color: var(--accent); }
-  .lede { color: var(--muted); max-width: 58ch; font-size: 1.08rem; margin: 0 0 2.5rem; }
-  .lede strong { color: var(--text); font-weight: 600; }
-
-  .hero-pair {
-    display: grid;
-    grid-template-columns: minmax(320px, 5fr) 7fr;
-    gap: 1.6rem;
-    align-items: stretch;
-  }
-  @media (max-width: 860px) { .hero-pair { grid-template-columns: 1fr; } }
-
-  .code-card {
-    background: var(--ink1);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    box-shadow: var(--shadow);
-  }
-  .code-card .bar, .frame .bar {
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    background: var(--frame-bar);
-    border-bottom: 1px solid var(--line);
-    padding: 0.55rem 0.9rem;
-    font-family: var(--mono);
-    font-size: 0.72rem;
-    color: var(--muted);
-  }
-  .bar .b { width: 10px; height: 10px; border-radius: 50%; background: var(--line); }
-  .bar .name { margin-left: 0.4rem; }
-  .code-card pre {
-    margin: 0;
-    padding: 1.1rem 1.2rem;
-    overflow-x: auto;
-    font-family: var(--mono);
-    font-size: 0.78rem;
-    line-height: 1.65;
-    flex: 1;
-  }
-  .k { color: var(--accent); font-weight: 600; }
-  .s { color: var(--amber); }
-  .c { color: var(--muted); }
-
-  .frame {
-    background: var(--ink1);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    overflow: hidden;
-    box-shadow: var(--shadow);
-  }
-  .frame img { display: block; width: 100%; height: auto; }
-  .frame.crop img { max-height: 560px; object-fit: cover; object-position: top; }
-
-  .arrow-note {
-    font-family: var(--mono);
-    font-size: 0.78rem;
-    color: var(--muted);
-    text-align: center;
-    padding: 1.2rem 0 0;
-  }
-  .arrow-note .a { color: var(--accent); }
-
-  /* ---------- stats strip ---------- */
-  .stats {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 2.5rem;
-    padding: 1.6rem 0;
-    border-bottom: 1px solid var(--line);
-    font-family: var(--mono);
-  }
-  .stat .n { font-size: 1.5rem; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
-  .stat .l { font-size: 0.75rem; color: var(--muted); letter-spacing: 0.06em; }
-
-  /* ---------- feature rows ---------- */
-  .features { padding: 1rem 0 2rem; }
-  .feature {
-    display: grid;
-    grid-template-columns: minmax(280px, 4fr) 8fr;
-    gap: 2.2rem;
-    align-items: start;
-    padding: 3.2rem 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .feature:last-child { border-bottom: none; }
-  .feature.flip { grid-template-columns: 8fr minmax(280px, 4fr); }
-  .feature.flip .txt { order: 2; }
-  .feature.flip .media { order: 1; }
-  @media (max-width: 860px) {
-    .feature, .feature.flip { grid-template-columns: 1fr; }
-    .feature.flip .txt { order: 1; }
-    .feature.flip .media { order: 2; }
-  }
-  .eyebrow {
-    display: inline-block;
-    font-family: var(--mono);
-    font-size: 0.74rem;
-    color: var(--accent);
-    background: color-mix(in srgb, var(--accent) 12%, transparent);
-    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-    border-radius: 6px;
-    padding: 0.2rem 0.55rem;
-    margin-bottom: 0.9rem;
-  }
-  .feature h2 {
-    font-family: var(--mono);
-    font-size: 1.35rem;
-    letter-spacing: -0.01em;
-    margin: 0 0 0.7rem;
-    line-height: 1.3;
-    text-wrap: balance;
-  }
-  .feature p { color: var(--muted); margin: 0 0 0.8rem; max-width: 48ch; }
-  .feature p strong { color: var(--text); font-weight: 600; }
-  .feature .fine { font-size: 0.85rem; }
-  .media-stack { display: flex; flex-direction: column; gap: 1.2rem; }
-  .caption {
-    font-family: var(--mono);
-    font-size: 0.72rem;
-    color: var(--muted);
-    padding: 0.55rem 0.2rem 0;
-  }
-  .two-up { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; }
-  @media (max-width: 700px) { .two-up { grid-template-columns: 1fr; } }
-
-  /* ---------- architecture ---------- */
-  .arch { padding: 3.5rem 0; border-bottom: 1px solid var(--line); }
-  .arch h2 { font-family: var(--mono); font-size: 1.35rem; margin: 0 0 1.6rem; }
-  .arch-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 1.2rem; }
-  .arch-card {
-    background: var(--ink1);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    padding: 1.1rem 1.2rem;
-  }
-  .arch-card h3 { font-family: var(--mono); font-size: 0.9rem; color: var(--accent); margin: 0 0 0.4rem; }
-  .arch-card p { font-size: 0.85rem; color: var(--muted); margin: 0; }
-
-  /* ---------- footer ---------- */
-  .foot { padding: 3rem 0 4rem; }
-  .foot h2 { font-family: var(--mono); font-size: 1.2rem; margin: 0 0 1rem; }
-  .runbox {
-    background: var(--ink1);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    padding: 1rem 1.2rem;
-    font-family: var(--mono);
-    font-size: 0.8rem;
-    overflow-x: auto;
-    white-space: pre;
-    line-height: 1.8;
-  }
-  .foot .sig { margin-top: 2rem; font-size: 0.85rem; color: var(--muted); }
-</style>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
 
@@ -311,244 +70,79 @@
   <div class="stat"><div class="n">0</div><div class="l">lines of app code</div></div>
 </section>
 
-<main class="features wrap">
-
-  <div class="feature">
-    <div class="txt">
-      <span class="eyebrow">report &hellip; of tickets</span>
-      <h2>Paginated reports the database is happy about.</h2>
-      <p>A <strong>Report</strong> is a read-only table over an entity. Pagination is keyset ("seek") on the primary key
-      &mdash; no <code>COUNT(*)</code>, no <code>OFFSET</code> scans &mdash; so page 50 costs the same as page 1.</p>
-      <p>Columns can link to other pages, forwarding row values as URL parameters. And because a Form for the
-      same entity sits on this page, every row automatically gets edit and delete actions.</p>
-      <p class="fine">Icons are pluggable too: these are the built-in inline SVGs; drop in a Font&nbsp;Awesome or
-      Material pack with <code>icons: fontawesome</code> in the markup.</p>
-    </div>
-    <div class="media">
-      <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/Tickets &mdash; page 2 via ?r0_after=8</span></div><img src="shots/report-page2.png" alt="The All tickets report on its second page, with edit and delete icons on each row and Prev/Next controls"></div>
-      <div class="caption"># the extra fetched row answers "is there a next page?" &mdash; zero extra queries</div>
-    </div>
+<section class="wrap toc" aria-label="Tutorial">
+  <h2>Learn pgapp</h2>
+  <p class="toc-intro">Eleven short, screenshot-driven pages &mdash; each one part of the framework,
+  demonstrated on the same live Helpdesk app running against real Postgres.</p>
+  <div class="toc-grid">
+    <a class="toc-card" href="tutorial/reports.html">
+      <span class="n">01</span>
+      <h3>Paginated reports the database is happy about.</h3>
+      <p>Keyset pagination, edit/delete row actions from a sibling form, pluggable icons.</p>
+      <span class="go">Read this part &rarr;</span>
+    </a>
+    <a class="toc-card" href="tutorial/search-and-views.html">
+      <span class="n">02</span>
+      <h3>Search, filter, and save the view.</h3>
+      <p>Search across all columns, filter by column, and save private or public views.</p>
+      <span class="go">Read this part &rarr;</span>
+    </a>
+    <a class="toc-card" href="tutorial/forms.html">
+      <span class="n">03</span>
+      <h3>Forms assembled from pluggable item types.</h3>
+      <p>Text, checkbox, radio group, read-only, slider, and popup-LOV item types.</p>
+      <span class="go">Read this part &rarr;</span>
+    </a>
+    <a class="toc-card" href="tutorial/charts.html">
+      <span class="n">04</span>
+      <h3>Charts with a swappable rendering engine.</h3>
+      <p>Server-rendered inline SVG by default, or plug in canvas/D3/anything.</p>
+      <span class="go">Read this part &rarr;</span>
+    </a>
+    <a class="toc-card" href="tutorial/editable-tables.html">
+      <span class="n">05</span>
+      <h3>Spreadsheet-style editing for small tables.</h3>
+      <p>Every row is its own inline form, plus an add-new row at the bottom.</p>
+      <span class="go">Read this part &rarr;</span>
+    </a>
+    <a class="toc-card" href="tutorial/queries.html">
+      <span class="n">06</span>
+      <h3>Named SQL, safely parameterized, shared everywhere.</h3>
+      <p>Bind-parameterized SQL, reused across charts, regions, reports, and popups.</p>
+      <span class="go">Read this part &rarr;</span>
+    </a>
+    <a class="toc-card" href="tutorial/auth.html">
+      <span class="n">07</span>
+      <h3>A login and roles, from one block of markup.</h3>
+      <p>argon2 passwords, server-side sessions, role-gated pages, a built-in Users admin screen.</p>
+      <span class="go">Read this part &rarr;</span>
+    </a>
+    <a class="toc-card" href="tutorial/actions.html">
+      <span class="n">08</span>
+      <h3>Server-side actions and client-side reactions.</h3>
+      <p>Named Rust action modules, plus declarative show/hide/set/refresh client behavior.</p>
+      <span class="go">Read this part &rarr;</span>
+    </a>
+    <a class="toc-card" href="tutorial/query-entities.html">
+      <span class="n">09</span>
+      <h3>Entities without tables. Tables without surprises.</h3>
+      <p>Read-only query-backed entities, plus deploy-time schema/type verification.</p>
+      <span class="go">Read this part &rarr;</span>
+    </a>
+    <a class="toc-card" href="tutorial/theming.html">
+      <span class="n">10</span>
+      <h3>One app. Any design system.</h3>
+      <p>Same app, same database, same request &mdash; two completely different looks.</p>
+      <span class="go">Read this part &rarr;</span>
+    </a>
+    <a class="toc-card" href="tutorial/modular-apps.html">
+      <span class="n">11</span>
+      <h3>Start with one file. Split it when it grows.</h3>
+      <p>Split a growing app into a directory of files, Terraform-style, with no import graph.</p>
+      <span class="go">Read this part &rarr;</span>
+    </a>
   </div>
-
-  <div class="feature flip">
-    <div class="txt">
-      <span class="eyebrow">?r0_q=&hellip; &middot; saved views</span>
-      <h2>Search, filter, and save the view.</h2>
-      <p>Every report grows an interactive toolbar: a <strong>search box</strong> matching across all visible
-      columns, and a <strong>column filter</strong> ("status contains Open"). Filters live in the URL, ride
-      along with the pagination cursors, and every value is a bind parameter &mdash; column names are
-      validated against the report's own column list, never spliced from the request.</p>
-      <p>The current filter state saves as a named <strong>view</strong> in <code>pgapp_meta.report_views</code>
-      &mdash; private to you, or public to every user of the app. Views render as one-click chips;
-      owners and admins can delete them.</p>
-    </div>
-    <div class="media">
-      <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/Tickets?r0_col=status&amp;r0_val=Open &mdash; two saved views as chips</span></div><img src="shots/report-filtered.png" alt="The tickets report filtered to Open status, with a search toolbar and two saved-view chips named High priority and Open only"></div>
-    </div>
-  </div>
-
-  <div class="feature flip">
-    <div class="txt">
-      <span class="eyebrow">form &hellip; item x as slider</span>
-      <h2>Forms assembled from pluggable item types.</h2>
-      <p>Every field's widget is a small Rust component: text, checkbox, radio group, read-only, a slider,
-      a popup list of values. Adding your own is one file and one registry line &mdash; the markup grammar
-      never changes.</p>
-      <p>The <strong>popup LOV</strong> here gets its choices live from a named query (<code>select name as value from
-      agents&hellip;</code>), and writes the picked value back through the DB-stored <code>pgapp.setItem()</code> JS runtime.</p>
-    </div>
-    <div class="media">
-      <div class="media-stack">
-        <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/Tickets?edit_1=1 &mdash; the same form, now editing row 1</span></div><img src="shots/form-edit.png" alt="The ticket form in edit mode: pill-styled radio groups, an agent picker, a satisfaction slider reading 5"></div>
-        <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">popup LOV &mdash; choices from a live query</span></div><img src="shots/popup-lov.png" alt="A modal dialog listing the five active agents, fetched from a named query"></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="feature">
-    <div class="txt">
-      <span class="eyebrow">chart &hellip; from query</span>
-      <h2>Charts with a swappable rendering engine.</h2>
-      <p>A <strong>Chart</strong> component points at a named query and two of its columns. The built-in renderer
-      draws dependency-free inline SVG on the server &mdash; no JS, no CDN.</p>
-      <p>Prefer canvas, D3, or a real charting library? Drop a <code>chart.js</code> file into
-      <code>chart-libs/&lt;name&gt;/</code> and declare <code>chart_lib: &lt;name&gt;</code> in the markup. The server emits the rows as JSON and
-      your library draws them &mdash; it never needs to know how.</p>
-    </div>
-    <div class="media">
-      <div class="frame crop"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/Dashboard &mdash; bar + line, inline SVG</span></div><img src="shots/dashboard.png" alt="Bar chart of tickets by status and a line chart of new tickets per day"></div>
-    </div>
-  </div>
-
-  <div class="feature flip">
-    <div class="txt">
-      <span class="eyebrow">editable_table &hellip; of agents</span>
-      <h2>Spreadsheet-style editing for small tables.</h2>
-      <p>An <strong>EditableTable</strong> renders every row as its own inline form &mdash; change a value, hit save,
-      done. Plus an add-new row at the bottom. No list/edit round-trip for data you just want to tweak in place.</p>
-    </div>
-    <div class="media">
-      <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/Agents</span></div><img src="shots/agents.png" alt="Six agent rows, each with editable name, team, and active fields plus save and delete buttons"></div>
-    </div>
-  </div>
-
-  <div class="feature">
-    <div class="txt">
-      <span class="eyebrow">query &hellip; where status = :status</span>
-      <h2>Named SQL, safely parameterized, shared everywhere.</h2>
-      <p>Declare a query once &mdash; app-wide or scoped to one page &mdash; and reference it from charts, regions,
-      report sources, and popup choices. <code>:name</code> markers compile to genuine bind parameters,
-      <strong>never string interpolation</strong>.</p>
-      <p>Values cross pages through links: the Tickets report forwards each row's status as
-      <code>?status=&hellip;</code>, and this page's query reads it back as <code>:status</code>. Parameter passing
-      with zero code.</p>
-    </div>
-    <div class="media">
-      <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/TicketDetail?id=1&amp;status=Resolved</span></div><img src="shots/detail.png" alt="The TicketDetail page showing a table of other resolved tickets, driven by the forwarded status parameter"></div>
-      <div class="caption"># try editing ?status= in the URL &mdash; the region follows it</div>
-    </div>
-  </div>
-
-  <div class="feature">
-    <div class="txt">
-      <span class="eyebrow">auth { } &hellip; requires: admin</span>
-      <h2>A login and roles, from one block of markup.</h2>
-      <p>Add <code>auth&nbsp;{&nbsp;}</code> to the app and every page sits behind a sign-in:
-      <strong>argon2-hashed passwords</strong>, server-side sessions an admin can revoke by deleting a row,
-      and a one-time first-run screen that creates the admin account.</p>
-      <p>Then <code>requires: admin</code> on a page gates it by role — reads <em>and</em> writes. The Agents
-      page here returns 403 to the support team and renders for admins. Accounts are managed on the built-in
-      Users page, never in the markup: passwords don't belong in a source file.</p>
-    </div>
-    <div class="media">
-      <div class="media-stack">
-        <div class="frame crop"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/login &mdash; themed like every other page</span></div><img src="shots/auth-login.png" alt="The sign-in form, styled by the vivid theme" style="max-height:400px"></div>
-        <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/users &mdash; built-in, admin role only</span></div><img src="shots/auth-users.png" alt="The built-in user management page listing the admin and a support user, with an add-user form"></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="feature flip">
-    <div class="txt">
-      <span class="eyebrow">action &hellip; calls run_query &middot; on change of</span>
-      <h2>Server-side actions and client-side reactions.</h2>
-      <p><strong>Actions</strong> are pgapp's PL/SQL analog: named Rust modules in <code>src/actions/</code>,
-      called from a page as a button. The shipped <code>run_query</code> module executes a named query raw
-      &mdash; a plain <code>UPDATE</code> works &mdash; and its outcome comes back as a banner.</p>
-      <p><strong>Dynamic actions</strong> are declarative client-side behavior, dispatched by the DB-stored
-      runtime.js: in this form, picking <em>High</em> priority auto-checks <em>urgent</em>; unchecking
-      urgent hides the notes field; and choosing an agent re-fetches the region below with
-      <code>:agent</code> bound to the selection &mdash; no page reload, no hand-written JS.</p>
-    </div>
-    <div class="media">
-      <div class="media-stack">
-        <div class="code-card">
-          <div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">from the Tickets page definition</span></div>
-          <pre><span class="k">action</span> <span class="s">"Close all non-urgent open tickets"</span> <span class="k">calls</span> run_query (query: <span class="s">"close_nonurgent"</span>)
-
-<span class="k">on change of</span> priority {
-  <span class="k">set</span> urgent <span class="k">to</span> <span class="s">"pgapp.getItem('priority') === 'High'"</span>
-}
-<span class="k">on change of</span> agent {
-  <span class="k">refresh</span> agent_load
-}</pre>
-        </div>
-        <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">after clicking the action button</span></div><img src="shots/action-notice.png" alt="A green banner reading Done, 15 rows affected"></div>
-        <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">region refetched with :agent = the picked LOV value</span></div><img src="shots/da-region.png" alt="The open-tickets-for-selected-agent region showing 3"></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="feature">
-    <div class="txt">
-      <span class="eyebrow">entity &hellip; from query</span>
-      <h2>Entities without tables. Tables without surprises.</h2>
-      <p>An entity can be backed by a <strong>named query</strong> instead of a table &mdash; the APEX "view"
-      pattern. It's read-only by construction: no table is created, and binding a form to it fails at
-      sync with a clear error. Reports and the JSON API work as usual.</p>
-      <p>And for entities that <em>do</em> own tables, every deployment now verifies the physical schema
-      against the declared fields: a type mismatch stops startup naming every offending column, instead
-      of failing as a confusing cast error at request time.</p>
-    </div>
-    <div class="media">
-      <div class="media-stack">
-        <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">a report over a query-backed entity</span></div><img src="shots/query-entity.png" alt="The status summary report driven by a query-backed entity"></div>
-        <div class="code-card">
-          <div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">startup, against a drifted table</span></div>
-          <pre><span class="c">$ pgapp examples/helpdesk.pgapp</span>
-Error: entity 'things' does not match its existing table:
-  - column 'amount' is <span class="s">text</span> in pgapp_data.things
-    but the entity declares <span class="s">integer</span> (expected int4)
-Fix the markup to match the table, or migrate the table
-(pgapp adds columns but never changes or drops them).</pre>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="feature flip">
-    <div class="txt">
-      <span class="eyebrow">theme: vivid | shadcn | plain</span>
-      <h2>One app. Any design system.</h2>
-      <p>Rendered HTML only ever uses a fixed contract of <code>.pgapp-*</code> classes. A theme is a directory
-      with one CSS file that styles them &mdash; these two screenshots are <strong>the same app, the same database,
-      the same request</strong>, under two themes.</p>
-      <p class="fine">The colorful one ("vivid") was written for this demo in one CSS file. The other is the
-      shadcn/ui default.</p>
-    </div>
-    <div class="media">
-      <div class="two-up">
-        <div>
-          <div class="frame crop"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">theme: vivid</span></div><img src="shots/dashboard.png" alt="Dashboard in the vivid theme: gradient header, purple charts, card panels"></div>
-        </div>
-        <div>
-          <div class="frame crop"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">theme: shadcn</span></div><img src="shots/dashboard-shadcn.png" alt="The identical dashboard in the neutral shadcn theme"></div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="feature">
-    <div class="txt">
-      <span class="eyebrow">one file &rarr; a directory</span>
-      <h2>Start with one file. Split it when it grows.</h2>
-      <p>An app is a single <code>.pgapp</code> file &mdash; until it isn't. Point pgapp at a
-      <strong>directory</strong> and every file under it merges into one app, Terraform-style: one file owns
-      the app shell (settings, <code>auth</code>, nav, chrome); the rest hold entities, pages, and queries,
-      referencing each other by name. No <code>include</code> statements, no import graph, no ordering.</p>
-      <p>The same name declared in two files is a startup error naming both, and every parse error reports
-      its <strong>file and line</strong>. Same grammar in both modes &mdash; splitting is a file move, not a
-      refactor. And either way, the layout is purely an authoring convenience: after sync, the database has
-      never heard of your files.</p>
-    </div>
-    <div class="media">
-      <div class="media-stack">
-        <div class="code-card">
-          <div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">examples/helpdesk-modular/ &mdash; the same app, split</span></div>
-          <pre>helpdesk-modular/
-├─ app.pgapp        <span class="c"># app "Helpdesk" { theme, auth { }, nav, chrome }</span>
-├─ tickets.pgapp    <span class="c"># entity "tickets" + its app-scoped queries</span>
-├─ agents.pgapp     <span class="c"># entity "agents" + the agent_names LOV</span>
-└─ pages/
-   ├─ dashboard.pgapp  <span class="c"># page "Dashboard"</span>
-   ├─ tickets.pgapp    <span class="c"># pages "Tickets" + "TicketDetail"</span>
-   ├─ agents.pgapp     <span class="c"># page "Agents" (requires: admin)</span>
-   └─ backlog.pgapp    <span class="c"># pages "Backlog" + "About"</span></pre>
-        </div>
-        <div class="code-card">
-          <div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">pages/agents.pgapp &mdash; a whole fragment file</span></div>
-          <pre><span class="k">page</span> <span class="s">"Agents"</span> {
-  <span class="k">requires</span>: admin
-  <span class="k">editable_table</span> <span class="s">"Support agents"</span> <span class="k">of</span> agents {
-    columns: name, team, active
-  }
-}</pre>
-        </div>
-      </div>
-    </div>
-  </div>
-
-</main>
+</section>
 
 <section class="arch">
   <div class="wrap">

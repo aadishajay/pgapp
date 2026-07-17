@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Named SQL, safely parameterized, shared everywhere — pgapp tutorial</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<div class="wrap sitenav">
+  <a class="back" href="../index.html">&larr; pgapp</a>
+  <span class="crumb">Tutorial 6 / 11 &middot; <strong>Named SQL, safely parameterized, shared everywhere</strong></span>
+</div>
+
+<header class="wrap tut-head">
+  <span class="eyebrow">query &hellip; where status = :status</span>
+  <h1>Named SQL, safely parameterized, shared everywhere.</h1>
+  <p class="lede">Declare SQL once, reference it from charts, regions, reports, and popups &mdash; and pass values across pages with zero code.</p>
+</header>
+
+<main class="wrap tut-body feature">
+
+<div class="txt">
+  <p>Declare a query once &mdash; app-wide or scoped to one page &mdash; and reference it from charts, regions,
+  report sources, and popup choices. <code>:name</code> markers compile to genuine bind parameters,
+  <strong>never string interpolation</strong>.</p>
+  <p>Values cross pages through links: the Tickets report forwards each row's status as
+  <code>?status=&hellip;</code>, and this page's query reads it back as <code>:status</code>. Parameter passing
+  with zero code.</p>
+</div>
+<div class="media">
+  <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/TicketDetail?id=1&amp;status=Resolved</span></div><img src="../shots/detail.png" alt="The TicketDetail page showing a table of other resolved tickets, driven by the forwarded status parameter"></div>
+  <div class="caption"># try editing ?status= in the URL &mdash; the region follows it</div>
+</div>
+
+</main>
+
+<nav class="wrap pager">
+  <a class="pager-link prev" href="editable-tables.html">&larr; Editable Tables</a>
+  <a class="pager-link home" href="../index.html">All topics</a>
+  <a class="pager-link next" href="auth.html">A login and roles &rarr;</a>
+</nav>
+
+</body>
+</html>

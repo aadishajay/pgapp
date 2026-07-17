@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A login and roles, from one block of markup — pgapp tutorial</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<div class="wrap sitenav">
+  <a class="back" href="../index.html">&larr; pgapp</a>
+  <span class="crumb">Tutorial 7 / 11 &middot; <strong>A login and roles, from one block of markup</strong></span>
+</div>
+
+<header class="wrap tut-head">
+  <span class="eyebrow">auth { } &hellip; requires: admin</span>
+  <h1>A login and roles, from one block of markup.</h1>
+  <p class="lede">One <code>auth { }</code> block gets you hashed passwords, revocable sessions, and role-gated pages &mdash; reads and writes.</p>
+</header>
+
+<main class="wrap tut-body feature">
+
+<div class="txt">
+  <p>Add <code>auth&nbsp;{&nbsp;}</code> to the app and every page sits behind a sign-in:
+  <strong>argon2-hashed passwords</strong>, server-side sessions an admin can revoke by deleting a row,
+  and a one-time first-run screen that creates the admin account.</p>
+  <p>Then <code>requires: admin</code> on a page gates it by role — reads <em>and</em> writes. The Agents
+  page here returns 403 to the support team and renders for admins. Accounts are managed on the built-in
+  Users page, never in the markup: passwords don't belong in a source file.</p>
+</div>
+<div class="media">
+  <div class="media-stack">
+    <div class="frame crop"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/login &mdash; themed like every other page</span></div><img src="../shots/auth-login.png" alt="The sign-in form, styled by the vivid theme" style="max-height:400px"></div>
+    <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/users &mdash; built-in, admin role only</span></div><img src="../shots/auth-users.png" alt="The built-in user management page listing the admin and a support user, with an add-user form"></div>
+  </div>
+</div>
+
+</main>
+
+<nav class="wrap pager">
+  <a class="pager-link prev" href="queries.html">&larr; Named SQL</a>
+  <a class="pager-link home" href="../index.html">All topics</a>
+  <a class="pager-link next" href="actions.html">Actions &rarr;</a>
+</nav>
+
+</body>
+</html>

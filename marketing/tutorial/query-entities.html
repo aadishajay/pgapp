@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Entities without tables. Tables without surprises — pgapp tutorial</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<div class="wrap sitenav">
+  <a class="back" href="../index.html">&larr; pgapp</a>
+  <span class="crumb">Tutorial 9 / 11 &middot; <strong>Entities without tables. Tables without surprises</strong></span>
+</div>
+
+<header class="wrap tut-head">
+  <span class="eyebrow">entity &hellip; from query</span>
+  <h1>Entities without tables. Tables without surprises.</h1>
+  <p class="lede">An entity can be a read-only view over a query instead of a table &mdash; and every real table gets its schema checked at deploy time.</p>
+</header>
+
+<main class="wrap tut-body feature">
+
+<div class="txt">
+  <p>An entity can be backed by a <strong>named query</strong> instead of a table &mdash; the APEX "view"
+  pattern. It's read-only by construction: no table is created, and binding a form to it fails at
+  sync with a clear error. Reports and the JSON API work as usual.</p>
+  <p>And for entities that <em>do</em> own tables, every deployment now verifies the physical schema
+  against the declared fields: a type mismatch stops startup naming every offending column, instead
+  of failing as a confusing cast error at request time.</p>
+</div>
+<div class="media">
+  <div class="media-stack">
+    <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">a report over a query-backed entity</span></div><img src="../shots/query-entity.png" alt="The status summary report driven by a query-backed entity"></div>
+    <div class="code-card">
+      <div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">startup, against a drifted table</span></div>
+      <pre><span class="c">$ pgapp examples/helpdesk.pgapp</span>
+Error: entity 'things' does not match its existing table:
+  - column 'amount' is <span class="s">text</span> in pgapp_data.things
+    but the entity declares <span class="s">integer</span> (expected int4)
+Fix the markup to match the table, or migrate the table
+(pgapp adds columns but never changes or drops them).</pre>
+    </div>
+  </div>
+</div>
+
+</main>
+
+<nav class="wrap pager">
+  <a class="pager-link prev" href="actions.html">&larr; Actions</a>
+  <a class="pager-link home" href="../index.html">All topics</a>
+  <a class="pager-link next" href="theming.html">One app &rarr;</a>
+</nav>
+
+</body>
+</html>

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forms assembled from pluggable item types — pgapp tutorial</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<div class="wrap sitenav">
+  <a class="back" href="../index.html">&larr; pgapp</a>
+  <span class="crumb">Tutorial 3 / 11 &middot; <strong>Forms assembled from pluggable item types</strong></span>
+</div>
+
+<header class="wrap tut-head">
+  <span class="eyebrow">form &hellip; item x as slider</span>
+  <h1>Forms assembled from pluggable item types.</h1>
+  <p class="lede">Every field's widget &mdash; text box, slider, popup picker &mdash; is a small, swappable Rust component behind one consistent grammar.</p>
+</header>
+
+<main class="wrap tut-body feature">
+
+<div class="txt">
+  <p>Every field's widget is a small Rust component: text, checkbox, radio group, read-only, a slider,
+  a popup list of values. Adding your own is one file and one registry line &mdash; the markup grammar
+  never changes.</p>
+  <p>The <strong>popup LOV</strong> here gets its choices live from a named query (<code>select name as value from
+  agents&hellip;</code>), and writes the picked value back through the DB-stored <code>pgapp.setItem()</code> JS runtime.</p>
+</div>
+<div class="media">
+  <div class="media-stack">
+    <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/Tickets?edit_1=1 &mdash; the same form, now editing row 1</span></div><img src="../shots/form-edit.png" alt="The ticket form in edit mode: pill-styled radio groups, an agent picker, a satisfaction slider reading 5"></div>
+    <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">popup LOV &mdash; choices from a live query</span></div><img src="../shots/popup-lov.png" alt="A modal dialog listing the five active agents, fetched from a named query"></div>
+  </div>
+</div>
+
+</main>
+
+<nav class="wrap pager">
+  <a class="pager-link prev" href="search-and-views.html">&larr; Search</a>
+  <a class="pager-link home" href="../index.html">All topics</a>
+  <a class="pager-link next" href="charts.html">Charts &rarr;</a>
+</nav>
+
+</body>
+</html>

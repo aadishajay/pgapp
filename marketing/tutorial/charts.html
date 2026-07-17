@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Charts with a swappable rendering engine — pgapp tutorial</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<div class="wrap sitenav">
+  <a class="back" href="../index.html">&larr; pgapp</a>
+  <span class="crumb">Tutorial 4 / 11 &middot; <strong>Charts with a swappable rendering engine</strong></span>
+</div>
+
+<header class="wrap tut-head">
+  <span class="eyebrow">chart &hellip; from query</span>
+  <h1>Charts with a swappable rendering engine.</h1>
+  <p class="lede">Charts draw dependency-free inline SVG by default &mdash; or hand the same data to any JS charting library you like.</p>
+</header>
+
+<main class="wrap tut-body feature">
+
+<div class="txt">
+  <p>A <strong>Chart</strong> component points at a named query and two of its columns. The built-in renderer
+  draws dependency-free inline SVG on the server &mdash; no JS, no CDN.</p>
+  <p>Prefer canvas, D3, or a real charting library? Drop a <code>chart.js</code> file into
+  <code>chart-libs/&lt;name&gt;/</code> and declare <code>chart_lib: &lt;name&gt;</code> in the markup. The server emits the rows as JSON and
+  your library draws them &mdash; it never needs to know how.</p>
+</div>
+<div class="media">
+  <div class="frame crop"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/Dashboard &mdash; bar + line, inline SVG</span></div><img src="../shots/dashboard.png" alt="Bar chart of tickets by status and a line chart of new tickets per day"></div>
+</div>
+
+</main>
+
+<nav class="wrap pager">
+  <a class="pager-link prev" href="forms.html">&larr; Forms</a>
+  <a class="pager-link home" href="../index.html">All topics</a>
+  <a class="pager-link next" href="editable-tables.html">Editable Tables &rarr;</a>
+</nav>
+
+</body>
+</html>

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Start with one file. Split it when it grows — pgapp tutorial</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+
+<div class="wrap sitenav">
+  <a class="back" href="../index.html">&larr; pgapp</a>
+  <span class="crumb">Tutorial 11 / 11 &middot; <strong>Start with one file. Split it when it grows</strong></span>
+</div>
+
+<header class="wrap tut-head">
+  <span class="eyebrow">one file &rarr; a directory</span>
+  <h1>Start with one file. Split it when it grows.</h1>
+  <p class="lede">An app is a single <code>.pgapp</code> file &mdash; until it isn't. Point pgapp at a directory instead and every file merges into one app.</p>
+</header>
+
+<main class="wrap tut-body feature">
+
+<div class="txt">
+  <p>An app is a single <code>.pgapp</code> file &mdash; until it isn't. Point pgapp at a
+  <strong>directory</strong> and every file under it merges into one app, Terraform-style: one file owns
+  the app shell (settings, <code>auth</code>, nav, chrome); the rest hold entities, pages, and queries,
+  referencing each other by name. No <code>include</code> statements, no import graph, no ordering.</p>
+  <p>The same name declared in two files is a startup error naming both, and every parse error reports
+  its <strong>file and line</strong>. Same grammar in both modes &mdash; splitting is a file move, not a
+  refactor. And either way, the layout is purely an authoring convenience: after sync, the database has
+  never heard of your files.</p>
+</div>
+<div class="media">
+  <div class="media-stack">
+    <div class="code-card">
+      <div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">examples/helpdesk-modular/ &mdash; the same app, split</span></div>
+      <pre>helpdesk-modular/
+&#9500;&#9472; app.pgapp        <span class="c"># app "Helpdesk" { theme, auth { }, nav, chrome }</span>
+&#9500;&#9472; tickets.pgapp    <span class="c"># entity "tickets" + its app-scoped queries</span>
+&#9500;&#9472; agents.pgapp     <span class="c"># entity "agents" + the agent_names LOV</span>
+&#9492;&#9472; pages/
+   &#9500;&#9472; dashboard.pgapp  <span class="c"># page "Dashboard"</span>
+   &#9500;&#9472; tickets.pgapp    <span class="c"># pages "Tickets" + "TicketDetail"</span>
+   &#9500;&#9472; agents.pgapp     <span class="c"># page "Agents" (requires: admin)</span>
+   &#9492;&#9472; backlog.pgapp    <span class="c"># pages "Backlog" + "About"</span></pre>
+    </div>
+    <div class="code-card">
+      <div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">pages/agents.pgapp &mdash; a whole fragment file</span></div>
+      <pre><span class="k">page</span> <span class="s">"Agents"</span> {
+  <span class="k">requires</span>: admin
+  <span class="k">editable_table</span> <span class="s">"Support agents"</span> <span class="k">of</span> agents {
+    columns: name, team, active
+  }
+}</pre>
+    </div>
+  </div>
+</div>
+
+</main>
+
+<nav class="wrap pager">
+  <a class="pager-link prev" href="theming.html">&larr; One app</a>
+  <a class="pager-link home" href="../index.html">All topics</a>
+  <span class="pager-link next" style="visibility:hidden">placeholder</span>
+</nav>
+
+</body>
+</html>
