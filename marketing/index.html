@@ -262,6 +262,9 @@
       <div class="code-card">
         <div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">helpdesk.pgapp</span></div>
         <pre><span class="k">app</span> <span class="s">"Helpdesk"</span> {
+  <span class="k">theme</span>: vivid
+  <span class="k">auth</span> { }
+
   <span class="k">entity</span> <span class="s">"tickets"</span> {
     <span class="k">field</span> subject: text required
     <span class="k">field</span> status: text default Open
@@ -319,7 +322,7 @@
       <p>Columns can link to other pages, forwarding row values as URL parameters. And because a Form for the
       same entity sits on this page, every row automatically gets edit and delete actions.</p>
       <p class="fine">Icons are pluggable too: these are the built-in inline SVGs; drop in a Font&nbsp;Awesome or
-      Material pack via <code>PGAPP_ICONS</code>.</p>
+      Material pack with <code>icons: fontawesome</code> in the markup.</p>
     </div>
     <div class="media">
       <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/Tickets &mdash; page 2 via ?r0_after=8</span></div><img src="shots/report-page2.png" alt="The All tickets report on its second page, with edit and delete icons on each row and Prev/Next controls"></div>
@@ -352,7 +355,7 @@
       <p>A <strong>Chart</strong> component points at a named query and two of its columns. The built-in renderer
       draws dependency-free inline SVG on the server &mdash; no JS, no CDN.</p>
       <p>Prefer canvas, D3, or a real charting library? Drop a <code>chart.js</code> file into
-      <code>chart-libs/&lt;name&gt;/</code> and set <code>PGAPP_CHART_LIB</code>. The server emits the rows as JSON and
+      <code>chart-libs/&lt;name&gt;/</code> and declare <code>chart_lib: &lt;name&gt;</code> in the markup. The server emits the rows as JSON and
       your library draws them &mdash; it never needs to know how.</p>
     </div>
     <div class="media">
@@ -389,9 +392,28 @@
     </div>
   </div>
 
+  <div class="feature">
+    <div class="txt">
+      <span class="eyebrow">auth { } &hellip; requires: admin</span>
+      <h2>A login and roles, from one block of markup.</h2>
+      <p>Add <code>auth&nbsp;{&nbsp;}</code> to the app and every page sits behind a sign-in:
+      <strong>argon2-hashed passwords</strong>, server-side sessions an admin can revoke by deleting a row,
+      and a one-time first-run screen that creates the admin account.</p>
+      <p>Then <code>requires: admin</code> on a page gates it by role — reads <em>and</em> writes. The Agents
+      page here returns 403 to the support team and renders for admins. Accounts are managed on the built-in
+      Users page, never in the markup: passwords don't belong in a source file.</p>
+    </div>
+    <div class="media">
+      <div class="media-stack">
+        <div class="frame crop"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/login &mdash; themed like every other page</span></div><img src="shots/auth-login.png" alt="The sign-in form, styled by the vivid theme" style="max-height:400px"></div>
+        <div class="frame"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">/users &mdash; built-in, admin role only</span></div><img src="shots/auth-users.png" alt="The built-in user management page listing the admin and a support user, with an add-user form"></div>
+      </div>
+    </div>
+  </div>
+
   <div class="feature flip">
     <div class="txt">
-      <span class="eyebrow">PGAPP_THEME=vivid | shadcn | plain</span>
+      <span class="eyebrow">theme: vivid | shadcn | plain</span>
       <h2>One app. Any design system.</h2>
       <p>Rendered HTML only ever uses a fixed contract of <code>.pgapp-*</code> classes. A theme is a directory
       with one CSS file that styles them &mdash; these two screenshots are <strong>the same app, the same database,
@@ -402,10 +424,10 @@
     <div class="media">
       <div class="two-up">
         <div>
-          <div class="frame crop"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">PGAPP_THEME=vivid</span></div><img src="shots/dashboard.png" alt="Dashboard in the vivid theme: gradient header, purple charts, card panels"></div>
+          <div class="frame crop"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">theme: vivid</span></div><img src="shots/dashboard.png" alt="Dashboard in the vivid theme: gradient header, purple charts, card panels"></div>
         </div>
         <div>
-          <div class="frame crop"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">PGAPP_THEME=shadcn</span></div><img src="shots/dashboard-shadcn.png" alt="The identical dashboard in the neutral shadcn theme"></div>
+          <div class="frame crop"><div class="bar"><span class="b"></span><span class="b"></span><span class="b"></span><span class="name">theme: shadcn</span></div><img src="shots/dashboard-shadcn.png" alt="The identical dashboard in the neutral shadcn theme"></div>
         </div>
       </div>
     </div>
@@ -429,7 +451,7 @@
   <div class="wrap">
     <h2>$ run the demo</h2>
     <div class="runbox">export DATABASE_URL=postgres://postgres:postgres@localhost:5432/pgapp
-PGAPP_THEME=vivid cargo run -- examples/helpdesk.pgapp   <span class="c"># first run creates the tables</span>
+cargo run -- examples/helpdesk.pgapp                     <span class="c"># theme &amp; auth come from the file itself</span>
 psql "$DATABASE_URL" -f examples/helpdesk_seed.sql       <span class="c"># optional demo data</span></div>
     <p class="sig">pgapp &mdash; an Oracle APEX-inspired no/low-code framework built on Postgres, written in Rust.<br>
     Everything above was captured from a live run against Postgres 16.</p>

@@ -4,6 +4,14 @@
 # passing — all in this one file, no per-app code.
 
 app "Helpdesk" {
+  # App settings live here, not in environment variables.
+  theme: vivid
+
+  # Turns on login: every page needs a signed-in user. The first visit
+  # to /login offers a one-time "create the admin account" form; after
+  # that, admins manage accounts on the built-in /users page.
+  auth { }
+
   header {
     text "Nova Helpdesk — a demo application defined in one .pgapp file"
   }
@@ -128,7 +136,10 @@ app "Helpdesk" {
   }
 
   # An EditableTable: every row inline-editable, plus an add-new row.
+  # `requires: admin` — only admins may see or write through this page;
+  # everyone else gets 403.
   page "Agents" {
+    requires: admin
     editable_table "Support agents" of agents {
       columns: name, team, active
     }

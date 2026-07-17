@@ -9,6 +9,38 @@ create table if not exists pgapp_meta.apps (
     name       text not null unique,
     created_at timestamptz not null default now()
 );
+-- App-level settings, declared in the markup file (`theme:`, `icons:`,
+-- `chart_lib:`, `auth { }`) and synced here — configuration is part of
+-- the app definition, not the process environment.
+alter table pgapp_meta.apps add column if not exists theme text;
+alter table pgapp_meta.apps add column if not exists icons text;
+alter table pgapp_meta.apps add column if not exists chart_lib text;
+alter table pgapp_meta.apps add column if not exists auth_enabled boolean not null default false;
+
+-- Authentication: one user store per app. Passwords are argon2 hashes
+-- (never plaintext); role is a free-form string checked against a
+-- page's required_role ('admin' passes every check). Users are managed
+-- at runtime via the built-in /users admin page — never from markup,
+-- which is why there's no sync phase for this table.
+create table if not exists pgapp_meta.users (
+    id            serial primary key,
+    app_id        integer not null references pgapp_meta.apps(id) on delete cascade,
+    username      text not null,
+    password_hash text not null,
+    role          text not null default 'user',
+    created_at    timestamptz not null default now(),
+    unique (app_id, username)
+);
+
+-- Server-side login sessions: the browser holds only the random token
+-- in an HttpOnly cookie; everything else lives here so sessions can be
+-- revoked by deleting rows.
+create table if not exists pgapp_meta.sessions (
+    token      text primary key,
+    app_id     integer not null references pgapp_meta.apps(id) on delete cascade,
+    user_id    integer not null references pgapp_meta.users(id) on delete cascade,
+    expires_at timestamptz not null
+);
 
 create table if not exists pgapp_meta.entities (
     id         serial primary key,
@@ -46,6 +78,9 @@ alter table pgapp_meta.pages drop column if exists link_field;
 alter table pgapp_meta.pages drop column if exists link_target_page_id;
 alter table pgapp_meta.pages drop column if exists source_query_name;
 alter table pgapp_meta.pages drop column if exists link_params;
+-- Authorization: `requires: <role>` in the page's markup. Null = any
+-- signed-in user (or everyone, when the app has no auth block).
+alter table pgapp_meta.pages add column if not exists required_role text;
 
 -- One independently-rendered piece of a page (page_id set), or of the
 -- app-wide header/footer chrome (page_id null, slot = 'header' |

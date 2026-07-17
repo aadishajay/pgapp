@@ -129,6 +129,12 @@ body {
   text-decoration: none;
 }
 
+/* Signed-in user corner: pushed to the right end of the nav. */
+.pgapp-nav-user { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; }
+.pgapp-nav-user .pgapp-inline-form { margin-left: 0; }
+.pgapp-nav-user .pgapp-btn { padding: 0.25rem 0.75rem; font-size: 0.8rem; }
+.pgapp-nav-username { font-weight: 600; }
+
 .pgapp-items {
   margin-bottom: 1.25rem;
 }

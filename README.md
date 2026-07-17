@@ -27,11 +27,20 @@ Postgres, written in Rust.
 - **Pluggable charts and icons**: a `Chart` component's rendering
   backend and a `Report`/`EditableTable` row's edit/delete glyphs are
   both swappable the same way themes are — a dependency-free default,
-  plus a named alternative selected via an env var. See "Charts" and
+  plus a named alternative selected in the markup. See "Charts" and
   "Icons" below.
 - **Named queries**: reusable SQL, declared once (app-wide or scoped to
   one page) and referenced by name from LOVs, regions, charts, and a
   report's row source — see "Named queries" below.
+- **Authentication & authorization**: an `auth { }` block in the markup
+  puts the whole app behind a login (argon2-hashed passwords,
+  server-side sessions, a first-run admin setup screen, a built-in
+  /users admin page), and `requires: <role>` restricts individual pages
+  by role — see "Authentication & authorization" below.
+- **App settings live in the app definition**: `theme:`, `icons:`, and
+  `chart_lib:` are markup properties synced into `pgapp_meta.apps`,
+  not environment variables — the file describes the whole app,
+  including how it looks.
 - **A DB-stored JS runtime**: `/runtime.js` isn't a static file — it's a
   row in `pgapp_meta`, seeded from a built-in default and editable from
   there afterward. It exposes `pgapp.getItem`/`pgapp.setItem` so item
@@ -46,13 +55,19 @@ This is deliberately the *smallest end-to-end loop*, not the whole
 framework: one markup file → one app, hardcoded single-tenant, one field
 type set (`id`, `text`, `boolean`, `integer`, `timestamp`). It exists to
 prove the architecture end-to-end before building the bigger pieces
-(drag-and-drop builder UI, actions/flows, multi-app routing, auth) on
-top of it.
+(drag-and-drop builder UI, actions/flows, multi-app routing) on top of
+it.
 
 ## Markup
 
 ```text
 app "Todo" {
+  # optional app settings (all default sensibly when omitted):
+  # theme: vivid          - themes/<name>/ (default: shadcn)
+  # icons: fontawesome    - icons/<name>/ (default: builtin inline SVG)
+  # chart_lib: canvas_bars - chart-libs/<name>/ (default: inline SVG)
+  # auth { }              - require login on every page
+
   header {
     text "pgapp Todo Demo"
   }
@@ -171,7 +186,13 @@ app "Todo" {
   optionally `required` and/or a `default`.
 - `page "Name" { ... }` is just a name plus an ordered list of
   components (and optional page-scoped `query` blocks) — see
-  "Components" below for what each one does.
+  "Components" below for what each one does. A page may also declare
+  `requires: <role>` — see "Authentication & authorization".
+- `theme:` / `icons:` / `chart_lib:` (optional, app level) select the
+  pluggable theme, icon pack, and chart library directories; `auth { }`
+  turns on login. These are part of the app definition and synced into
+  `pgapp_meta.apps` like everything else — there are no environment
+  variables for them.
 - Anything that targets a page by name (`nav` items, a report's `link:`,
   a `link` component) uses a bare identifier, not a quoted string —
   restricting link targets to the same safe charset as SQL identifiers.
@@ -183,7 +204,8 @@ entities, a chart dashboard, both pagination modes, and every built-in
 item type — with demo data in `examples/helpdesk_seed.sql` and a
 feature-by-feature tour (with live screenshots) in
 `marketing/index.html`. It pairs with the colorful `themes/vivid/`
-theme: `PGAPP_THEME=vivid cargo run -- examples/helpdesk.pgapp`.
+theme (selected by the file's own `theme: vivid` line):
+`cargo run -- examples/helpdesk.pgapp`.
 
 ## Components
 
@@ -306,7 +328,8 @@ theme is (`src/chart_lib.rs`):
   the div however it likes — canvas, its own SVG, a real charting
   library. The server never needs to know how.
 
-Selected via `PGAPP_CHART_LIB` (default `inline`). `chart-libs/canvas-bars/`
+Selected per app with `chart_lib: <name>` in the markup (default
+`inline`). `chart-libs/canvas-bars/`
 ships as a second, working example — a small dependency-free `<canvas>`
 bar-chart renderer — proving the plug point without requiring a CDN.
 
@@ -330,7 +353,7 @@ pluggable "icon pack" (`src/icons.rs`), mirroring the theme contract:
   word of text; the browser fetches the actual font/CSS from
   `stylesheet`.
 
-Selected via `PGAPP_ICONS` (default `builtin`).
+Selected per app with `icons: <name>` in the markup (default `builtin`).
 
 ## Named queries
 
@@ -375,6 +398,37 @@ are decoded generically (via Postgres's `to_jsonb`) rather than through
 the same typed pipeline as entity-bound CRUD, so there's no column-type
 checking on a query's own SELECT list beyond what Postgres itself
 enforces.
+
+## Authentication & authorization
+
+Opt in per app with an `auth { }` block (the block is empty today,
+reserved for future options). With it present:
+
+- **Every page requires a signed-in user.** Unauthenticated requests
+  redirect to `/login`. Only the login flow and static assets
+  (`/theme.css`, `/runtime.js`, `/chart-lib.js`, `/assets/*`) stay
+  public.
+- **First run bootstraps the admin.** When the app has no users, the
+  login page becomes a one-time "create the admin account" form
+  (`POST /setup`, which refuses the moment any user exists). After
+  that, admins manage accounts on the built-in `/users` page — users
+  are deliberately *not* declarable in markup, because passwords don't
+  belong in a source file.
+- **Passwords are argon2id hashes**, never plaintext, in
+  `pgapp_meta.users`. Sessions are server-side rows in
+  `pgapp_meta.sessions`; the browser holds only a random token in an
+  HttpOnly `SameSite=Lax` cookie, so any session can be revoked by
+  deleting its row. Sign out deletes the row, not just the cookie.
+- **Roles gate pages.** A user has one `role` (a free-form string —
+  `admin`, `support`, whatever your pages need). A page declaring
+  `requires: support` is visible only to users holding that role;
+  `admin` passes every check. Reads and writes through the page are
+  gated alike (a 403 on the page is a 403 on its create/update/delete
+  routes too). Pages without `requires:` need any signed-in user.
+
+Apps without an `auth { }` block skip all of this and stay public —
+`examples/todo.pgapp` runs open, `examples/helpdesk.pgapp` runs behind
+a login with an admin-only Agents page.
 
 ## Runtime JS
 
@@ -486,7 +540,9 @@ A theme is a directory at `themes/<name>/` containing:
 - `theme.json` (optional) — `{ "label": "...", "description": "..." }`,
   human-facing metadata, printed at startup. Doesn't affect rendering.
 
-Select a theme with `PGAPP_THEME=<name>` (default: `shadcn`). If
+Select a theme with `theme: <name>` in the app's markup (default:
+`shadcn`) — the app definition owns its look, not the process
+environment. If
 `themes/<name>/theme.css` doesn't exist, the server refuses to start
 with a clear error rather than silently falling back.
 
@@ -501,8 +557,8 @@ with a clear error rather than silently falling back.
 
 To add another design system (Bootstrap, Material, a custom brand kit,
 ...), create `themes/<name>/theme.css` styling the classes above and run
-with `PGAPP_THEME=<name>`. No Rust or markup changes needed — theming is
-fully decoupled from both.
+with `theme: <name>` in the app's markup. No Rust changes needed —
+theming is fully decoupled from the framework.
 
 ## Running it
 
@@ -514,7 +570,6 @@ createdb -U postgres pgapp   # if it doesn't exist yet
 
 cargo run                     # serves examples/todo.pgapp on 127.0.0.1:8080
 # or: cargo run -- path/to/your.pgapp
-# optional: PGAPP_THEME=plain PGAPP_ICONS=fontawesome PGAPP_CHART_LIB=canvas-bars cargo run
 ```
 
 On startup it prints the URL and component kinds for each page, e.g.
@@ -526,8 +581,12 @@ On startup it prints the URL and component kinds for each page, e.g.
 - `POST /:page/c/:idx/update/:id`       — update a row
 - `POST /:page/c/:idx/delete/:id`       — delete a row
 - `GET  /api/:entity`                   — JSON list for that entity
+- `GET  /login` / `POST /login`         — sign-in page (or first-run admin setup) — apps with `auth { }` only
+- `POST /setup`                         — one-time admin bootstrap; refuses once any user exists
+- `POST /logout`                        — deletes the server-side session
+- `GET  /users` (+ create/delete POSTs) — built-in user management, admin role only
 - `GET  /runtime.js`                    — the DB-stored `pgapp` JS runtime
-- `GET  /chart-lib.js`                  — the active pluggable chart library's JS (404 if `PGAPP_CHART_LIB=inline`)
+- `GET  /chart-lib.js`                  — the active pluggable chart library's JS (404 when `chart_lib` is the built-in `inline`)
 
 A `Form` switches into edit mode for one row via `?edit_<n>=<id>` on its
 page's URL (`<n>` = the form's 0-based position on the page); a
@@ -547,7 +606,13 @@ or `?r<n>_page=` (query-sourced) the same way — see "Pagination" above.
   pluggable extension points so far; actions and flows are next —
   likely a second runtime.js convention plus a way to declare which
   item/event triggers which named query or action)
-- Auth/roles at the page and field level
+- Field-level authorization (page-level `requires:` exists; hiding
+  individual columns/fields by role doesn't yet), plus password change/
+  reset flows — today a forgotten password means an admin deletes and
+  recreates the account
+- Login sessions are plain HTTP-compatible (no `Secure` cookie
+  attribute), fine for localhost; a real deployment behind TLS should
+  add it
 - Item type config is currently always flat strings (`serde_json::Value`
   values are strings even for Slider's numeric-looking `min`/`max`); a
   component that wanted structured config (nested objects, arrays of

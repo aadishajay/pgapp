@@ -237,7 +237,35 @@ pub fn chart_html(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTree
     }
 }
 
-fn layout(title: &str, chrome: Chrome, icons: &Icons, chart_lib: &ChartLib, body: &str) -> String {
+/// The signed-in user's corner of the nav bar: a Users link for
+/// admins, the username, and a sign-out button. `user` is
+/// (username, is_admin), or None when nobody is signed in (or the app
+/// has no auth at all) — in which case nothing renders.
+fn nav_user_html(user: Option<(&str, bool)>) -> String {
+    match user {
+        None => String::new(),
+        Some((username, is_admin)) => {
+            let users_link = if is_admin {
+                r#"<a class="pgapp-link" href="/users">Users</a>"#.to_string()
+            } else {
+                String::new()
+            };
+            format!(
+                r#"<span class="pgapp-nav-user">{users_link}<span class="pgapp-nav-username">{username}</span><form class="pgapp-inline-form" method="post" action="/logout"><button class="pgapp-btn pgapp-btn-secondary" type="submit">Sign out</button></form></span>"#,
+                username = escape(username),
+            )
+        }
+    }
+}
+
+fn layout(
+    title: &str,
+    chrome: Chrome,
+    icons: &Icons,
+    chart_lib: &ChartLib,
+    user: Option<(&str, bool)>,
+    body: &str,
+) -> String {
     let header = if chrome.header.is_empty() {
         String::new()
     } else {
@@ -269,7 +297,7 @@ fn layout(title: &str, chrome: Chrome, icons: &Icons, chart_lib: &ChartLib, body
 </head>
 <body>
 {header}
-<nav class="pgapp-nav"><a class="pgapp-link" href="/">pgapp</a>{navbar}</nav>
+<nav class="pgapp-nav"><a class="pgapp-link" href="/">pgapp</a>{navbar}{nav_user}</nav>
 <h1 class="pgapp-title">{title}</h1>
 {body}
 {footer}
@@ -284,8 +312,121 @@ fn layout(title: &str, chrome: Chrome, icons: &Icons, chart_lib: &ChartLib, body
             .unwrap_or(""),
         assets = asset_tags(),
         navbar = nav_html(chrome.nav),
+        nav_user = nav_user_html(user),
         body = body,
     )
+}
+
+/// A minimal, chrome-free page shell for auth screens: the login page
+/// renders before there's a session, so it can't show nav/regions —
+/// but it still links /theme.css, so it wears the app's theme.
+fn bare_layout(title: &str, body: &str) -> String {
+    format!(
+        r#"<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>{title}</title>
+<link rel="stylesheet" href="/theme.css">
+</head>
+<body>
+<h1 class="pgapp-title">{title}</h1>
+{body}
+</body>
+</html>"#,
+        title = escape(title),
+    )
+}
+
+/// The /login screen. In `setup` mode (the app has no users yet) it
+/// becomes the one-time "create the admin account" form instead.
+pub fn login_page(app_name: &str, error: Option<&str>, setup: bool) -> String {
+    let mut body = String::new();
+    if let Some(err) = error {
+        body.push_str(&format!(
+            r#"<div class="pgapp-alert pgapp-alert-error"><strong>Error:</strong> {}</div>"#,
+            escape(err)
+        ));
+    }
+
+    let (heading, note, action, button) = if setup {
+        (
+            "Create the admin account",
+            "This app has no users yet. The account you create now becomes the administrator; after that, new users are added from the Users page.",
+            "/setup",
+            "Create admin account",
+        )
+    } else {
+        ("Sign in", "", "/login", "Sign in")
+    };
+
+    body.push_str(&format!(
+        r#"<div class="pgapp-form-panel"><h2 class="pgapp-subtitle">{heading}</h2>"#
+    ));
+    if !note.is_empty() {
+        body.push_str(&format!(r#"<p class="pgapp-text">{}</p>"#, escape(note)));
+    }
+    body.push_str(&format!(
+        r#"<form class="pgapp-form" method="post" action="{action}">
+<div class="pgapp-field"><label class="pgapp-label">username</label><input class="pgapp-input" type="text" name="username" required autofocus></div>
+<div class="pgapp-field"><label class="pgapp-label">password</label><input class="pgapp-input" type="password" name="password" required></div>
+<button class="pgapp-btn pgapp-btn-primary" type="submit">{button}</button>
+</form></div>"#
+    ));
+
+    bare_layout(app_name, &body)
+}
+
+/// The built-in /users admin page: every account, an add-user form,
+/// and per-row delete (except your own account — see
+/// `server::auth::users_delete`).
+#[allow(clippy::too_many_arguments)]
+pub fn users_page(
+    users: &[(i32, String, String)],
+    current_user_id: i32,
+    error: Option<&str>,
+    chrome: Chrome,
+    icons: &Icons,
+    chart_lib: &ChartLib,
+    user: Option<(&str, bool)>,
+) -> String {
+    let mut body = String::new();
+    if let Some(err) = error {
+        body.push_str(&format!(
+            r#"<div class="pgapp-alert pgapp-alert-error"><strong>Error:</strong> {}</div>"#,
+            escape(err)
+        ));
+    }
+
+    body.push_str(r#"<div class="pgapp-report"><h2 class="pgapp-subtitle">Accounts</h2><table class="pgapp-table"><thead><tr><th>username</th><th>role</th><th></th></tr></thead><tbody>"#);
+    for (id, username, role) in users {
+        let action = if *id == current_user_id {
+            r#"<span class="pgapp-text">(you)</span>"#.to_string()
+        } else {
+            format!(
+                r#"<form class="pgapp-inline-form" method="post" action="/users/{id}/delete" onsubmit="return confirm('Delete this account?')"><button class="pgapp-btn pgapp-btn-destructive" type="submit" title="Delete">{}</button></form>"#,
+                icons.render("delete"),
+            )
+        };
+        body.push_str(&format!(
+            "<tr><td>{}</td><td>{}</td><td class=\"pgapp-row-actions\">{action}</td></tr>",
+            escape(username),
+            escape(role),
+        ));
+    }
+    body.push_str("</tbody></table></div>");
+
+    body.push_str(
+        r#"<div class="pgapp-form-panel"><h2 class="pgapp-subtitle">Add user</h2>
+<form class="pgapp-form" method="post" action="/users">
+<div class="pgapp-field"><label class="pgapp-label">username</label><input class="pgapp-input" type="text" name="username" required></div>
+<div class="pgapp-field"><label class="pgapp-label">password (min 8 chars)</label><input class="pgapp-input" type="password" name="password" required></div>
+<div class="pgapp-field"><label class="pgapp-label">role</label><input class="pgapp-input" type="text" name="role" placeholder="user, admin, or any role your pages require"></div>
+<button class="pgapp-btn pgapp-btn-primary" type="submit">Create user</button>
+</form></div>"#,
+    );
+
+    layout("Users", chrome, icons, chart_lib, user, &body)
 }
 
 /// Renders one field's input by looking up its registered item type
@@ -522,6 +663,7 @@ pub fn editable_table_html(
 /// layout, with an optional page-level error banner (surfaced via the
 /// `?error=` query parameter after a failed create/update — see
 /// `server.rs`).
+#[allow(clippy::too_many_arguments)]
 pub fn page_layout(
     title: &str,
     body: &str,
@@ -529,6 +671,7 @@ pub fn page_layout(
     chrome: Chrome,
     icons: &Icons,
     chart_lib: &ChartLib,
+    user: Option<(&str, bool)>,
 ) -> String {
     let mut full = String::new();
     if let Some(err) = error {
@@ -538,10 +681,17 @@ pub fn page_layout(
         ));
     }
     full.push_str(body);
-    layout(title, chrome, icons, chart_lib, &full)
+    layout(title, chrome, icons, chart_lib, user, &full)
 }
 
-pub fn index_page(app_name: &str, pages: &[String], chrome: Chrome, icons: &Icons, chart_lib: &ChartLib) -> String {
+pub fn index_page(
+    app_name: &str,
+    pages: &[String],
+    chrome: Chrome,
+    icons: &Icons,
+    chart_lib: &ChartLib,
+    user: Option<(&str, bool)>,
+) -> String {
     let mut body = String::from(r#"<ul class="pgapp-list">"#);
     for p in pages {
         body.push_str(&format!(
@@ -550,5 +700,5 @@ pub fn index_page(app_name: &str, pages: &[String], chrome: Chrome, icons: &Icon
         ));
     }
     body.push_str("</ul>");
-    layout(app_name, chrome, icons, chart_lib, &body)
+    layout(app_name, chrome, icons, chart_lib, user, &body)
 }

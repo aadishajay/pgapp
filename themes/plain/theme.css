@@ -36,6 +36,10 @@ body {
 .pgapp-navbar-submenu .pgapp-navbar-item { display: block; }
 .pgapp-navbar-submenu .pgapp-link { display: block; padding: 0.25rem; }
 
+.pgapp-nav-user { margin-left: auto; display: flex; align-items: center; gap: 0.6rem; }
+.pgapp-nav-user .pgapp-inline-form { margin-left: 0; }
+.pgapp-nav-username { font-weight: 600; }
+
 .pgapp-items { margin-bottom: 1rem; }
 .pgapp-text { color: #555; }
 

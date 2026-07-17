@@ -46,11 +46,20 @@ const DEFAULT_RUNTIME_JS: &str = include_str!("../runtime.js");
 /// instead of silently rendering nothing later.
 pub async fn sync_app(pool: &PgPool, app: &AppDef, registry: &Registry) -> Result<()> {
     let app_id: i32 = sqlx::query_scalar(
-        "insert into pgapp_meta.apps (name) values ($1)
-         on conflict (name) do update set name = excluded.name
+        "insert into pgapp_meta.apps (name, theme, icons, chart_lib, auth_enabled)
+         values ($1, $2, $3, $4, $5)
+         on conflict (name) do update set
+            theme = excluded.theme,
+            icons = excluded.icons,
+            chart_lib = excluded.chart_lib,
+            auth_enabled = excluded.auth_enabled
          returning id",
     )
     .bind(&app.name)
+    .bind(&app.theme)
+    .bind(&app.icons)
+    .bind(&app.chart_lib)
+    .bind(app.auth)
     .fetch_one(pool)
     .await?;
 
@@ -113,12 +122,13 @@ pub async fn sync_app(pool: &PgPool, app: &AppDef, registry: &Registry) -> Resul
     let mut page_ids: HashMap<String, i32> = HashMap::new();
     for page in &app.pages {
         let page_id: i32 = sqlx::query_scalar(
-            "insert into pgapp_meta.pages (app_id, name) values ($1, $2)
-             on conflict (app_id, name) do update set name = excluded.name
+            "insert into pgapp_meta.pages (app_id, name, required_role) values ($1, $2, $3)
+             on conflict (app_id, name) do update set required_role = excluded.required_role
              returning id",
         )
         .bind(app_id)
         .bind(&page.name)
+        .bind(&page.required_role)
         .fetch_one(pool)
         .await?;
 

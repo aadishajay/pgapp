@@ -104,6 +104,12 @@ body {
 .pgapp-navbar-submenu .pgapp-navbar-item { display: block; }
 .pgapp-navbar-submenu .pgapp-link { display: block; padding: 0.45rem 0.7rem; border-radius: 10px; }
 
+/* Signed-in user corner: pushed to the right end of the nav pill. */
+.pgapp-nav-user { margin-left: auto; display: flex; align-items: center; gap: 0.7rem; }
+.pgapp-nav-user .pgapp-inline-form { margin-left: 0; }
+.pgapp-nav-user .pgapp-btn { padding: 0.25rem 0.8rem; font-size: 0.78rem; }
+.pgapp-nav-username { font-weight: 700; color: var(--v-violet); }
+
 /* Header / footer chrome */
 .pgapp-header, .pgapp-footer { font-size: 0.9rem; color: var(--v-muted); }
 .pgapp-header {

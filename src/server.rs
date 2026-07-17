@@ -12,6 +12,7 @@
 //! finds it by scanning the page's own components, no extra metadata
 //! needed.
 
+pub mod auth;
 mod query_engine;
 
 use std::collections::{BTreeMap, HashMap};
@@ -19,11 +20,14 @@ use std::sync::Arc;
 
 use axum::extract::{Form, Path, Query, State};
 use axum::http::{header, StatusCode};
+use axum::middleware;
 use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
-use axum::Router;
+use axum::{Extension, Router};
 use serde_json::json;
 use sqlx::{PgPool, Row};
+
+use auth::AuthCtx;
 
 use crate::chart_lib::ChartLib;
 use crate::html::url_encode;
@@ -53,10 +57,16 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/chart-lib.js", get(chart_lib_js))
         .route("/assets/*path", get(asset))
         .route("/api/:entity", get(api_list))
+        .route("/login", get(auth::login_form).post(auth::login))
+        .route("/setup", post(auth::setup))
+        .route("/logout", post(auth::logout))
+        .route("/users", get(auth::users_page).post(auth::users_create))
+        .route("/users/:id/delete", post(auth::users_delete))
         .route("/:page", get(show))
         .route("/:page/c/:idx/create", post(create))
         .route("/:page/c/:idx/update/:id", post(update))
         .route("/:page/c/:idx/delete/:id", post(delete))
+        .layer(middleware::from_fn_with_state(state.clone(), auth::require_login))
         .with_state(state)
 }
 
@@ -280,7 +290,10 @@ fn build_value_exprs(
     Ok((columns, exprs, binds))
 }
 
-async fn index(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
+async fn index(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+) -> Result<Html<String>, AppError> {
     let pages: Vec<String> = state.app.pages.iter().map(|p| p.name.clone()).collect();
     let ctx = HashMap::new();
     let regions = resolve_regions(&state.pool, &state.app, None, &ctx).await.map_err(err_response)?;
@@ -290,6 +303,7 @@ async fn index(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppEr
         state.app.chrome(&regions),
         &state.icons,
         &state.chart_lib,
+        auth_ctx.display(),
     )))
 }
 
@@ -458,10 +472,12 @@ async fn render_component(
 
 async fn show(
     State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
     Path(page_name): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
     let page = page_or_404(&state.app, &page_name)?;
+    auth::authorize(&state, page.required_role.as_deref(), &auth_ctx)?;
     let ctx = bind_context(&query, None);
     let regions = resolve_regions(&state.pool, &state.app, Some(page), &ctx)
         .await
@@ -483,15 +499,18 @@ async fn show(
         state.app.chrome(&regions),
         &state.icons,
         &state.chart_lib,
+        auth_ctx.display(),
     )))
 }
 
 async fn create(
     State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
     Path((page_name, idx)): Path<(String, usize)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     let page = page_or_404(&state.app, &page_name)?;
+    auth::authorize(&state, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
     let (entity, fields, item_types) = writable_fields(component, &page_name, idx)?;
 
@@ -519,10 +538,12 @@ async fn create(
 
 async fn update(
     State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
     Path((page_name, idx, id)): Path<(String, usize, String)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     let page = page_or_404(&state.app, &page_name)?;
+    auth::authorize(&state, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
     let (entity, fields, item_types) = writable_fields(component, &page_name, idx)?;
 
@@ -565,9 +586,11 @@ async fn update(
 
 async fn delete(
     State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
     Path((page_name, idx, id)): Path<(String, usize, String)>,
 ) -> Result<Response, AppError> {
     let page = page_or_404(&state.app, &page_name)?;
+    auth::authorize(&state, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
     let (entity, _, _) = writable_fields(component, &page_name, idx)?;
 

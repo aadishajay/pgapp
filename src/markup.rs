@@ -3,7 +3,10 @@
 //! Grammar (informal):
 //!
 //! ```text
-//! app       := "app" String "{" (nav | header | footer | entity | page | query)* "}"
+//! app       := "app" String "{" (appprop | auth | nav | header | footer | entity | page | query)* "}"
+//!
+//! appprop   := ("theme" | "icons" | "chart_lib") ":" Ident
+//! auth      := "auth" "{" "}"
 //!
 //! nav       := "nav" "{" navitem* "}"
 //! navitem   := "item" String ( "->" "page" Ident | "{" navitem* "}" )
@@ -16,7 +19,8 @@
 //! entity    := "entity" String "{" field* "}"
 //! field     := "field" Ident ":" Ident ("required")? ("default" Value)?
 //!
-//! page      := "page" String "{" (component | query)* "}"
+//! page      := "page" String "{" (pageprop | component | query)* "}"
+//! pageprop  := "requires" ":" Ident
 //!
 //! component := report | form | editable_table | chart | text | link | region
 //!
@@ -79,6 +83,16 @@
 //! `EditableTable` stands alone; any number of `Chart`s make a
 //! dashboard; `Text`/`Link`/`Region` compose freely with all of the
 //! above.
+//!
+//! App-level settings live in the file too, not in environment
+//! variables: `theme:`/`icons:`/`chart_lib:` pick the pluggable
+//! theme/icon-pack/chart-library directories, and an `auth { }` block
+//! turns on login (see `server::auth`; the block is empty today and
+//! reserved for future options). A page's `requires: <role>` then
+//! restricts that page to users holding the role ('admin' passes every
+//! check). Users themselves are *never* declared in markup — passwords
+//! don't belong in a source file; they're managed at runtime via the
+//! built-in /users page.
 
 use anyhow::{bail, Context, Result};
 
@@ -208,11 +222,22 @@ impl Parser {
         self.expect_ident()
     }
 
+    /// Parses `("theme" | "icons" | "chart_lib") ":" Ident`.
+    fn parse_app_prop(&mut self) -> Result<String> {
+        self.advance()?; // the property keyword, already matched
+        self.expect_symbol(':')?;
+        self.expect_ident()
+    }
+
     fn parse_app(&mut self) -> Result<AppDef> {
         self.expect_keyword("app")?;
         let name = self.expect_string()?;
         self.expect_symbol('{')?;
 
+        let mut theme = None;
+        let mut icons = None;
+        let mut chart_lib = None;
+        let mut auth = false;
         let mut entities = Vec::new();
         let mut pages = Vec::new();
         let mut nav = Vec::new();
@@ -232,9 +257,21 @@ impl Parser {
                 footer = self.parse_component_block("footer")?;
             } else if self.at_keyword("query") {
                 queries.push(self.parse_query()?);
+            } else if self.at_keyword("theme") {
+                theme = Some(self.parse_app_prop()?);
+            } else if self.at_keyword("icons") {
+                icons = Some(self.parse_app_prop()?);
+            } else if self.at_keyword("chart_lib") {
+                chart_lib = Some(self.parse_app_prop()?);
+            } else if self.at_keyword("auth") {
+                self.advance()?;
+                self.expect_symbol('{')?;
+                self.expect_symbol('}')?;
+                auth = true;
             } else {
                 bail!(
-                    "expected 'entity', 'page', 'nav', 'header', 'footer', or 'query' block, found {:?}",
+                    "expected 'entity', 'page', 'nav', 'header', 'footer', 'query', 'auth', \
+                     'theme', 'icons', or 'chart_lib', found {:?}",
                     self.peek()
                 );
             }
@@ -243,6 +280,10 @@ impl Parser {
 
         Ok(AppDef {
             name,
+            theme,
+            icons,
+            chart_lib,
+            auth,
             entities,
             pages,
             nav,
@@ -364,9 +405,14 @@ impl Parser {
 
         let mut components = Vec::new();
         let mut queries = Vec::new();
+        let mut required_role = None;
         while !self.at_symbol('}') {
             if self.at_keyword("query") {
                 queries.push(self.parse_query()?);
+            } else if self.at_keyword("requires") {
+                self.advance()?;
+                self.expect_symbol(':')?;
+                required_role = Some(self.expect_ident()?);
             } else {
                 components.push(self.parse_component()?);
             }
@@ -377,6 +423,7 @@ impl Parser {
             name,
             components,
             queries,
+            required_role,
         })
     }
 
@@ -880,6 +927,54 @@ mod tests {
         assert_eq!(report.0.as_deref(), Some("assignees"));
         let link = report.1.as_ref().unwrap();
         assert_eq!(link.extra_params, vec![("assignee".to_string(), "owner".to_string())]);
+    }
+
+    #[test]
+    fn parses_app_settings_auth_and_page_roles() {
+        let src = r#"
+            app "Demo" {
+                theme: vivid
+                icons: fontawesome
+                chart_lib: canvas_bars
+                auth { }
+
+                entity "t" { field id: id field n: integer }
+
+                page "Public" {
+                    text "any signed-in user can see this"
+                }
+
+                page "AdminOnly" {
+                    requires: admin
+                    report "Rows" of t { columns: n }
+                }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+        assert_eq!(app.theme.as_deref(), Some("vivid"));
+        assert_eq!(app.icons.as_deref(), Some("fontawesome"));
+        assert_eq!(app.chart_lib.as_deref(), Some("canvas_bars"));
+        assert!(app.auth);
+
+        let public = app.pages.iter().find(|p| p.name == "Public").unwrap();
+        assert!(public.required_role.is_none());
+        let admin_only = app.pages.iter().find(|p| p.name == "AdminOnly").unwrap();
+        assert_eq!(admin_only.required_role.as_deref(), Some("admin"));
+    }
+
+    #[test]
+    fn defaults_when_no_settings_declared() {
+        let src = r#"
+            app "Demo" {
+                entity "t" { field id: id }
+                page "P" { text "hi" }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+        assert!(app.theme.is_none());
+        assert!(app.icons.is_none());
+        assert!(app.chart_lib.is_none());
+        assert!(!app.auth);
     }
 
     #[test]

@@ -183,6 +183,10 @@ pub struct PageDef {
     pub components: Vec<ComponentDef>,
     /// Queries visible only within this page (in addition to the app's).
     pub queries: Vec<QueryDef>,
+    /// `requires: <role>` — when the app has auth enabled, only users
+    /// with this role (or 'admin', which passes every check) may see or
+    /// write through this page. None = any signed-in user.
+    pub required_role: Option<String>,
 }
 
 /// One entry in the app's (possibly multi-level) navigation bar. A leaf
@@ -197,6 +201,17 @@ pub struct NavItem {
 #[derive(Debug, Clone)]
 pub struct AppDef {
     pub name: String,
+    /// App-level settings, declared in the markup file rather than the
+    /// process environment: `theme: vivid`, `icons: fontawesome`,
+    /// `chart_lib: canvas_bars`. None = the built-in default
+    /// (shadcn / builtin / inline).
+    pub theme: Option<String>,
+    pub icons: Option<String>,
+    pub chart_lib: Option<String>,
+    /// `auth { }` — when true, every page requires a signed-in user
+    /// (see `server::auth`), and pages may further restrict by role
+    /// via `requires:`.
+    pub auth: bool,
     pub entities: Vec<EntityDef>,
     pub pages: Vec<PageDef>,
     pub nav: Vec<NavItem>,

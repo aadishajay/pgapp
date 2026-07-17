@@ -69,7 +69,10 @@ pub async fn load_runtime_js(pool: &PgPool, app_name: &str) -> Result<String> {
 }
 
 pub async fn load_app(pool: &PgPool, app_name: &str) -> Result<RuntimeApp> {
-    let app_id: i32 = sqlx::query_scalar("select id from pgapp_meta.apps where name = $1")
+    let (app_id, theme, icons, chart_lib, auth_enabled): (i32, Option<String>, Option<String>, Option<String>, bool) =
+        sqlx::query_as(
+            "select id, theme, icons, chart_lib, auth_enabled from pgapp_meta.apps where name = $1",
+        )
         .bind(app_name)
         .fetch_one(pool)
         .await
@@ -77,23 +80,25 @@ pub async fn load_app(pool: &PgPool, app_name: &str) -> Result<RuntimeApp> {
 
     let entities = load_entities(pool, app_id).await?;
 
-    let page_rows: Vec<(i32, String)> = sqlx::query_as(
-        "select id, name from pgapp_meta.pages where app_id = $1 order by id",
+    let page_rows: Vec<(i32, String, Option<String>)> = sqlx::query_as(
+        "select id, name, required_role from pgapp_meta.pages where app_id = $1 order by id",
     )
     .bind(app_id)
     .fetch_all(pool)
     .await?;
-    let page_names: HashMap<i32, String> = page_rows.iter().cloned().collect();
+    let page_names: HashMap<i32, String> =
+        page_rows.iter().map(|(id, name, _)| (*id, name.clone())).collect();
 
     let (app_queries, mut page_queries) = load_queries(pool, app_id).await?;
 
     let mut pages = Vec::new();
-    for (page_id, name) in &page_rows {
+    for (page_id, name, required_role) in &page_rows {
         let components = load_components(pool, "page_id", *page_id, &entities).await?;
         pages.push(RuntimePage {
             name: name.clone(),
             components,
             queries: page_queries.remove(page_id).unwrap_or_default(),
+            required_role: required_role.clone(),
         });
     }
 
@@ -110,7 +115,12 @@ pub async fn load_app(pool: &PgPool, app_name: &str) -> Result<RuntimeApp> {
     let footer = load_chrome(pool, app_id, "footer", &entities).await?;
 
     Ok(RuntimeApp {
+        id: app_id,
         name: app_name.to_string(),
+        theme,
+        icons,
+        chart_lib,
+        auth_enabled,
         pages,
         nav,
         header,

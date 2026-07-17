@@ -22,13 +22,6 @@ async fn main() -> anyhow::Result<()> {
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/pgapp".to_string());
-    let theme_name = std::env::var("PGAPP_THEME").unwrap_or_else(|_| "shadcn".to_string());
-    let theme = theme::load(&theme_name)?;
-    let icons_name = std::env::var("PGAPP_ICONS").unwrap_or_else(|_| "builtin".to_string());
-    let icons = icons::load(&icons_name)?;
-    let chart_lib_name = std::env::var("PGAPP_CHART_LIB").unwrap_or_else(|_| "inline".to_string());
-    let chart_lib = chart_lib::load(&chart_lib_name)?;
-
     let src = std::fs::read_to_string(&markup_path)
         .with_context(|| format!("failed to read markup file '{markup_path}'"))?;
     let app_def = markup::parse_app(&src)
@@ -47,6 +40,13 @@ async fn main() -> anyhow::Result<()> {
     let runtime_app = meta::load_app(&pool, &app_def.name).await?;
     let runtime_js = meta::load_runtime_js(&pool, &app_def.name).await?;
 
+    // Theme / icons / chart library are app settings declared in the
+    // markup (`theme: vivid`, ...) and reloaded from pgapp_meta like
+    // everything else — not environment variables.
+    let theme = theme::load(runtime_app.theme.as_deref().unwrap_or("shadcn"))?;
+    let icons = icons::load(runtime_app.icons.as_deref().unwrap_or("builtin"))?;
+    let chart_lib = chart_lib::load(runtime_app.chart_lib.as_deref().unwrap_or("inline"))?;
+
     println!("pgapp: serving '{}' from {}", runtime_app.name, markup_path);
     println!(
         "  theme: {} ({}) - {}",
@@ -60,6 +60,14 @@ async fn main() -> anyhow::Result<()> {
     );
     println!("  icons: {}", icons.name);
     println!("  chart library: {}", chart_lib.name);
+    println!(
+        "  auth: {}",
+        if runtime_app.auth_enabled {
+            "enabled (first visit to /login creates the admin account)"
+        } else {
+            "disabled (no `auth { }` block in the markup)"
+        }
+    );
     for page in &runtime_app.pages {
         let kinds: Vec<&str> = page
             .components

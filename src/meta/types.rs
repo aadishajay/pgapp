@@ -96,6 +96,10 @@ pub struct RuntimePage {
     pub components: Vec<RuntimeComponent>,
     /// Queries visible only on this page.
     pub queries: HashMap<String, RuntimeQuery>,
+    /// Role a signed-in user must hold to see or write through this
+    /// page ('admin' always passes); None = any signed-in user. Only
+    /// consulted when the app has auth enabled.
+    pub required_role: Option<String>,
 }
 
 impl RuntimePage {
@@ -117,7 +121,16 @@ pub struct NavNode {
 
 #[derive(Debug, Clone)]
 pub struct RuntimeApp {
+    /// The app's row id in `pgapp_meta.apps` — users and sessions are
+    /// keyed by it.
+    pub id: i32,
     pub name: String,
+    /// App settings reloaded from `pgapp_meta.apps`, originally declared
+    /// in the markup (`theme:` / `icons:` / `chart_lib:` / `auth { }`).
+    pub theme: Option<String>,
+    pub icons: Option<String>,
+    pub chart_lib: Option<String>,
+    pub auth_enabled: bool,
     pub pages: Vec<RuntimePage>,
     pub nav: Vec<NavNode>,
     pub header: Vec<RuntimeComponent>,
