@@ -2,5 +2,7 @@ page "Agents" {
   requires: admin
   editable_table "Support agents" of agents {
     columns: name, team, active
+    # attrs (...) also works per-field, with no item type override.
+    item name attrs (id: "agent-name", class: "pgapp-field-wide")
   }
 }

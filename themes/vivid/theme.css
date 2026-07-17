@@ -172,6 +172,9 @@ body {
 /* Forms */
 .pgapp-form { display: flex; flex-direction: column; gap: 0.8rem; max-width: 26rem; }
 .pgapp-field { display: flex; flex-direction: column; gap: 0.3rem; }
+/* Demo of a per-field override via markup's `item name attrs (class: "...")` —
+   see examples/helpdesk.pgapp's "Support agents" editable_table. */
+.pgapp-field-wide { min-width: 14rem; }
 .pgapp-label { font-size: 0.8rem; font-weight: 700; color: var(--v-indigo); text-transform: uppercase; letter-spacing: 0.05em; }
 .pgapp-input, .pgapp-select {
   border: 1.5px solid var(--v-border);

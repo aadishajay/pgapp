@@ -662,6 +662,7 @@ pub fn reload_page(
 /// and calling that component's `render`. `resolved_choices` carries
 /// whatever `query_engine::resolve_field_choices` already fetched for
 /// fields whose config uses the `choices`/`query` convention.
+#[allow(clippy::too_many_arguments)]
 fn input_for_field(
     entity: &RuntimeEntity,
     item_types: &HashMap<String, FieldItem>,
@@ -669,6 +670,7 @@ fn input_for_field(
     value: Option<&str>,
     resolved_choices: &HashMap<String, Vec<(String, String)>>,
     registry: &item_types::Registry,
+    field_html: &HashMap<String, HtmlAttrs>,
 ) -> String {
     let field = entity.field(field_name).expect("field must exist on entity");
     let value = value.unwrap_or("");
@@ -690,10 +692,15 @@ fn input_for_field(
         choices,
     });
 
+    static EMPTY_HTML: HtmlAttrs = HtmlAttrs { id: None, class: None, attrs: Vec::new() };
+    let html = field_html.get(field_name).unwrap_or(&EMPTY_HTML);
+
     // data-pgapp-item lets dynamic actions show/hide/toggle the whole
     // field (label included), not just its input.
     format!(
-        r#"<div class="pgapp-field" data-pgapp-item="{label}"><label class="pgapp-label">{label}</label>{input}</div>"#,
+        r#"<div class="{class}" data-pgapp-item="{label}"{extra}><label class="pgapp-label">{label}</label>{input}</div>"#,
+        class = merged_class("pgapp-field", html),
+        extra = extra_attrs(html),
         label = escape(field_name),
     )
 }
@@ -926,6 +933,7 @@ pub fn form_html(
     registry: &item_types::Registry,
     floating: bool,
     close_href: &str,
+    field_html: &HashMap<String, HtmlAttrs>,
     html: &HtmlAttrs,
 ) -> String {
     let panel_class = if floating {
@@ -953,7 +961,7 @@ pub fn form_html(
     body.push_str(&format!(r#"<form class="pgapp-form" method="post" action="{action}">"#));
     for field_name in fields {
         let value = row.get(field_name).and_then(|v| v.as_deref());
-        body.push_str(&input_for_field(entity, item_types, field_name, value, resolved_choices, registry));
+        body.push_str(&input_for_field(entity, item_types, field_name, value, resolved_choices, registry, field_html));
     }
     let submit_label = if edit_id.is_some() { "Save" } else { "Create" };
     body.push_str(&format!(
@@ -994,6 +1002,7 @@ pub fn editable_table_html(
     item_types: &HashMap<String, FieldItem>,
     registry: &item_types::Registry,
     icons: &Icons,
+    field_html: &HashMap<String, HtmlAttrs>,
     html: &HtmlAttrs,
 ) -> String {
     let mut body = format!(
@@ -1014,7 +1023,7 @@ pub fn editable_table_html(
         ));
         for col in columns {
             let value = row.get(col).and_then(|v| v.as_deref());
-            body.push_str(&input_for_field(entity, item_types, col, value, resolved_choices, registry));
+            body.push_str(&input_for_field(entity, item_types, col, value, resolved_choices, registry, field_html));
         }
         body.push_str(&format!(
             r#"<button class="pgapp-btn pgapp-btn-primary" type="submit" title="Save">{save_icon}</button></form>
@@ -1035,7 +1044,7 @@ pub fn editable_table_html(
         idx = idx,
     ));
     for col in columns {
-        body.push_str(&input_for_field(entity, item_types, col, None, resolved_choices, registry));
+        body.push_str(&input_for_field(entity, item_types, col, None, resolved_choices, registry, field_html));
     }
     body.push_str(r#"<button class="pgapp-btn pgapp-btn-primary" type="submit">Add</button></form></div>"#);
 

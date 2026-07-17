@@ -173,21 +173,28 @@ pub enum ComponentDef {
     /// A create/edit form for one entity. Renders blank (create mode) by
     /// default; switches to edit mode for one row when the page is
     /// requested with `?edit_<n>=<id>` (`<n>` = this component's index
-    /// on the page).
+    /// on the page). `field_html` is the per-field counterpart to the
+    /// component-level `html`: `item <field> attrs (...)` sets
+    /// `id`/`class`/attributes on that one field's `<div class="pgapp-field">`
+    /// wrapper, independent of (and combinable with) an `as <kind>` item
+    /// type override.
     Form {
         title: String,
         entity: String,
         fields: Vec<String>,
         item_types: HashMap<String, FieldItem>,
+        field_html: HashMap<String, HtmlAttrs>,
         html: HtmlAttrs,
     },
     /// Every row rendered inline-editable (one `<form>` per row), plus
-    /// an "add new" row form — no separate list/edit split.
+    /// an "add new" row form — no separate list/edit split. `field_html`:
+    /// see `Form`.
     EditableTable {
         title: String,
         entity: String,
         columns: Vec<String>,
         item_types: HashMap<String, FieldItem>,
+        field_html: HashMap<String, HtmlAttrs>,
         html: HtmlAttrs,
     },
     /// Renders `query`'s rows as a chart; `chart_type` is one of

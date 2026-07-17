@@ -88,6 +88,7 @@ pub enum RuntimeComponent {
         entity: RuntimeEntity,
         fields: Vec<String>,
         item_types: HashMap<String, FieldItem>,
+        field_html: HashMap<String, HtmlAttrs>,
         html: HtmlAttrs,
     },
     EditableTable {
@@ -95,6 +96,7 @@ pub enum RuntimeComponent {
         entity: RuntimeEntity,
         columns: Vec<String>,
         item_types: HashMap<String, FieldItem>,
+        field_html: HashMap<String, HtmlAttrs>,
         html: HtmlAttrs,
     },
     Chart {

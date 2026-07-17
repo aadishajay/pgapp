@@ -340,14 +340,10 @@ fn json_str(v: &serde_json::Value, key: &str) -> String {
     v.get(key).and_then(|x| x.as_str()).unwrap_or_default().to_string()
 }
 
-/// Decodes the `"html"` key `meta::sync::merge_html_into_config` writes
-/// into every component's config, back into an [`HtmlAttrs`]. Missing
-/// (no `attrs (...)` in the markup) decodes to the all-`None`/empty
-/// default, same as a freshly-parsed component that never set one.
-fn decode_html_attrs(config: &serde_json::Value) -> HtmlAttrs {
-    let Some(html) = config.get("html") else {
-        return HtmlAttrs::default();
-    };
+/// Decodes one `{"id": ..., "class": ..., "attrs": {...}}` blob (the
+/// wire shape `meta::sync::html_attrs_to_json` writes) back into an
+/// [`HtmlAttrs`].
+fn html_attrs_from_json(html: &serde_json::Value) -> HtmlAttrs {
     let attrs = html
         .get("attrs")
         .and_then(|v| v.as_object())
@@ -360,6 +356,31 @@ fn decode_html_attrs(config: &serde_json::Value) -> HtmlAttrs {
         class: html.get("class").and_then(|v| v.as_str()).map(String::from),
         attrs,
     }
+}
+
+/// Decodes the `"html"` key `meta::sync::merge_html_into_config` writes
+/// into every component's config. Missing (no `attrs (...)` in the
+/// markup) decodes to the all-`None`/empty default, same as a
+/// freshly-parsed component that never set one.
+fn decode_html_attrs(config: &serde_json::Value) -> HtmlAttrs {
+    match config.get("html") {
+        Some(html) => html_attrs_from_json(html),
+        None => HtmlAttrs::default(),
+    }
+}
+
+/// Decodes a Form/EditableTable's `"field_html"` key — one
+/// `html_attrs_from_json`-shaped entry per field that used a trailing
+/// `attrs (...)` on its `item` line. Missing/empty decodes to an empty
+/// map, same as a component where no field ever set one.
+fn decode_field_html(config: &serde_json::Value) -> HashMap<String, HtmlAttrs> {
+    config
+        .get("field_html")
+        .and_then(|v| v.as_object())
+        .into_iter()
+        .flatten()
+        .map(|(field, html)| (field.clone(), html_attrs_from_json(html)))
+        .collect()
 }
 
 fn decode_item_types(v: &serde_json::Value) -> HashMap<String, FieldItem> {
@@ -430,6 +451,7 @@ fn decode_component(
             entity: resolve_entity(entities, &json_str(&config, "entity"))?,
             fields: json_strings(&config["fields"]),
             item_types: decode_item_types(&config["item_types"]),
+            field_html: decode_field_html(&config),
             html,
         }),
         "editable_table" => Ok(RuntimeComponent::EditableTable {
@@ -437,6 +459,7 @@ fn decode_component(
             entity: resolve_entity(entities, &json_str(&config, "entity"))?,
             columns: json_strings(&config["columns"]),
             item_types: decode_item_types(&config["item_types"]),
+            field_html: decode_field_html(&config),
             html,
         }),
         "chart" => Ok(RuntimeComponent::Chart {

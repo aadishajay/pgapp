@@ -386,6 +386,15 @@ fn component_html(c: &ComponentDef) -> &HtmlAttrs {
     }
 }
 
+/// `HtmlAttrs` -> `{"id": ..., "class": ..., "attrs": {...}}`, the wire
+/// shape `meta::load::decode_html_attrs` reads back — shared by both
+/// component-level `html` and per-field `field_html`.
+fn html_attrs_to_json(html: &HtmlAttrs) -> serde_json::Value {
+    let attrs_obj: serde_json::Map<String, serde_json::Value> =
+        html.attrs.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect();
+    serde_json::json!({ "id": html.id, "class": html.class, "attrs": attrs_obj })
+}
+
 /// Splices `html`'s `id`/`class`/extra attributes into `config` under a
 /// reserved `"html"` key — read back generically in `meta::load`,
 /// independent of `kind`, the same way it's written here.
@@ -393,15 +402,30 @@ fn merge_html_into_config(config: &mut serde_json::Value, html: &HtmlAttrs) {
     if html.is_empty() {
         return;
     }
-    let attrs_obj: serde_json::Map<String, serde_json::Value> =
-        html.attrs.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect();
     config
         .as_object_mut()
         .expect("component config is always a JSON object")
-        .insert(
-            "html".to_string(),
-            serde_json::json!({ "id": html.id, "class": html.class, "attrs": attrs_obj }),
-        );
+        .insert("html".to_string(), html_attrs_to_json(html));
+}
+
+/// `{field: {"id": ..., "class": ..., "attrs": {...}}, ...}` for a
+/// Form/EditableTable's `field_html` — one entry per field that used a
+/// trailing `attrs (...)` on its `item` line. Validated the same way
+/// `resolve_item_types` validates `item_types`: every key must be one
+/// of the component's own declared fields.
+fn field_html_json(
+    field_html: &HashMap<String, HtmlAttrs>,
+    known_fields: &[String],
+    owner_label: &str,
+) -> Result<serde_json::Value> {
+    let mut map = serde_json::Map::new();
+    for (field_name, html) in field_html {
+        if !known_fields.iter().any(|f| f == field_name) {
+            anyhow::bail!("{owner_label} sets attrs on unknown field '{field_name}'");
+        }
+        map.insert(field_name.clone(), html_attrs_to_json(html));
+    }
+    Ok(serde_json::Value::Object(map))
 }
 
 /// Resolves every field's item (kind + config), falling back to
@@ -516,6 +540,7 @@ fn build_component_config(
             entity,
             fields,
             item_types,
+            field_html,
             ..
         } => {
             if !entity_ids.contains_key(entity) {
@@ -528,13 +553,9 @@ fn build_component_config(
                      query-backed and read-only — forms need a real table"
                 );
             }
-            let resolved = resolve_item_types(
-                entity_def,
-                fields,
-                item_types,
-                registry,
-                &format!("{owner_label} form '{title}'"),
-            )?;
+            let owner = format!("{owner_label} form '{title}'");
+            let resolved = resolve_item_types(entity_def, fields, item_types, registry, &owner)?;
+            let field_html_resolved = field_html_json(field_html, fields, &owner)?;
             Ok((
                 "form",
                 serde_json::json!({
@@ -542,6 +563,7 @@ fn build_component_config(
                     "entity": entity,
                     "fields": fields,
                     "item_types": resolved,
+                    "field_html": field_html_resolved,
                 }),
             ))
         }
@@ -550,6 +572,7 @@ fn build_component_config(
             entity,
             columns,
             item_types,
+            field_html,
             ..
         } => {
             if !entity_ids.contains_key(entity) {
@@ -564,13 +587,9 @@ fn build_component_config(
                      query-backed and read-only — editable tables need a real table"
                 );
             }
-            let resolved = resolve_item_types(
-                entity_def,
-                columns,
-                item_types,
-                registry,
-                &format!("{owner_label} editable_table '{title}'"),
-            )?;
+            let owner = format!("{owner_label} editable_table '{title}'");
+            let resolved = resolve_item_types(entity_def, columns, item_types, registry, &owner)?;
+            let field_html_resolved = field_html_json(field_html, columns, &owner)?;
             Ok((
                 "editable_table",
                 serde_json::json!({
@@ -578,6 +597,7 @@ fn build_component_config(
                     "entity": entity,
                     "columns": columns,
                     "item_types": resolved,
+                    "field_html": field_html_resolved,
                 }),
             ))
         }

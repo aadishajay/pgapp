@@ -47,11 +47,15 @@
 //!
 //! form      := "form" String "of" Ident "{" formprop* "}"
 //! formprop  := "fields" ":" identlist
-//!            | "item" Ident "as" fielditem
+//!            | itemprop
 //!
 //! editable_table := "editable_table" String "of" Ident "{" etprop* "}"
 //! etprop    := "columns" ":" identlist
-//!            | "item" Ident "as" fielditem
+//!            | itemprop
+//!
+//! itemprop  := "item" Ident ("as" fielditem)? htmlattrs?
+//!            (at least one of "as .../"attrs (...)" required — a bare
+//!            "item name" with neither sets nothing and is rejected)
 //!
 //! chart     := "chart" String "from" "query" Ident "{" chartprop* "}"
 //! chartprop := "type" ":" Ident       ("bar" | "line" | "area" | "pie" | "donut" | "scatter")
@@ -722,10 +726,16 @@ impl Parser {
 
         let mut fields = Vec::new();
         let mut item_types = std::collections::HashMap::new();
+        let mut field_html = std::collections::HashMap::new();
         while !self.at_symbol('}') {
             if self.at_keyword("item") {
-                let (field, field_item) = self.parse_field_item()?;
-                item_types.insert(field, field_item);
+                let (field, item, html) = self.parse_field_item()?;
+                if let Some(item) = item {
+                    item_types.insert(field.clone(), item);
+                }
+                if !html.is_empty() {
+                    field_html.insert(field, html);
+                }
                 continue;
             }
             let prop = self.expect_ident()?;
@@ -742,6 +752,7 @@ impl Parser {
             entity,
             fields,
             item_types,
+            field_html,
             html: HtmlAttrs::default(),
         })
     }
@@ -755,10 +766,16 @@ impl Parser {
 
         let mut columns = Vec::new();
         let mut item_types = std::collections::HashMap::new();
+        let mut field_html = std::collections::HashMap::new();
         while !self.at_symbol('}') {
             if self.at_keyword("item") {
-                let (field, field_item) = self.parse_field_item()?;
-                item_types.insert(field, field_item);
+                let (field, item, html) = self.parse_field_item()?;
+                if let Some(item) = item {
+                    item_types.insert(field.clone(), item);
+                }
+                if !html.is_empty() {
+                    field_html.insert(field, html);
+                }
                 continue;
             }
             let prop = self.expect_ident()?;
@@ -775,6 +792,7 @@ impl Parser {
             entity,
             columns,
             item_types,
+            field_html,
             html: HtmlAttrs::default(),
         })
     }
@@ -826,24 +844,49 @@ impl Parser {
     /// identifier (validated against the item type registry later, in
     /// `meta::sync_app`, not here) and the config is a generic blob (see
     /// `parse_item_config`).
-    fn parse_field_item(&mut self) -> Result<(String, FieldItem)> {
+    /// `"as" kind` and a trailing `attrs (...)` are each optional, but at
+    /// least one must be present — otherwise the `item` line does
+    /// nothing at all and is almost certainly a mistake. Letting `as`
+    /// be skipped means `item name attrs (...)` can set `id`/`class`/
+    /// attributes on a field's wrapper without also forcing an item
+    /// type override.
+    fn parse_field_item(&mut self) -> Result<(String, Option<FieldItem>, HtmlAttrs)> {
         self.expect_keyword("item")?;
         let field = self.expect_ident()?;
-        self.expect_keyword("as")?;
-        let kind = self.expect_ident()?;
 
-        let config = if self.at_keyword("from") {
+        let field_item = if self.at_keyword("as") {
             self.advance()?;
-            self.expect_keyword("query")?;
-            let query_name = self.expect_ident()?;
-            serde_json::json!({ "query": query_name })
-        } else if self.at_symbol('(') {
-            self.parse_item_config()?
+            let kind = self.expect_ident()?;
+            let config = if self.at_keyword("from") {
+                self.advance()?;
+                self.expect_keyword("query")?;
+                let query_name = self.expect_ident()?;
+                serde_json::json!({ "query": query_name })
+            } else if self.at_symbol('(') {
+                self.parse_item_config()?
+            } else {
+                serde_json::json!({})
+            };
+            Some(FieldItem { kind, config })
         } else {
-            serde_json::json!({})
+            None
         };
 
-        Ok((field, FieldItem { kind, config }))
+        let html = if self.at_keyword("attrs") {
+            self.advance()?;
+            self.parse_html_attrs()?
+        } else {
+            HtmlAttrs::default()
+        };
+
+        if field_item.is_none() && html.is_empty() {
+            bail!(
+                "item '{field}' needs 'as <kind>' and/or 'attrs (...)' (line {})",
+                self.cur_line()
+            );
+        }
+
+        Ok((field, field_item, html))
     }
 
     /// Parses `"(" arg ("," arg)* ")"`. Every arg in the list must be the
@@ -1417,5 +1460,82 @@ mod tests {
             })
             .unwrap();
         assert_eq!(columns, &vec!["a".to_string(), "c".to_string()]);
+    }
+
+    #[test]
+    fn parses_field_level_attrs_without_an_item_type_override() {
+        let src = r#"
+            app "Demo" {
+                entity "agents" { field id: id field name: text required field team: text }
+                page "P" {
+                    editable_table "Agents" of agents {
+                        columns: name, team
+                        item name attrs (id: "agent-name", class: "wide", data_foo: "bar")
+                    }
+                }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+        let (item_types, field_html) = app.pages[0]
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::EditableTable { item_types, field_html, .. } => Some((item_types, field_html)),
+                _ => None,
+            })
+            .unwrap();
+
+        // No `as <kind>` was given, so no override was recorded — the
+        // field still resolves its item type the normal (default) way.
+        assert!(!item_types.contains_key("name"));
+
+        let html = field_html.get("name").unwrap();
+        assert_eq!(html.id.as_deref(), Some("agent-name"));
+        assert_eq!(html.class.as_deref(), Some("wide"));
+        assert_eq!(html.attrs, vec![("data-foo".to_string(), "bar".to_string())]);
+        assert!(!field_html.contains_key("team"));
+    }
+
+    #[test]
+    fn combines_item_type_override_with_field_level_attrs() {
+        let src = r#"
+            app "Demo" {
+                entity "agents" { field id: id field name: text required field active: boolean }
+                page "P" {
+                    form "Edit" of agents {
+                        fields: name, active
+                        item active as checkbox attrs (class: "wide")
+                    }
+                }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+        let (item_types, field_html) = app.pages[0]
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Form { item_types, field_html, .. } => Some((item_types, field_html)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(item_types.get("active").unwrap().kind, "checkbox");
+        assert_eq!(field_html.get("active").unwrap().class.as_deref(), Some("wide"));
+    }
+
+    #[test]
+    fn rejects_a_bare_item_line_with_neither_as_nor_attrs() {
+        let src = r#"
+            app "Demo" {
+                entity "agents" { field id: id field name: text required }
+                page "P" {
+                    form "Edit" of agents {
+                        fields: name
+                        item name
+                    }
+                }
+            }
+        "#;
+        let err = parse_app(src).unwrap_err().to_string();
+        assert!(err.contains("needs 'as <kind>' and/or 'attrs (...)'"), "unexpected error: {err}");
     }
 }

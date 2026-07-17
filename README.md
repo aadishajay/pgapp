@@ -272,16 +272,19 @@ separate "page kind" the way there used to be. Seven kinds:
   each row automatically gets Edit/Delete actions that target it — no
   extra config needed, just put both components on one page.
 - **`form "Title" of <entity> { ... }`** — a create/edit form. `fields`
-  lists the writable columns; `item <field> as <kind> [(...)]` picks
-  each one's widget the same way it always has (see "Item types"
-  below). Renders blank (create mode) by default; visiting the page
-  with `?edit_<n>=<id>` (`<n>` is this component's position on the
-  page, 0-based) switches it into edit mode for that row, with a
-  Delete button alongside Save.
+  lists the writable columns; `item <field> [as <kind> [(...)]] [attrs (...)]`
+  picks that field's widget (see "Item types" below) and/or sets
+  `id`/`class`/attributes on just that field's wrapper — either half is
+  optional, but at least one must be given (a bare `item name` with
+  neither does nothing and is rejected at parse time). Renders blank
+  (create mode) by default; visiting the page with `?edit_<n>=<id>`
+  (`<n>` is this component's position on the page, 0-based) switches it
+  into edit mode for that row, with a Delete button alongside Save.
 - **`editable_table "Title" of <entity> { ... }`** — every row rendered
   as its own inline-editable form (one per row) plus an "add new" row —
   no separate list/edit split. A good fit for a small table you want to
-  bulk-tweak in place. Not paginated.
+  bulk-tweak in place. Not paginated. Same `item <field> [as <kind>] [attrs (...)]`
+  syntax as `form`.
 - **`chart "Title" from query <name> { type: bar|line|area|scatter|pie|donut x: <col> y: <col> }`**
   — renders the query's rows as a chart; see "Charts" below for all six
   types and the pluggable rendering backend.
@@ -870,8 +873,7 @@ The class list above is *kind*-level — every `report` gets
 enough for a theme to style a kind consistently, but not enough to
 single out one specific instance (e.g. "make just the Dashboard's
 status chart taller" or "give this one report a JS hook to find it
-by"). Any component (and only components — not individual form fields)
-can end with a trailing `attrs (...)`:
+by"). Any component can end with a trailing `attrs (...)`:
 
 ```
 chart "Tickets by status" from query by_status {
@@ -894,6 +896,26 @@ exactly as before — `attrs (...)` is pure opt-in, synced/reloaded the
 same as everything else (see `model::HtmlAttrs`, threaded through
 `meta::sync`/`meta::load` and applied in `render.rs`'s `merged_class`/
 `extra_attrs`).
+
+The same mechanism goes one level deeper on `form`/`editable_table`:
+`item <field> attrs (...)` sets `id`/`class`/attributes on just that
+one field's `<div class="pgapp-field">` wrapper, independently of (and
+combinable with) an `as <kind>` item type override:
+
+```
+editable_table "Support agents" of agents {
+  columns: name, team, active
+  item name attrs (id: "agent-name", class: "pgapp-field-wide")
+}
+```
+
+`as <kind>` and `attrs (...)` are each optional on an `item` line, but
+at least one is required — a bare `item name` with neither sets
+nothing and is a sync-time error. On an `editable_table`, an `id` set
+this way repeats on every row's copy of that field (one row = one
+render of the same field markup), producing duplicate DOM ids — fine
+for `class`/`data-*` hooks, but prefer those over `id` here; `id` is
+unambiguous on a `form`, which renders the field only once.
 
 ### The contract
 

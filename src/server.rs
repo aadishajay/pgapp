@@ -616,7 +616,7 @@ async fn render_component(
             ))
         }
 
-        RuntimeComponent::Form { title, entity, fields, item_types, html } => {
+        RuntimeComponent::Form { title, entity, fields, item_types, field_html, html } => {
             // A Form that's a Report's edit/create companion renders as a
             // floating popup instead of a block sitting inline below the
             // table: closed (nothing rendered) unless its edit_{idx}/
@@ -642,7 +642,7 @@ async fn render_component(
                     let choices = resolve_field_choices(&state.pool, &data.app, page, item_types, &ctx).await?;
                     Ok(render::form_html(
                         page_name, idx, title, fields, entity, &row, Some(id), &choices, item_types, &state.item_types,
-                        floating, &close_href, html,
+                        floating, &close_href, field_html, html,
                     ))
                 }
                 None => {
@@ -651,13 +651,13 @@ async fn render_component(
                     let empty = BTreeMap::new();
                     Ok(render::form_html(
                         page_name, idx, title, fields, entity, &empty, None, &choices, item_types, &state.item_types,
-                        floating, &close_href, html,
+                        floating, &close_href, field_html, html,
                     ))
                 }
             }
         }
 
-        RuntimeComponent::EditableTable { title, entity, columns, item_types, html } => {
+        RuntimeComponent::EditableTable { title, entity, columns, item_types, field_html, html } => {
             let ctx = bind_context(query, None);
             let choices = resolve_field_choices(&state.pool, &data.app, page, item_types, &ctx).await?;
             let rows = fetch_rows(&state.pool, entity).await?;
@@ -672,6 +672,7 @@ async fn render_component(
                 item_types,
                 &state.item_types,
                 &data.icons,
+                field_html,
                 html,
             ))
         }
