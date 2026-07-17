@@ -117,6 +117,12 @@ pub struct FieldItem {
     pub config: serde_json::Value,
 }
 
+/// The chart types the built-in `inline` SVG backend (and, by
+/// convention, any pluggable `chart_lib`) knows how to render. Checked
+/// at parse time in `markup::parse_chart` so an unsupported type is a
+/// sync-time error, not a silently blank chart.
+pub const CHART_TYPES: &[&str] = &["bar", "line", "area", "pie", "donut", "scatter"];
+
 /// One independently-rendered piece of a page, or of the app-wide
 /// header/footer chrome (which reuses the same component kinds, though
 /// in practice only `Text`/`Link`/`Region` make sense there — enforced
@@ -160,8 +166,9 @@ pub enum ComponentDef {
         columns: Vec<String>,
         item_types: HashMap<String, FieldItem>,
     },
-    /// Renders `query`'s rows as a chart; `chart_type` is "bar" or
-    /// "line", `x`/`y` name the columns used for each axis. See
+    /// Renders `query`'s rows as a chart; `chart_type` is one of
+    /// `CHART_TYPES`, `x`/`y` name the columns used for each axis (for
+    /// `pie`/`donut`, `x` is the slice label and `y` its value). See
     /// `src/chart_lib.rs` for the pluggable rendering backend.
     Chart {
         title: String,

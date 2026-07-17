@@ -51,7 +51,7 @@
 //!            | "item" Ident "as" fielditem
 //!
 //! chart     := "chart" String "from" "query" Ident "{" chartprop* "}"
-//! chartprop := "type" ":" Ident       ("bar" | "line")
+//! chartprop := "type" ":" Ident       ("bar" | "line" | "area" | "pie" | "donut" | "scatter")
 //!            | "x" ":" Ident
 //!            | "y" ":" Ident
 //!
@@ -110,7 +110,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::model::{
     AppDef, ComponentDef, DaOp, EntityDef, FieldDef, FieldItem, FieldType, LinkColumn, NavItem,
-    PageDef, QueryDef,
+    PageDef, QueryDef, CHART_TYPES,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -726,6 +726,12 @@ impl Parser {
         if x.is_empty() || y.is_empty() {
             bail!("chart '{title}' requires both 'x' and 'y' properties");
         }
+        if !CHART_TYPES.contains(&chart_type.as_str()) {
+            bail!(
+                "chart '{title}' has unknown type '{chart_type}' (expected one of: {})",
+                CHART_TYPES.join(", ")
+            );
+        }
 
         Ok(ComponentDef::Chart {
             title,
@@ -1231,5 +1237,45 @@ mod tests {
         assert_eq!(item.kind, "starfield");
         assert_eq!(item.config["density"], "12");
         assert_eq!(item.config["twinkle"], "true");
+    }
+
+    #[test]
+    fn parses_every_built_in_chart_type() {
+        for chart_type in CHART_TYPES {
+            let src = format!(
+                r#"
+                app "Demo" {{
+                    query q {{ sql: "select 1 as label, 2 as value" }}
+                    page "P" {{
+                        chart "C" from query q {{ type: {chart_type} x: label y: value }}
+                    }}
+                }}
+                "#
+            );
+            let app = parse_app(&src).unwrap_or_else(|e| panic!("chart type '{chart_type}' failed to parse: {e}"));
+            let chart = app.pages[0]
+                .components
+                .iter()
+                .find_map(|c| match c {
+                    ComponentDef::Chart { chart_type, .. } => Some(chart_type),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(chart, chart_type);
+        }
+    }
+
+    #[test]
+    fn rejects_an_unknown_chart_type() {
+        let src = r#"
+            app "Demo" {
+                query q { sql: "select 1 as label, 2 as value" }
+                page "P" {
+                    chart "C" from query q { type: bubble x: label y: value }
+                }
+            }
+        "#;
+        let err = parse_app(src).unwrap_err().to_string();
+        assert!(err.contains("unknown type 'bubble'"), "unexpected error: {err}");
     }
 }

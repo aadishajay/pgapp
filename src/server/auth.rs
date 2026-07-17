@@ -329,6 +329,7 @@ pub async fn users_page(
         .map_err(err_response)?;
 
     Ok(Html(render::users_page(
+        &data.app.name,
         &users,
         current.id,
         query.get("error").map(|s| s.as_str()),

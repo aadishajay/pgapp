@@ -282,9 +282,9 @@ separate "page kind" the way there used to be. Seven kinds:
   as its own inline-editable form (one per row) plus an "add new" row —
   no separate list/edit split. A good fit for a small table you want to
   bulk-tweak in place. Not paginated.
-- **`chart "Title" from query <name> { type: bar|line x: <col> y: <col> }`**
-  — renders the query's rows as a chart; see "Charts" below for the
-  pluggable rendering backend.
+- **`chart "Title" from query <name> { type: bar|line|area|scatter|pie|donut x: <col> y: <col> }`**
+  — renders the query's rows as a chart; see "Charts" below for all six
+  types and the pluggable rendering backend.
 - **`text "..."`** — static text.
 - **`link "Label" -> page <Name>`** — a link to another page.
 - **`region "Label" from query <name>`** — a named query's rows
@@ -501,19 +501,38 @@ was.
 
 ## Charts
 
-A `chart` component's rendering backend is pluggable the same way a
-theme is (`src/chart_lib.rs`):
+A `chart` component's `type:` is one of six built-in kinds
+(`model::CHART_TYPES`), checked at sync time — an unknown type is a
+sync-time error, never a silently blank chart:
 
-- **`inline`** (default) — a dependency-free bar/line chart computed
-  straight to inline SVG server-side (`render::inline_svg_chart`). No
-  JS, no network fetch, works everywhere.
+- **`bar`** — one rect per row, height proportional to `y`.
+- **`line`** — a polyline through each row's point, plus a marker dot.
+- **`area`** — the same line, filled down to the baseline.
+- **`scatter`** — just the marker dots, no connecting line.
+- **`pie`** — one wedge per row, swept from 12 o'clock, sized by its
+  share of the total `y`; a side legend lists each label and share
+  since text rarely fits inside a thin wedge.
+- **`donut`** — a `pie` with the center punched out.
+
+`bar`/`line`/`area`/`scatter` share an x-axis of `x` (category) against
+`y` (value); `pie`/`donut` reuse the same two properties as a slice's
+label and value — there's no separate grammar for radial charts.
+
+The rendering backend itself is pluggable the same way a theme is
+(`src/chart_lib.rs`):
+
+- **`inline`** (default) — every type above computed straight to inline
+  SVG server-side (`render::inline_svg_chart`, `cartesian_chart_svg`,
+  `radial_chart_svg`). No JS, no network fetch, works everywhere.
 - **any other name** — loads `chart-libs/<name>/chart.js`, served at
   `GET /chart-lib.js` and linked from every page. For each chart, the
   server instead emits a `<div class="pgapp-chart">` placeholder plus a
   `<script type="application/json" class="pgapp-chart-data">` blob
   (`{rows, x, y, type}`); the library's JS reads that and renders into
   the div however it likes — canvas, its own SVG, a real charting
-  library. The server never needs to know how.
+  library. The server never needs to know how, so a pluggable library
+  is free to support only a subset of the six types (`canvas-bars`
+  below always draws bars regardless of `type`).
 
 Selected per app with `chart_lib: <name>` in the markup (default
 `inline`). `chart-libs/canvas-bars/`

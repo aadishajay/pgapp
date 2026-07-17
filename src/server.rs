@@ -773,6 +773,7 @@ async fn show(
     }
 
     Ok(Html(render::page_layout(
+        &data.app.name,
         &page.name,
         &body,
         query.get("error").map(|s| s.as_str()),
@@ -1124,6 +1125,7 @@ async fn admin_reload_page(
     let regions = resolve_regions(&state.pool, &data.app, None, &ctx).await.map_err(err_response)?;
 
     Ok(Html(render::reload_page(
+        &data.app.name,
         &state.markup_path,
         markup_text.as_deref(),
         query.get("error").map(|s| s.as_str()),

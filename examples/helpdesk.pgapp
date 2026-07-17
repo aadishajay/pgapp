@@ -93,8 +93,10 @@ app "Helpdesk" {
   # ---- Pages ----
 
   # A dashboard is just a page whose components happen to all be
-  # read-only: two charts and two regions, each one line of markup
-  # backed by a named query.
+  # read-only: charts and regions, each one line of markup backed by a
+  # named query. All six built-in chart types (model::CHART_TYPES) are
+  # demoed across this page and About, all fed by the same two queries
+  # to show it's purely a rendering choice, not a data-shape one.
   page "Dashboard" {
     text "Live overview of the Nova support queue. Every widget below is one line of markup backed by a named SQL query."
     chart "Tickets by status" from query by_status {
@@ -102,8 +104,18 @@ app "Helpdesk" {
       x: label
       y: value
     }
+    chart "Tickets by status (share)" from query by_status {
+      type: donut
+      x: label
+      y: value
+    }
     chart "New tickets per day" from query by_day {
       type: line
+      x: label
+      y: value
+    }
+    chart "New tickets per day (area)" from query by_day {
+      type: area
       x: label
       y: value
     }
@@ -210,9 +222,19 @@ app "Helpdesk" {
   }
 
   page "About" {
-    text "Nova Helpdesk is defined in a single .pgapp markup file: 2 entities, 6 pages, 6 named queries, 2 chart types, every built-in item type - and zero per-app code."
+    text "Nova Helpdesk is defined in a single .pgapp markup file: 2 entities, 6 pages, 6 named queries, all 6 chart types, every built-in item type - and zero per-app code."
     chart "Tickets per agent" from query top_agents {
       type: bar
+      x: label
+      y: value
+    }
+    chart "Tickets per agent (scatter)" from query top_agents {
+      type: scatter
+      x: label
+      y: value
+    }
+    chart "Status split (pie)" from query by_status {
+      type: pie
       x: label
       y: value
     }

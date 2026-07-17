@@ -14,5 +14,15 @@ page "About" {
     x: label
     y: value
   }
+  chart "Tickets per agent (scatter)" from query top_agents {
+    type: scatter
+    x: label
+    y: value
+  }
+  chart "Status split (pie)" from query by_status {
+    type: pie
+    x: label
+    y: value
+  }
   link "Back to the dashboard" -> page Dashboard
 }

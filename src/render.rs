@@ -150,10 +150,11 @@ fn chrome_items_html(items: &[RuntimeComponent], regions: &RegionRows) -> String
     html
 }
 
-/// A dependency-free bar/line chart rendered straight to inline SVG —
-/// the built-in `PGAPP_CHART_LIB=inline` backend (see
-/// `src/chart_lib.rs`). No JS, no network fetch.
-fn inline_svg_chart(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTreeMap<String, Option<String>>]) -> String {
+/// `bar`/`line`/`area`/`scatter` all plot `rows` against a shared x
+/// (category) axis and y (value) baseline — this draws that shared
+/// axis/grid and hands back the plot area's geometry for the per-type
+/// mark drawing in `inline_svg_chart`.
+fn cartesian_chart_svg(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTreeMap<String, Option<String>>]) -> String {
     let (width, height, pad) = (480.0_f64, 220.0_f64, 30.0_f64);
     let values: Vec<f64> = rows
         .iter()
@@ -164,6 +165,11 @@ fn inline_svg_chart(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTr
     let n = (values.len().max(1)) as f64;
     let bar_w = (width - pad * 2.0) / n;
     let baseline = height - pad;
+    let point = |i: usize, v: f64| {
+        let px = pad + bar_w * (i as f64 + 0.5);
+        let py = baseline - (v / max) * (height - pad * 2.0);
+        (px, py)
+    };
 
     let mut svg = format!(
         r#"<svg class="pgapp-chart-svg" viewBox="0 0 {width} {height}" role="img" aria-label="{}">"#,
@@ -174,34 +180,38 @@ fn inline_svg_chart(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTr
         width - pad
     ));
 
-    if chart_type == "line" {
-        let points: Vec<String> = values
-            .iter()
-            .enumerate()
-            .map(|(i, v)| {
-                let px = pad + bar_w * (i as f64 + 0.5);
-                let py = baseline - (v / max) * (height - pad * 2.0);
-                format!("{px:.1},{py:.1}")
-            })
-            .collect();
-        svg.push_str(&format!(
-            r#"<polyline points="{}" fill="none" stroke="currentColor" stroke-width="2"/>"#,
-            points.join(" ")
-        ));
-        for (i, v) in values.iter().enumerate() {
-            let px = pad + bar_w * (i as f64 + 0.5);
-            let py = baseline - (v / max) * (height - pad * 2.0);
-            svg.push_str(&format!(r#"<circle cx="{px:.1}" cy="{py:.1}" r="3" fill="currentColor"/>"#));
+    match chart_type {
+        "line" | "area" | "scatter" => {
+            let points: Vec<(f64, f64)> = values.iter().enumerate().map(|(i, v)| point(i, *v)).collect();
+            if chart_type == "area" {
+                let mut path = format!("M {:.1},{baseline:.1} ", points.first().map(|p| p.0).unwrap_or(pad));
+                for (px, py) in &points {
+                    path.push_str(&format!("L {px:.1},{py:.1} "));
+                }
+                path.push_str(&format!("L {:.1},{baseline:.1} Z", points.last().map(|p| p.0).unwrap_or(width - pad)));
+                svg.push_str(&format!(
+                    r#"<path d="{path}" fill="currentColor" fill-opacity="0.25" stroke="currentColor" stroke-width="2"/>"#
+                ));
+            } else if chart_type == "line" {
+                let poly = points.iter().map(|(px, py)| format!("{px:.1},{py:.1}")).collect::<Vec<_>>().join(" ");
+                svg.push_str(&format!(r#"<polyline points="{poly}" fill="none" stroke="currentColor" stroke-width="2"/>"#));
+            }
+            for (px, py) in &points {
+                svg.push_str(&format!(r#"<circle cx="{px:.1}" cy="{py:.1}" r="3" fill="currentColor"/>"#));
+            }
         }
-    } else {
-        for (i, v) in values.iter().enumerate() {
-            let bar_h = (v / max) * (height - pad * 2.0);
-            let bx = pad + bar_w * (i as f64) + 2.0;
-            let by = baseline - bar_h;
-            svg.push_str(&format!(
-                r#"<rect x="{bx:.1}" y="{by:.1}" width="{:.1}" height="{bar_h:.1}" fill="currentColor"/>"#,
-                (bar_w - 4.0).max(1.0)
-            ));
+        _ => {
+            // "bar" (also the fallback — markup.rs's CHART_TYPES check
+            // already rejects anything else at sync time).
+            for (i, v) in values.iter().enumerate() {
+                let bar_h = (v / max) * (height - pad * 2.0);
+                let bx = pad + bar_w * (i as f64) + 2.0;
+                let by = baseline - bar_h;
+                svg.push_str(&format!(
+                    r#"<rect x="{bx:.1}" y="{by:.1}" width="{:.1}" height="{bar_h:.1}" fill="currentColor"/>"#,
+                    (bar_w - 4.0).max(1.0)
+                ));
+            }
         }
     }
 
@@ -214,6 +224,80 @@ fn inline_svg_chart(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTr
         ));
     }
     svg.push_str("</svg>");
+    svg
+}
+
+/// `pie`/`donut`: each row becomes one slice, swept clockwise from 12
+/// o'clock, sized by its share of the total; `donut` punches a hole in
+/// the middle. A simple side legend lists label + share since slice
+/// labels don't fit reliably inside thin wedges.
+fn radial_chart_svg(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTreeMap<String, Option<String>>]) -> String {
+    let (width, height) = (480.0_f64, 220.0_f64);
+    let (cx, cy, r) = (150.0_f64, height / 2.0, height / 2.0 - 20.0);
+    let values: Vec<f64> = rows
+        .iter()
+        .map(|row| row.get(y).and_then(|v| v.as_deref()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0).max(0.0))
+        .collect();
+    let labels: Vec<String> = rows.iter().map(|row| row.get(x).and_then(|v| v.as_deref()).unwrap_or("").to_string()).collect();
+    let total = values.iter().sum::<f64>().max(1e-9);
+
+    let mut svg = format!(
+        r#"<svg class="pgapp-chart-svg" viewBox="0 0 {width} {height}" role="img" aria-label="{}">"#,
+        escape(title)
+    );
+
+    let mut angle = -std::f64::consts::FRAC_PI_2;
+    for v in &values {
+        let frac = v / total;
+        let end_angle = angle + frac * std::f64::consts::TAU;
+        if frac >= 0.9999 {
+            svg.push_str(&format!(r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}" fill="currentColor" fill-opacity="0.85"/>"#));
+        } else if frac > 0.0 {
+            let (x0, y0) = (cx + r * angle.cos(), cy + r * angle.sin());
+            let (x1, y1) = (cx + r * end_angle.cos(), cy + r * end_angle.sin());
+            let large_arc = if end_angle - angle > std::f64::consts::PI { 1 } else { 0 };
+            // No theme-shared "card background" CSS variable exists to
+            // punch a true hole through, so slices are separated with a
+            // plain white seam — a close enough approximation on every
+            // built-in theme's light chart background.
+            svg.push_str(&format!(
+                r#"<path d="M {cx:.1},{cy:.1} L {x0:.1},{y0:.1} A {r:.1},{r:.1} 0 {large_arc} 1 {x1:.1},{y1:.1} Z" fill="currentColor" fill-opacity="0.85" stroke="white" stroke-width="1.5"/>"#
+            ));
+        }
+        angle = end_angle;
+    }
+    if chart_type == "donut" {
+        let hole_r = r * 0.55;
+        svg.push_str(&format!(r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{hole_r:.1}" fill="white"/>"#));
+    }
+
+    let legend_x = cx + r + 30.0;
+    for (i, (label, v)) in labels.iter().zip(values.iter()).enumerate() {
+        let ly = 20.0 + (i as f64) * 16.0;
+        if ly > height - 10.0 {
+            break;
+        }
+        let pct = (v / total) * 100.0;
+        svg.push_str(&format!(
+            r#"<rect x="{legend_x:.1}" y="{:.1}" width="9" height="9" fill="currentColor" fill-opacity="0.85"/><text x="{:.1}" y="{:.1}" font-size="9">{} ({pct:.0}%)</text>"#,
+            ly - 8.0,
+            legend_x + 13.0,
+            ly,
+            escape(label)
+        ));
+    }
+    svg.push_str("</svg>");
+    svg
+}
+
+/// A dependency-free chart rendered straight to inline SVG — the
+/// built-in `PGAPP_CHART_LIB=inline` backend (see `src/chart_lib.rs`).
+/// No JS, no network fetch. Supports every type in `model::CHART_TYPES`.
+fn inline_svg_chart(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTreeMap<String, Option<String>>]) -> String {
+    let svg = match chart_type {
+        "pie" | "donut" => radial_chart_svg(title, chart_type, x, y, rows),
+        _ => cartesian_chart_svg(title, chart_type, x, y, rows),
+    };
     format!(
         r#"<div class="pgapp-chart"><h3 class="pgapp-region-title">{}</h3>{svg}</div>"#,
         escape(title)
@@ -274,6 +358,7 @@ fn nav_user_html(user: Option<(&str, bool)>) -> String {
 }
 
 fn layout(
+    app_name: &str,
     title: &str,
     chrome: Chrome,
     icons: &Icons,
@@ -313,13 +398,14 @@ fn layout(
 </head>
 <body>
 {header}
-<nav class="pgapp-nav"><a class="pgapp-link" href="/">pgapp</a>{navbar}{nav_user}</nav>
+<nav class="pgapp-nav"><a class="pgapp-link" href="/">{brand}</a>{navbar}{nav_user}</nav>
 <h1 class="pgapp-title">{title}</h1>
 {body}
 {footer}
 </body>
 </html>"#,
         title = escape(title),
+        brand = escape(app_name),
         icons_stylesheet = icons.stylesheet_tag(),
         chart_lib_script = chart_lib
             .js_path
@@ -399,6 +485,7 @@ pub fn login_page(app_name: &str, error: Option<&str>, setup: bool) -> String {
 /// `server::auth::users_delete`).
 #[allow(clippy::too_many_arguments)]
 pub fn users_page(
+    app_name: &str,
     users: &[(i32, String, String)],
     current_user_id: i32,
     error: Option<&str>,
@@ -443,7 +530,7 @@ pub fn users_page(
 </form></div>"#,
     );
 
-    layout("Users", chrome, icons, chart_lib, user, &body)
+    layout(app_name, "Users", chrome, icons, chart_lib, user, &body)
 }
 
 /// The built-in /admin/reload page: re-parses the markup file and
@@ -454,6 +541,7 @@ pub fn users_page(
 /// since there's no one file to hand back to the browser.
 #[allow(clippy::too_many_arguments)]
 pub fn reload_page(
+    app_name: &str,
     markup_path: &str,
     markup_text: Option<&str>,
     error: Option<&str>,
@@ -502,7 +590,7 @@ pub fn reload_page(
     }
     body.push_str("</div>");
 
-    layout("Reload metadata", chrome, icons, chart_lib, user, &body)
+    layout(app_name, "Reload metadata", chrome, icons, chart_lib, user, &body)
 }
 
 /// Renders one field's input by looking up its registered item type
@@ -877,6 +965,7 @@ pub fn editable_table_html(
 /// `server.rs`).
 #[allow(clippy::too_many_arguments)]
 pub fn page_layout(
+    app_name: &str,
     title: &str,
     body: &str,
     error: Option<&str>,
@@ -900,7 +989,7 @@ pub fn page_layout(
         ));
     }
     full.push_str(body);
-    layout(title, chrome, icons, chart_lib, user, &full)
+    layout(app_name, title, chrome, icons, chart_lib, user, &full)
 }
 
 pub fn index_page(
@@ -919,5 +1008,5 @@ pub fn index_page(
         ));
     }
     body.push_str("</ul>");
-    layout(app_name, chrome, icons, chart_lib, user, &body)
+    layout(app_name, app_name, chrome, icons, chart_lib, user, &body)
 }

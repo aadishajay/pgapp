@@ -8,8 +8,18 @@ page "Dashboard" {
     x: label
     y: value
   }
+  chart "Tickets by status (share)" from query by_status {
+    type: donut
+    x: label
+    y: value
+  }
   chart "New tickets per day" from query by_day {
     type: line
+    x: label
+    y: value
+  }
+  chart "New tickets per day (area)" from query by_day {
+    type: area
     x: label
     y: value
   }
