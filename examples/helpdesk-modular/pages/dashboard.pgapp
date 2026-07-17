@@ -1,0 +1,18 @@
+# One file per page (or per group of related pages) — the natural
+# split once an app grows past a screenful.
+
+page "Dashboard" {
+  text "Live overview of the Nova support queue. Every widget below is one line of markup backed by a named SQL query."
+  chart "Tickets by status" from query by_status {
+    type: bar
+    x: label
+    y: value
+  }
+  chart "New tickets per day" from query by_day {
+    type: line
+    x: label
+    y: value
+  }
+  region "Busiest agents" from query top_agents
+  region "Latest tickets" from query recent
+}

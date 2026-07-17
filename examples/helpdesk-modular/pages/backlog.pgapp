@@ -1,0 +1,18 @@
+page "Backlog" {
+  text "Only tickets still Open, straight from a named query. Writes would still target the entity by id."
+  report "Open backlog" of tickets {
+    source: query open_backlog
+    columns: subject, priority, agent, satisfaction
+    page_size: 6
+  }
+}
+
+page "About" {
+  text "Nova Helpdesk is defined in a directory of small .pgapp files - one for the app shell, one per entity, one per page group - merged by name into a single app. Same grammar as the one-file version, zero refactoring."
+  chart "Tickets per agent" from query top_agents {
+    type: bar
+    x: label
+    y: value
+  }
+  link "Back to the dashboard" -> page Dashboard
+}

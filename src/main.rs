@@ -7,6 +7,7 @@ mod meta;
 mod model;
 mod render;
 mod server;
+mod source;
 mod theme;
 
 use std::sync::Arc;
@@ -22,10 +23,9 @@ async fn main() -> anyhow::Result<()> {
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/pgapp".to_string());
-    let src = std::fs::read_to_string(&markup_path)
-        .with_context(|| format!("failed to read markup file '{markup_path}'"))?;
-    let app_def = markup::parse_app(&src)
-        .with_context(|| format!("failed to parse markup file '{markup_path}'"))?;
+    // A single .pgapp file, or a directory of them merged into one app
+    // (see src/source.rs).
+    let app_def = source::load(&markup_path)?;
 
     let pool = PgPoolOptions::new()
         .max_connections(5)

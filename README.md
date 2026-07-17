@@ -200,12 +200,49 @@ app "Todo" {
 
 See `src/markup.rs` for the full grammar and `examples/todo.pgapp` for a
 working example. `examples/helpdesk.pgapp` is a richer one — two
-entities, a chart dashboard, both pagination modes, and every built-in
-item type — with demo data in `examples/helpdesk_seed.sql` and a
+entities, a chart dashboard, both pagination modes, auth, and every
+built-in item type — with demo data in `examples/helpdesk_seed.sql`, a
 feature-by-feature tour (with live screenshots) in
-`marketing/index.html`. It pairs with the colorful `themes/vivid/`
-theme (selected by the file's own `theme: vivid` line):
-`cargo run -- examples/helpdesk.pgapp`.
+`marketing/index.html`, and the colorful `themes/vivid/` theme selected
+by its own `theme: vivid` line: `cargo run -- examples/helpdesk.pgapp`.
+
+### One file, or a directory
+
+An app is authored as either a single `.pgapp` file or a **directory**
+of them — same grammar, zero refactoring to move between the two.
+Directory semantics are deliberately Terraform-shaped: every `.pgapp`
+file under the directory (recursively) merges into one app by name.
+
+- Exactly one file declares the `app "..." { }` block — settings,
+  `auth`, `nav`, and `header`/`footer` chrome live there.
+- Every other file is a *fragment*: any number of top-level `entity`,
+  `page`, and `query` blocks (top-level queries are app-scoped;
+  page-scoped queries stay inside their page as always). Fragments
+  reference each other by name exactly as within one file — the
+  metadata sync already resolves forward references, so file order
+  never matters.
+- There is no `include` statement and no import graph. The same name
+  declared in two files is a startup error naming both files, and parse
+  errors report `file (line N)`.
+
+`examples/helpdesk-modular/` is the helpdesk app split this way — one
+file for the app shell, one per entity, one per page group:
+
+```
+examples/helpdesk-modular/
+  app.pgapp            app "Helpdesk" { theme, auth, nav, header, footer }
+  tickets.pgapp        entity "tickets" + its app-scoped queries
+  agents.pgapp         entity "agents" + the agent_names LOV query
+  pages/
+    dashboard.pgapp    page "Dashboard"
+    tickets.pgapp      pages "Tickets" + "TicketDetail"
+    agents.pgapp       page "Agents" (requires: admin)
+    backlog.pgapp      pages "Backlog" + "About"
+```
+
+Run it with `cargo run -- examples/helpdesk-modular` — it syncs to the
+same metadata as the single-file version. The file layout is purely an
+authoring convenience; the database never sees it.
 
 ## Components
 
@@ -485,7 +522,8 @@ nothing downstream needs another join to resolve them.
 ```
 src/
   main.rs             wires everything together: registry, theme, icons, chart lib
-  markup.rs           lexer + parser: .pgapp text -> model::AppDef
+  markup.rs           lexer + parser: .pgapp text -> model::AppDef (or a Fragment)
+  source.rs           loads a file or merges a directory of .pgapp files into one AppDef
   model.rs            the parsed-markup types (AppDef, PageDef, ComponentDef, FieldItem, ...)
   html.rs             shared escape/js_escape/url_encode helpers
   theme.rs            theme.css/theme.json loading (see "Theming")

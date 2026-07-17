@@ -1,0 +1,39 @@
+# The tickets entity and the app-scoped queries that report on it.
+# Top-level queries in a fragment file are app-scoped, same as if they
+# were declared inside the app block.
+
+entity "tickets" {
+  field id: id
+  field subject: text required
+  field status: text default Open
+  field priority: text default Medium
+  field agent: text
+  field urgent: boolean default false
+  field satisfaction: integer default 3
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query by_status {
+  sql: "select status as label, count(*) as value from pgapp_data.helpdesk_tickets group by status order by 1"
+}
+
+query by_day {
+  sql: "select to_char(created_at, 'MM-DD') as label, count(*) as value
+        from pgapp_data.helpdesk_tickets group by 1 order by 1"
+}
+
+query top_agents {
+  sql: "select agent as label, count(*) as value from pgapp_data.helpdesk_tickets
+        where agent is not null group by agent order by 2 desc limit 6"
+}
+
+query recent {
+  sql: "select id, subject, status, priority, agent from pgapp_data.helpdesk_tickets
+        order by id desc limit 6"
+}
+
+query open_backlog {
+  sql: "select id, subject, priority, agent, satisfaction from pgapp_data.helpdesk_tickets
+        where status = 'Open' order by id"
+}

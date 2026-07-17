@@ -1,0 +1,34 @@
+# The same Nova Helpdesk app as examples/helpdesk.pgapp, split into a
+# directory — run it with `cargo run -- examples/helpdesk-modular`.
+#
+# Directory rules (see src/source.rs): every .pgapp file under this
+# directory merges into one app. Exactly one file — this one — declares
+# the `app` block, which owns the app-wide things: settings, auth, the
+# nav bar, and header/footer chrome. Every other file holds top-level
+# entity/page/query blocks, referencing each other by name exactly as
+# they would inside a single file. Same grammar, zero refactoring:
+# start with one file, split it when it grows.
+
+app "Helpdesk" {
+  theme: vivid
+  auth { }
+
+  header {
+    text "Nova Helpdesk — the same demo app, split across a directory of .pgapp files"
+  }
+
+  footer {
+    text "Built with pgapp: Postgres-native metadata, Rust server, pluggable everything."
+    link "About this app" -> page About
+  }
+
+  nav {
+    item "Dashboard" -> page Dashboard
+    item "Tickets" -> page Tickets
+    item "Agents" -> page Agents
+    item "More" {
+      item "Backlog" -> page Backlog
+      item "About" -> page About
+    }
+  }
+}

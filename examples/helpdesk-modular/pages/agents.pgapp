@@ -1,0 +1,6 @@
+page "Agents" {
+  requires: admin
+  editable_table "Support agents" of agents {
+    columns: name, team, active
+  }
+}

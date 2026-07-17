@@ -1,0 +1,12 @@
+# The agents entity and its LOV query.
+
+entity "agents" {
+  field id: id
+  field name: text required
+  field team: text default Support
+  field active: boolean default true
+}
+
+query agent_names {
+  sql: "select name as value from pgapp_data.helpdesk_agents where active = true order by 1"
+}

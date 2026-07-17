@@ -3,6 +3,9 @@
 //! Grammar (informal):
 //!
 //! ```text
+//! file      := app | fragment
+//! fragment  := (entity | page | query)*     (see src/source.rs: directory-based apps)
+//!
 //! app       := "app" String "{" (appprop | auth | nav | header | footer | entity | page | query)* "}"
 //!
 //! appprop   := ("theme" | "icons" | "chart_lib") ":" Ident
@@ -109,9 +112,23 @@ enum Token {
     Arrow,
 }
 
-fn lex(src: &str) -> Result<Vec<Token>> {
-    let mut tokens = Vec::new();
+/// Tokenizes `src`, returning each token alongside the 1-based line it
+/// starts on — parse errors report those lines, which matters once an
+/// app is split across many files.
+fn lex(src: &str) -> Result<(Vec<Token>, Vec<u32>)> {
     let chars: Vec<char> = src.chars().collect();
+    let mut line_at = Vec::with_capacity(chars.len() + 1);
+    let mut line = 1u32;
+    for &c in &chars {
+        line_at.push(line);
+        if c == '\n' {
+            line += 1;
+        }
+    }
+    line_at.push(line);
+
+    let mut tokens = Vec::new();
+    let mut lines = Vec::new();
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
@@ -122,21 +139,25 @@ fn lex(src: &str) -> Result<Vec<Token>> {
                 i += 1;
             }
         } else if c == '"' {
+            let quote = i;
             i += 1;
             let start = i;
             while i < chars.len() && chars[i] != '"' {
                 i += 1;
             }
             if i >= chars.len() {
-                bail!("unterminated string literal");
+                bail!("unterminated string literal starting on line {}", line_at[quote]);
             }
             tokens.push(Token::Str(chars[start..i].iter().collect()));
+            lines.push(line_at[quote]);
             i += 1;
         } else if c == '-' && chars.get(i + 1) == Some(&'>') {
             tokens.push(Token::Arrow);
+            lines.push(line_at[i]);
             i += 2;
         } else if c == '{' || c == '}' || c == ':' || c == ',' || c == '(' || c == ')' {
             tokens.push(Token::Symbol(c));
+            lines.push(line_at[i]);
             i += 1;
         } else if c.is_alphanumeric() || c == '_' {
             let start = i;
@@ -144,21 +165,38 @@ fn lex(src: &str) -> Result<Vec<Token>> {
                 i += 1;
             }
             tokens.push(Token::Ident(chars[start..i].iter().collect()));
+            lines.push(line_at[start]);
         } else {
-            bail!("unexpected character '{c}' in markup");
+            bail!("unexpected character '{c}' in markup on line {}", line_at[i]);
         }
     }
-    Ok(tokens)
+    Ok((tokens, lines))
 }
 
 struct Parser {
     tokens: Vec<Token>,
+    lines: Vec<u32>,
     pos: usize,
 }
 
 impl Parser {
+    fn new(src: &str) -> Result<Self> {
+        let (tokens, lines) = lex(src)?;
+        Ok(Parser { tokens, lines, pos: 0 })
+    }
+
     fn peek(&self) -> Option<&Token> {
         self.tokens.get(self.pos)
+    }
+
+    /// The line of the token about to be consumed (or of the last token
+    /// when at end of input) — for error messages.
+    fn cur_line(&self) -> u32 {
+        self.lines
+            .get(self.pos)
+            .or_else(|| self.lines.last())
+            .copied()
+            .unwrap_or(1)
     }
 
     fn advance(&mut self) -> Result<Token> {
@@ -166,43 +204,48 @@ impl Parser {
             .tokens
             .get(self.pos)
             .cloned()
-            .context("unexpected end of markup")?;
+            .with_context(|| format!("unexpected end of markup (line {})", self.cur_line()))?;
         self.pos += 1;
         Ok(t)
     }
 
     fn expect_symbol(&mut self, c: char) -> Result<()> {
+        let line = self.cur_line();
         match self.advance()? {
             Token::Symbol(s) if s == c => Ok(()),
-            other => bail!("expected '{c}', found {other:?}"),
+            other => bail!("expected '{c}', found {other:?} (line {line})"),
         }
     }
 
     fn expect_arrow(&mut self) -> Result<()> {
+        let line = self.cur_line();
         match self.advance()? {
             Token::Arrow => Ok(()),
-            other => bail!("expected '->', found {other:?}"),
+            other => bail!("expected '->', found {other:?} (line {line})"),
         }
     }
 
     fn expect_keyword(&mut self, word: &str) -> Result<()> {
+        let line = self.cur_line();
         match self.advance()? {
             Token::Ident(s) if s == word => Ok(()),
-            other => bail!("expected keyword '{word}', found {other:?}"),
+            other => bail!("expected keyword '{word}', found {other:?} (line {line})"),
         }
     }
 
     fn expect_ident(&mut self) -> Result<String> {
+        let line = self.cur_line();
         match self.advance()? {
             Token::Ident(s) => Ok(s),
-            other => bail!("expected identifier, found {other:?}"),
+            other => bail!("expected identifier, found {other:?} (line {line})"),
         }
     }
 
     fn expect_string(&mut self) -> Result<String> {
+        let line = self.cur_line();
         match self.advance()? {
             Token::Str(s) => Ok(s),
-            other => bail!("expected string literal, found {other:?}"),
+            other => bail!("expected string literal, found {other:?} (line {line})"),
         }
     }
 
@@ -271,8 +314,9 @@ impl Parser {
             } else {
                 bail!(
                     "expected 'entity', 'page', 'nav', 'header', 'footer', 'query', 'auth', \
-                     'theme', 'icons', or 'chart_lib', found {:?}",
-                    self.peek()
+                     'theme', 'icons', or 'chart_lib', found {:?} (line {})",
+                    self.peek(),
+                    self.cur_line()
                 );
             }
         }
@@ -454,8 +498,9 @@ impl Parser {
         } else {
             bail!(
                 "expected a component ('report', 'form', 'editable_table', 'chart', 'text', \
-                 'link', or 'region'), found {:?}",
-                self.peek()
+                 'link', or 'region'), found {:?} (line {})",
+                self.peek(),
+                self.cur_line()
             );
         }
     }
@@ -500,7 +545,7 @@ impl Parser {
                         .parse()
                         .with_context(|| format!("invalid page_size '{n}' on report '{title}'"))?;
                 }
-                other => bail!("unknown report property '{other}'"),
+                other => bail!("unknown report property '{other}' (line {})", self.cur_line()),
             }
         }
         self.expect_symbol('}')?;
@@ -534,7 +579,7 @@ impl Parser {
             self.expect_symbol(':')?;
             match prop.as_str() {
                 "fields" => fields = self.parse_ident_list()?,
-                other => bail!("unknown form property '{other}'"),
+                other => bail!("unknown form property '{other}' (line {})", self.cur_line()),
             }
         }
         self.expect_symbol('}')?;
@@ -566,7 +611,7 @@ impl Parser {
             self.expect_symbol(':')?;
             match prop.as_str() {
                 "columns" => columns = self.parse_ident_list()?,
-                other => bail!("unknown editable_table property '{other}'"),
+                other => bail!("unknown editable_table property '{other}' (line {})", self.cur_line()),
             }
         }
         self.expect_symbol('}')?;
@@ -597,7 +642,7 @@ impl Parser {
                 "type" => chart_type = self.expect_ident()?,
                 "x" => x = self.expect_ident()?,
                 "y" => y = self.expect_ident()?,
-                other => bail!("unknown chart property '{other}'"),
+                other => bail!("unknown chart property '{other}' (line {})", self.cur_line()),
             }
         }
         self.expect_symbol('}')?;
@@ -719,13 +764,57 @@ impl Parser {
 }
 
 pub fn parse_app(src: &str) -> Result<AppDef> {
-    let tokens = lex(src)?;
-    let mut parser = Parser { tokens, pos: 0 };
+    let mut parser = Parser::new(src)?;
     let app = parser.parse_app()?;
     if parser.pos != parser.tokens.len() {
-        bail!("unexpected trailing content after app block");
+        bail!("unexpected trailing content after app block (line {})", parser.cur_line());
     }
     Ok(app)
+}
+
+/// The top-level blocks a non-`app` file in a directory-based app may
+/// contain — see [`parse_fragment`] and `src/source.rs`.
+#[derive(Debug, Default)]
+pub struct Fragment {
+    pub entities: Vec<EntityDef>,
+    pub pages: Vec<PageDef>,
+    pub queries: Vec<QueryDef>,
+}
+
+/// Parses a fragment file: any number of top-level `entity`, `page`,
+/// and `query` blocks, *without* an `app "..." { }` wrapper. Everything
+/// app-wide — settings, `auth`, `nav`, `header`, `footer` — belongs in
+/// the one file that declares the `app` block, so a fragment declaring
+/// them is an error here rather than a silent merge surprise.
+pub fn parse_fragment(src: &str) -> Result<Fragment> {
+    let mut parser = Parser::new(src)?;
+    let mut fragment = Fragment::default();
+    while parser.pos != parser.tokens.len() {
+        if parser.at_keyword("entity") {
+            fragment.entities.push(parser.parse_entity()?);
+        } else if parser.at_keyword("page") {
+            fragment.pages.push(parser.parse_page()?);
+        } else if parser.at_keyword("query") {
+            fragment.queries.push(parser.parse_query()?);
+        } else {
+            bail!(
+                "expected a top-level 'entity', 'page', or 'query' block (app settings, 'auth', \
+                 'nav', 'header', and 'footer' belong in the file with the `app` block), \
+                 found {:?} (line {})",
+                parser.peek(),
+                parser.cur_line()
+            );
+        }
+    }
+    Ok(fragment)
+}
+
+/// Whether `src` is a full app file (starts with the `app` keyword) as
+/// opposed to a fragment — how `src/source.rs` tells the two apart in
+/// a directory.
+pub fn starts_app_block(src: &str) -> Result<bool> {
+    let (tokens, _) = lex(src)?;
+    Ok(matches!(tokens.first(), Some(Token::Ident(s)) if s == "app"))
 }
 
 #[cfg(test)]
