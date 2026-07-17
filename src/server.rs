@@ -16,7 +16,7 @@ pub mod auth;
 mod query_engine;
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use axum::extract::{Form, Path, Query, State};
 use axum::http::{header, StatusCode};
@@ -34,21 +34,62 @@ use crate::chart_lib::ChartLib;
 use crate::html::url_encode;
 use crate::icons::Icons;
 use crate::item_types;
-use crate::meta::{RegionRows, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimePage};
+use crate::meta::{self, RegionRows, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimePage};
 use crate::model::FieldItem;
 use crate::render;
 use crate::theme::Theme;
 use query_engine::{bind_context, resolve_field_choices, resolve_regions, run_named_query_page, run_named_query_rows};
 
-pub struct AppState {
-    pub pool: PgPool,
+/// Everything that comes from the markup file and `pgapp_meta` — as
+/// opposed to `pool`/`item_types`/`actions`, which are either a live
+/// connection or compiled-in Rust and can't be "reloaded" without
+/// rebuilding the binary. Bundled into one struct so a reload swaps
+/// all of it atomically: a request never sees a new `RuntimeApp`
+/// paired with a stale `Theme`.
+pub struct AppData {
     pub app: RuntimeApp,
     pub theme: Theme,
     pub runtime_js: String,
-    pub item_types: item_types::Registry,
-    pub actions: actions::Registry,
     pub icons: Icons,
     pub chart_lib: ChartLib,
+}
+
+pub struct AppState {
+    pub pool: PgPool,
+    pub markup_path: String,
+    pub data: RwLock<Arc<AppData>>,
+    pub item_types: item_types::Registry,
+    pub actions: actions::Registry,
+}
+
+impl AppState {
+    /// A cheap snapshot of the current markup-derived state — an Arc
+    /// clone, not a copy. Handlers take one of these at the top and use
+    /// it for the rest of the request, so a concurrent reload can never
+    /// leave a single request looking at a mix of old and new data.
+    pub fn data(&self) -> Arc<AppData> {
+        self.data.read().unwrap().clone()
+    }
+
+    /// Re-parses `markup_path`, re-syncs it into `pgapp_meta`/
+    /// `pgapp_data` (an idempotent upsert — see `meta::sync_app`), and
+    /// atomically swaps in the freshly loaded app/theme/runtime.js/
+    /// icons/chart_lib. No process restart: in-flight requests keep
+    /// whatever snapshot they already took via `data()`, and the very
+    /// next request sees the update. If anything here fails (bad
+    /// markup, a validation error), the swap never happens and the
+    /// server keeps serving the last-good snapshot.
+    pub async fn reload(&self) -> anyhow::Result<()> {
+        let app_def = crate::source::load(&self.markup_path)?;
+        meta::sync_app(&self.pool, &app_def, &self.item_types, &self.actions).await?;
+        let app = meta::load_app(&self.pool, &app_def.name).await?;
+        let runtime_js = meta::load_runtime_js(&self.pool, &app_def.name).await?;
+        let theme = crate::theme::load(app.theme.as_deref().unwrap_or("shadcn"))?;
+        let icons = crate::icons::load(app.icons.as_deref().unwrap_or("builtin"))?;
+        let chart_lib = crate::chart_lib::load(app.chart_lib.as_deref().unwrap_or("inline"))?;
+        *self.data.write().unwrap() = Arc::new(AppData { app, theme, runtime_js, icons, chart_lib });
+        Ok(())
+    }
 }
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -64,6 +105,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/logout", post(auth::logout))
         .route("/users", get(auth::users_page).post(auth::users_create))
         .route("/users/:id/delete", post(auth::users_delete))
+        .route("/admin/reload", get(admin_reload_page).post(admin_reload))
         .route("/:page", get(show))
         .route("/:page/region/:query", get(region_fragment))
         .route("/:page/c/:idx/create", post(create))
@@ -74,6 +116,21 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/:page/c/:idx/views/:vid/delete", post(delete_view))
         .layer(middleware::from_fn_with_state(state.clone(), auth::require_login))
         .with_state(state)
+}
+
+/// Gate for `/admin/reload`: same "everyone's an admin" fallback as
+/// the rest of the app when there's no `auth { }` block at all (see
+/// `report_extras`'s `can_delete`), since reload isn't part of the
+/// user model — it should work in the common no-auth demo apps too.
+fn require_reload_access(data: &AppData, auth: &AuthCtx) -> Result<(), AppError> {
+    if !data.app.auth_enabled {
+        return Ok(());
+    }
+    match &auth.0 {
+        Some(user) if user.is_admin() => Ok(()),
+        Some(_) => Err((StatusCode::FORBIDDEN, "reloading metadata requires the 'admin' role".to_string())),
+        None => Err((StatusCode::UNAUTHORIZED, "sign in required".to_string())),
+    }
 }
 
 type AppError = (StatusCode, String);
@@ -385,33 +442,34 @@ async fn index(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
 ) -> Result<Html<String>, AppError> {
-    let pages: Vec<String> = state.app.pages.iter().map(|p| p.name.clone()).collect();
+    let data = state.data();
+    let pages: Vec<String> = data.app.pages.iter().map(|p| p.name.clone()).collect();
     let ctx = HashMap::new();
-    let regions = resolve_regions(&state.pool, &state.app, None, &ctx).await.map_err(err_response)?;
+    let regions = resolve_regions(&state.pool, &data.app, None, &ctx).await.map_err(err_response)?;
     Ok(Html(render::index_page(
-        &state.app.name,
+        &data.app.name,
         &pages,
-        state.app.chrome(&regions),
-        &state.icons,
-        &state.chart_lib,
+        data.app.chrome(&regions),
+        &data.icons,
+        &data.chart_lib,
         auth_ctx.display(),
     )))
 }
 
 async fn theme_css(State(state): State<Arc<AppState>>) -> Response {
-    match tokio::fs::read(&state.theme.css_path).await {
+    match tokio::fs::read(&state.data().theme.css_path).await {
         Ok(bytes) => ([(header::CONTENT_TYPE, "text/css")], bytes).into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
 /// The pgapp runtime JS library — stored in `pgapp_meta`, not a static
-/// file (see `AppState::runtime_js` / `main.rs`), so it's part of the
+/// file (see `AppData::runtime_js` / `main.rs`), so it's part of the
 /// same in-database metadata as everything else.
 async fn runtime_js(State(state): State<Arc<AppState>>) -> Response {
     (
         [(header::CONTENT_TYPE, "application/javascript")],
-        state.runtime_js.clone(),
+        state.data().runtime_js.clone(),
     )
         .into_response()
 }
@@ -420,7 +478,7 @@ async fn runtime_js(State(state): State<Arc<AppState>>) -> Response {
 /// (`PGAPP_CHART_LIB` other than the built-in "inline" backend, which
 /// needs no JS at all — see `src/chart_lib.rs`).
 async fn chart_lib_js(State(state): State<Arc<AppState>>) -> Response {
-    match &state.chart_lib.js_path {
+    match &state.data().chart_lib.js_path {
         Some(path) => match tokio::fs::read(path).await {
             Ok(bytes) => ([(header::CONTENT_TYPE, "application/javascript")], bytes).into_response(),
             Err(_) => StatusCode::NOT_FOUND.into_response(),
@@ -450,8 +508,10 @@ async fn asset(Path(path): Path<String>) -> Response {
 
 /// Renders one component into its HTML body, fetching whatever data it
 /// needs along the way.
+#[allow(clippy::too_many_arguments)]
 async fn render_component(
     state: &AppState,
+    data: &AppData,
     page_name: &str,
     page: &RuntimePage,
     idx: usize,
@@ -475,11 +535,11 @@ async fn render_component(
 
         RuntimeComponent::Chart { title, query: qname, chart_type, x, y } => {
             let rq = page
-                .resolve_query(&state.app, qname)
+                .resolve_query(&data.app, qname)
                 .ok_or_else(|| anyhow::anyhow!("chart '{title}' references unknown query '{qname}'"))?;
             let ctx = bind_context(query, None);
             let rows = run_named_query_rows(&state.pool, rq, &ctx).await?;
-            Ok(render::chart_html(title, chart_type, x, y, &rows, &state.chart_lib))
+            Ok(render::chart_html(title, chart_type, x, y, &rows, &data.chart_lib))
         }
 
         RuntimeComponent::Report { title, entity, columns, source_query, link_column, page_size } => {
@@ -521,7 +581,7 @@ async fn render_component(
                 }
                 Some(qname) => {
                     let rq = page
-                        .resolve_query(&state.app, qname)
+                        .resolve_query(&data.app, qname)
                         .ok_or_else(|| anyhow::anyhow!("report '{title}' sources from unknown query '{qname}'"))?;
                     let ctx = bind_context(query, None);
                     let page_num: i64 = query.get(&p_page).and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
@@ -540,7 +600,7 @@ async fn render_component(
                 }
             };
 
-            let extras = report_extras(state, page_name, idx, &filters, auth_ctx).await?;
+            let extras = report_extras(state, data, page_name, idx, &filters, auth_ctx).await?;
 
             Ok(render::report_html(
                 page_name,
@@ -552,7 +612,7 @@ async fn render_component(
                 prev_href.as_deref(),
                 next_href.as_deref(),
                 form_idx,
-                &state.icons,
+                &data.icons,
                 &extras,
             ))
         }
@@ -580,7 +640,7 @@ async fn render_component(
                         .await?
                         .ok_or_else(|| anyhow::anyhow!("row '{id}' not found"))?;
                     let ctx = bind_context(query, Some(&row));
-                    let choices = resolve_field_choices(&state.pool, &state.app, page, item_types, &ctx).await?;
+                    let choices = resolve_field_choices(&state.pool, &data.app, page, item_types, &ctx).await?;
                     Ok(render::form_html(
                         page_name, idx, title, fields, entity, &row, Some(id), &choices, item_types, &state.item_types,
                         floating, &close_href,
@@ -588,7 +648,7 @@ async fn render_component(
                 }
                 None => {
                     let ctx = bind_context(query, None);
-                    let choices = resolve_field_choices(&state.pool, &state.app, page, item_types, &ctx).await?;
+                    let choices = resolve_field_choices(&state.pool, &data.app, page, item_types, &ctx).await?;
                     let empty = BTreeMap::new();
                     Ok(render::form_html(
                         page_name, idx, title, fields, entity, &empty, None, &choices, item_types, &state.item_types,
@@ -600,7 +660,7 @@ async fn render_component(
 
         RuntimeComponent::EditableTable { title, entity, columns, item_types } => {
             let ctx = bind_context(query, None);
-            let choices = resolve_field_choices(&state.pool, &state.app, page, item_types, &ctx).await?;
+            let choices = resolve_field_choices(&state.pool, &data.app, page, item_types, &ctx).await?;
             let rows = fetch_rows(&state.pool, entity).await?;
             Ok(render::editable_table_html(
                 page_name,
@@ -612,7 +672,7 @@ async fn render_component(
                 &choices,
                 item_types,
                 &state.item_types,
-                &state.icons,
+                &data.icons,
             ))
         }
     }
@@ -623,6 +683,7 @@ async fn render_component(
 /// rendering.
 async fn report_extras(
     state: &AppState,
+    data: &AppData,
     page_name: &str,
     idx: usize,
     filters: &ReportFilters,
@@ -637,7 +698,7 @@ async fn report_extras(
             and (is_public or owner_user_id is not distinct from $4)
           order by name",
     )
-    .bind(state.app.id)
+    .bind(data.app.id)
     .bind(page_name)
     .bind(idx as i32)
     .bind(user_id)
@@ -657,7 +718,7 @@ async fn report_extras(
                 id,
                 name,
                 href: href.trim_end_matches(['&', '?']).to_string(),
-                can_delete: !state.app.auth_enabled || is_admin || owner == user_id,
+                can_delete: !data.app.auth_enabled || is_admin || owner == user_id,
             }
         })
         .collect();
@@ -676,16 +737,17 @@ async fn show(
     Path(page_name): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
-    let page = page_or_404(&state.app, &page_name)?;
-    auth::authorize(&state, page.required_role.as_deref(), &auth_ctx)?;
+    let data = state.data();
+    let page = page_or_404(&data.app, &page_name)?;
+    auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let ctx = bind_context(&query, None);
-    let regions = resolve_regions(&state.pool, &state.app, Some(page), &ctx)
+    let regions = resolve_regions(&state.pool, &data.app, Some(page), &ctx)
         .await
         .map_err(err_response)?;
 
     let mut body = String::new();
     for (idx, component) in page.components.iter().enumerate() {
-        let html = render_component(&state, &page_name, page, idx, component, &query, &regions, &auth_ctx)
+        let html = render_component(&state, &data, &page_name, page, idx, component, &query, &regions, &auth_ctx)
             .await
             .map_err(err_response)?;
         // A stable per-component anchor: mutating actions (save/delete,
@@ -715,9 +777,9 @@ async fn show(
         &body,
         query.get("error").map(|s| s.as_str()),
         query.get("notice").map(|s| s.as_str()),
-        state.app.chrome(&regions),
-        &state.icons,
-        &state.chart_lib,
+        data.app.chrome(&regions),
+        &data.icons,
+        &data.chart_lib,
         auth_ctx.display(),
     )))
 }
@@ -732,9 +794,10 @@ async fn region_fragment(
     Path((page_name, query_name)): Path<(String, String)>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
-    let page = page_or_404(&state.app, &page_name)?;
-    auth::authorize(&state, page.required_role.as_deref(), &auth_ctx)?;
-    let rq = page.resolve_query(&state.app, &query_name).ok_or_else(|| {
+    let data = state.data();
+    let page = page_or_404(&data.app, &page_name)?;
+    auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
+    let rq = page.resolve_query(&data.app, &query_name).ok_or_else(|| {
         (StatusCode::NOT_FOUND, format!("no query '{query_name}' visible from page '{page_name}'"))
     })?;
 
@@ -764,8 +827,9 @@ async fn run_action(
     Query(query): Query<HashMap<String, String>>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let page = page_or_404(&state.app, &page_name)?;
-    auth::authorize(&state, page.required_role.as_deref(), &auth_ctx)?;
+    let data = state.data();
+    let page = page_or_404(&data.app, &page_name)?;
+    auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
     let RuntimeComponent::Action { name, config, .. } = component else {
         return Err((
@@ -788,7 +852,7 @@ async fn run_action(
     let outcome = module
         .run(ActionContext {
             pool: &state.pool,
-            app: &state.app,
+            app: &data.app,
             page,
             config,
             values: &merged,
@@ -810,8 +874,9 @@ async fn save_view(
     Path((page_name, idx)): Path<(String, usize)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let page = page_or_404(&state.app, &page_name)?;
-    auth::authorize(&state, page.required_role.as_deref(), &auth_ctx)?;
+    let data = state.data();
+    let page = page_or_404(&data.app, &page_name)?;
+    auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
     if !matches!(component, RuntimeComponent::Report { .. }) {
         return Err((StatusCode::BAD_REQUEST, format!("component #{idx} is not a report")));
@@ -840,7 +905,7 @@ async fn save_view(
         "insert into pgapp_meta.report_views (app_id, page_name, component_idx, name, owner_user_id, is_public, params)
          values ($1, $2, $3, $4, $5, $6, $7)",
     )
-    .bind(state.app.id)
+    .bind(data.app.id)
     .bind(&page_name)
     .bind(idx as i32)
     .bind(name)
@@ -859,13 +924,14 @@ async fn delete_view(
     Extension(auth_ctx): Extension<AuthCtx>,
     Path((page_name, idx, view_id)): Path<(String, usize, i32)>,
 ) -> Result<Response, AppError> {
-    let page = page_or_404(&state.app, &page_name)?;
-    auth::authorize(&state, page.required_role.as_deref(), &auth_ctx)?;
+    let data = state.data();
+    let page = page_or_404(&data.app, &page_name)?;
+    auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
 
     let owner: Option<Option<i32>> =
         sqlx::query_scalar("select owner_user_id from pgapp_meta.report_views where id = $1 and app_id = $2")
             .bind(view_id)
-            .bind(state.app.id)
+            .bind(data.app.id)
             .fetch_optional(&state.pool)
             .await
             .map_err(|e| err_response(e.into()))?;
@@ -873,7 +939,7 @@ async fn delete_view(
         return Ok(Redirect::to(&format!("/{page_name}#pgapp-c{idx}")).into_response());
     };
 
-    let allowed = !state.app.auth_enabled
+    let allowed = !data.app.auth_enabled
         || auth_ctx.0.as_ref().is_some_and(|u| u.is_admin() || Some(u.id) == owner);
     if !allowed {
         return Err((StatusCode::FORBIDDEN, "only the view's owner or an admin can delete it".to_string()));
@@ -881,7 +947,7 @@ async fn delete_view(
 
     sqlx::query("delete from pgapp_meta.report_views where id = $1 and app_id = $2")
         .bind(view_id)
-        .bind(state.app.id)
+        .bind(data.app.id)
         .execute(&state.pool)
         .await
         .map_err(|e| err_response(e.into()))?;
@@ -894,8 +960,9 @@ async fn create(
     Path((page_name, idx)): Path<(String, usize)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let page = page_or_404(&state.app, &page_name)?;
-    auth::authorize(&state, page.required_role.as_deref(), &auth_ctx)?;
+    let data = state.data();
+    let page = page_or_404(&data.app, &page_name)?;
+    auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
     let (entity, fields, item_types) = writable_fields(component, &page_name, idx)?;
 
@@ -933,8 +1000,9 @@ async fn update(
     Path((page_name, idx, id)): Path<(String, usize, String)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let page = page_or_404(&state.app, &page_name)?;
-    auth::authorize(&state, page.required_role.as_deref(), &auth_ctx)?;
+    let data = state.data();
+    let page = page_or_404(&data.app, &page_name)?;
+    auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
     let (entity, fields, item_types) = writable_fields(component, &page_name, idx)?;
 
@@ -982,8 +1050,9 @@ async fn delete(
     Extension(auth_ctx): Extension<AuthCtx>,
     Path((page_name, idx, id)): Path<(String, usize, String)>,
 ) -> Result<Response, AppError> {
-    let page = page_or_404(&state.app, &page_name)?;
-    auth::authorize(&state, page.required_role.as_deref(), &auth_ctx)?;
+    let data = state.data();
+    let page = page_or_404(&data.app, &page_name)?;
+    auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
     let (entity, _, _) = writable_fields(component, &page_name, idx)?;
 
@@ -1004,7 +1073,8 @@ async fn api_list(
     State(state): State<Arc<AppState>>,
     Path(entity_name): Path<String>,
 ) -> Result<Response, AppError> {
-    let entity = state
+    let data = state.data();
+    let entity = data
         .app
         .pages
         .iter()
@@ -1020,7 +1090,7 @@ async fn api_list(
     let rows = match &entity.source_query {
         None => fetch_rows(&state.pool, entity).await.map_err(err_response)?,
         Some(qname) => {
-            let rq = state.app.queries.get(qname).ok_or_else(|| {
+            let rq = data.app.queries.get(qname).ok_or_else(|| {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!("entity '{entity_name}' is backed by unknown query '{qname}'"),
@@ -1031,4 +1101,77 @@ async fn api_list(
         }
     };
     Ok(axum::Json(json!(rows)).into_response())
+}
+
+/// GET /admin/reload — shows the current markup (editable inline when
+/// it's a single file) plus a button to re-sync it into `pgapp_meta`
+/// without restarting the process. See `AppState::reload`.
+async fn admin_reload_page(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Html<String>, AppError> {
+    let data = state.data();
+    require_reload_access(&data, &auth_ctx)?;
+
+    let markup_text = if std::path::Path::new(&state.markup_path).is_dir() {
+        None
+    } else {
+        tokio::fs::read_to_string(&state.markup_path).await.ok()
+    };
+
+    let ctx = HashMap::new();
+    let regions = resolve_regions(&state.pool, &data.app, None, &ctx).await.map_err(err_response)?;
+
+    Ok(Html(render::reload_page(
+        &state.markup_path,
+        markup_text.as_deref(),
+        query.get("error").map(|s| s.as_str()),
+        query.get("notice").map(|s| s.as_str()),
+        data.app.chrome(&regions),
+        &data.icons,
+        &data.chart_lib,
+        auth_ctx.display(),
+    )))
+}
+
+/// POST /admin/reload — optionally writes edited markup back to disk
+/// (`do=save`, single-file apps only), then always re-runs the full
+/// parse/sync/load pipeline and atomically swaps in the result.
+async fn admin_reload(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    {
+        let data = state.data();
+        require_reload_access(&data, &auth_ctx)?;
+    }
+
+    if values.get("do").map(|s| s.as_str()) == Some("save") {
+        if std::path::Path::new(&state.markup_path).is_dir() {
+            return Ok(Redirect::to(&format!(
+                "/admin/reload?error={}",
+                url_encode("This app's markup is a directory of files — edit them on disk, then use \"Reload from disk\".")
+            ))
+            .into_response());
+        }
+        let markup = values.get("markup").cloned().unwrap_or_default();
+        if let Err(e) = tokio::fs::write(&state.markup_path, markup).await {
+            return Ok(Redirect::to(&format!(
+                "/admin/reload?error={}",
+                url_encode(&format!("failed to write markup file: {e}"))
+            ))
+            .into_response());
+        }
+    }
+
+    match state.reload().await {
+        Ok(()) => Ok(Redirect::to(&format!(
+            "/admin/reload?notice={}",
+            url_encode("Metadata reloaded — no restart needed.")
+        ))
+        .into_response()),
+        Err(e) => Ok(Redirect::to(&format!("/admin/reload?error={}", url_encode(&e.to_string()))).into_response()),
+    }
 }

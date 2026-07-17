@@ -10,8 +10,10 @@ Postgres, written in Rust.
   scattered across a repo. The server always serves off the database,
   not off whatever was last parsed.
 - **A textual markup language** (`.pgapp` files, APEX-flavored) is how
-  you *author* an application. It's parsed once and synced into the
-  metadata tables — after that, the database is the source of truth.
+  you *author* an application. It's parsed and synced into the metadata
+  tables at startup and again any time you visit `/admin/reload` — the
+  database is the source of truth in between, and a resync never needs
+  a process restart. See "Hot reload" below.
 - **Composable pages**: a page isn't one of a fixed set of "kinds" — it's
   an ordered list of independent **components**: a paginated read-only
   `Report`, a create/edit `Form`, an inline-editable `EditableTable`, a
@@ -601,10 +603,55 @@ browser's native, unstyleable dialogs:
   user confirms.
 - Dynamic actions' `refresh` op and the nested-nav click-toggle (below).
 
-Since it's a database row rather than a static asset, editing it live
-only takes effect for *new* sessions of an app whose sync already ran —
-delete the app's row from `pgapp_meta.app_runtime_js` and restart to pick
-up a new built-in default after a `src/runtime.js` change.
+Since it's a database row rather than a static asset, editing it
+directly in the database takes effect the moment the next request for
+`/runtime.js` comes in — no restart needed. If you change the *built-in
+default* in `src/runtime.js` and want an existing app to pick it up,
+delete its row from `pgapp_meta.app_runtime_js` and hit `/admin/reload`
+(see "Hot reload" below); sync only seeds that row on an app's first
+sync, so with the row still present, reload alone won't touch it.
+
+## Hot reload
+
+Editing markup used to mean stopping and re-running the binary — the
+`.pgapp` file was parsed, synced, and loaded into memory exactly once,
+in `main()`, before the server ever started listening.
+`GET`/`POST /admin/reload` replaces that with an in-process resync:
+
+- `AppState` splits its fields into the ones that come from the pool
+  connection or compiled-in Rust code (`pool`, `item_types`, `actions`
+  — these can't change without a rebuild) and everything markup-derived
+  (`app`, `theme`, `runtime_js`, `icons`, `chart_lib`), bundled into an
+  `AppData` behind a `RwLock<Arc<AppData>>`.
+- `AppState::reload()` re-runs the exact same
+  `source::load` → `meta::sync_app` → `meta::load_app` (plus
+  `load_runtime_js`/`theme::load`/`icons::load`/`chart_lib::load`)
+  pipeline `main()` runs at startup, then swaps the result in with one
+  atomic pointer write. Every handler takes a snapshot (`state.data()`,
+  an `Arc` clone) at the top of the request and uses only that for the
+  rest of it — a concurrent reload can never leave one request looking
+  at a new `RuntimeApp` paired with a stale `Theme`.
+- If parsing, syncing, or loading fails partway (bad markup, a
+  validation error), the swap never happens — the old snapshot keeps
+  being served, and the error comes back as `?error=...` on the reload
+  page instead of taking the app down.
+- The `/admin/reload` page itself shows the current markup file in an
+  editable textarea (single-file apps only — a directory-based app,
+  see "Modular apps" below, has no one file to hand back to the
+  browser and can only be re-read from disk after editing it there),
+  with **Save & reload** and **Reload from disk** buttons.
+- Access follows the same "everyone's an admin" fallback the rest of
+  the app uses when there's no `auth { }` block; with auth enabled it's
+  restricted to the `admin` role, same as `/users`.
+
+What this doesn't change: `item_types`, `actions`, and the HTTP routing
+table itself are Rust code (`src/item_types/`, `src/actions/`,
+`build_router`) — adding a *new* item type or action module is still a
+compile-time change (`cargo build` + restart), since reload only
+re-syncs what markup can express. A new `on <event> of <item> { ... }`
+dynamic action block, a new page, field, or entity, a changed `theme:`/
+`icons:`/`chart_lib:` setting — all of that is a markup change, so
+reload picks it up with no restart.
 
 ## Report edit/create popup
 
@@ -792,6 +839,7 @@ On startup it prints the URL and component kinds for each page, e.g.
 - `POST /setup`                         — one-time admin bootstrap; refuses once any user exists
 - `POST /logout`                        — deletes the server-side session
 - `GET  /users` (+ create/delete POSTs) — built-in user management, admin role only
+- `GET  /admin/reload` (+ POST)         — re-syncs the markup file into `pgapp_meta` and reloads the running app, no restart — see "Hot reload"
 - `GET  /runtime.js`                    — the DB-stored `pgapp` JS runtime
 - `GET  /chart-lib.js`                  — the active pluggable chart library's JS (404 when `chart_lib` is the built-in `inline`)
 

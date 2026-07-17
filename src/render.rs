@@ -260,13 +260,13 @@ fn nav_user_html(user: Option<(&str, bool)>) -> String {
     match user {
         None => String::new(),
         Some((username, is_admin)) => {
-            let users_link = if is_admin {
-                r#"<a class="pgapp-link" href="/users">Users</a>"#.to_string()
+            let admin_links = if is_admin {
+                r#"<a class="pgapp-link" href="/users">Users</a><a class="pgapp-link" href="/admin/reload">Reload</a>"#.to_string()
             } else {
                 String::new()
             };
             format!(
-                r#"<span class="pgapp-nav-user">{users_link}<span class="pgapp-nav-username">{username}</span><form class="pgapp-inline-form" method="post" action="/logout"><button class="pgapp-btn pgapp-btn-secondary" type="submit">Sign out</button></form></span>"#,
+                r#"<span class="pgapp-nav-user">{admin_links}<span class="pgapp-nav-username">{username}</span><form class="pgapp-inline-form" method="post" action="/logout"><button class="pgapp-btn pgapp-btn-secondary" type="submit">Sign out</button></form></span>"#,
                 username = escape(username),
             )
         }
@@ -444,6 +444,65 @@ pub fn users_page(
     );
 
     layout("Users", chrome, icons, chart_lib, user, &body)
+}
+
+/// The built-in /admin/reload page: re-parses the markup file and
+/// re-syncs it into `pgapp_meta`/`pgapp_data` without restarting the
+/// process (see `server::AppState::reload`). A single `.pgapp` file
+/// can be edited in place here; a directory-based app (multiple
+/// files merged, see `src/source.rs`) can only be re-read from disk,
+/// since there's no one file to hand back to the browser.
+#[allow(clippy::too_many_arguments)]
+pub fn reload_page(
+    markup_path: &str,
+    markup_text: Option<&str>,
+    error: Option<&str>,
+    notice: Option<&str>,
+    chrome: Chrome,
+    icons: &Icons,
+    chart_lib: &ChartLib,
+    user: Option<(&str, bool)>,
+) -> String {
+    let mut body = String::new();
+    if let Some(err) = error {
+        body.push_str(&format!(
+            r#"<div class="pgapp-alert pgapp-alert-error"><strong>Error:</strong> {}</div>"#,
+            escape(err)
+        ));
+    }
+    if let Some(msg) = notice {
+        body.push_str(&format!(r#"<div class="pgapp-alert pgapp-alert-success">{}</div>"#, escape(msg)));
+    }
+
+    body.push_str(&format!(
+        r#"<div class="pgapp-form-panel"><h2 class="pgapp-subtitle">Reload metadata</h2>
+<p class="pgapp-text">Markup file: <code>{}</code></p>"#,
+        escape(markup_path)
+    ));
+
+    match markup_text {
+        Some(text) => {
+            body.push_str(&format!(
+                r#"<form class="pgapp-form" method="post" action="/admin/reload">
+<div class="pgapp-field"><textarea class="pgapp-input" name="markup" rows="20" spellcheck="false" style="font-family:monospace;white-space:pre;">{}</textarea></div>
+<button class="pgapp-btn pgapp-btn-primary" type="submit" name="do" value="save">Save &amp; reload</button>
+<button class="pgapp-btn pgapp-btn-secondary" type="submit" name="do" value="reload">Reload from disk (discard edits above)</button>
+</form>"#,
+                escape(text)
+            ));
+        }
+        None => {
+            body.push_str(
+                r#"<p class="pgapp-text">This app's markup is a directory of files — edit them on disk, then reload.</p>
+<form class="pgapp-form" method="post" action="/admin/reload">
+<button class="pgapp-btn pgapp-btn-primary" type="submit" name="do" value="reload">Reload from disk</button>
+</form>"#,
+            );
+        }
+    }
+    body.push_str("</div>");
+
+    layout("Reload metadata", chrome, icons, chart_lib, user, &body)
 }
 
 /// Renders one field's input by looking up its registered item type

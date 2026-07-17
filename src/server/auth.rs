@@ -32,7 +32,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::query_engine::resolve_regions;
-use super::{err_response, AppError, AppState};
+use super::{err_response, AppData, AppError, AppState};
 use crate::html::url_encode;
 use crate::render;
 
@@ -159,10 +159,11 @@ fn is_public(path: &str) -> bool {
 
 pub async fn require_login(State(state): State<Arc<AppState>>, mut req: Request, next: Next) -> Response {
     let mut ctx = AuthCtx(None);
+    let data = state.data();
 
-    if state.app.auth_enabled {
+    if data.app.auth_enabled {
         if let Some(token) = cookie_token(req.headers()) {
-            if let Ok(user) = load_session(&state.pool, state.app.id, &token).await {
+            if let Ok(user) = load_session(&state.pool, data.app.id, &token).await {
                 ctx = AuthCtx(user);
             }
         }
@@ -179,8 +180,8 @@ pub async fn require_login(State(state): State<Arc<AppState>>, mut req: Request,
 /// handler. With auth disabled everything is public; with it enabled,
 /// the middleware already guaranteed a signed-in user, so only the
 /// role remains to check ('admin' passes everything).
-pub fn authorize(state: &AppState, required_role: Option<&str>, auth: &AuthCtx) -> Result<(), AppError> {
-    if !state.app.auth_enabled {
+pub fn authorize(data: &AppData, required_role: Option<&str>, auth: &AuthCtx) -> Result<(), AppError> {
+    if !data.app.auth_enabled {
         return Ok(());
     }
     let user = auth.0.as_ref().ok_or((StatusCode::UNAUTHORIZED, "sign in required".to_string()))?;
@@ -205,18 +206,20 @@ fn require_admin(auth: &AuthCtx) -> Result<&CurrentUser, AppError> {
 // ---- handlers ----
 
 pub async fn login_form(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
-    if !state.app.auth_enabled {
+    let data = state.data();
+    if !data.app.auth_enabled {
         return Err((StatusCode::NOT_FOUND, "this app does not use authentication".to_string()));
     }
-    let setup = user_count(&state.pool, state.app.id).await.map_err(err_response)? == 0;
-    Ok(Html(render::login_page(&state.app.name, None, setup)))
+    let setup = user_count(&state.pool, data.app.id).await.map_err(err_response)? == 0;
+    Ok(Html(render::login_page(&data.app.name, None, setup)))
 }
 
 pub async fn login(
     State(state): State<Arc<AppState>>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    if !state.app.auth_enabled {
+    let data = state.data();
+    if !data.app.auth_enabled {
         return Err((StatusCode::NOT_FOUND, "this app does not use authentication".to_string()));
     }
     let username = values.get("username").map(|s| s.trim()).unwrap_or_default();
@@ -225,7 +228,7 @@ pub async fn login(
     let row: Option<(i32, String)> = sqlx::query_as(
         "select id, password_hash from pgapp_meta.users where app_id = $1 and username = $2",
     )
-    .bind(state.app.id)
+    .bind(data.app.id)
     .bind(username)
     .fetch_optional(&state.pool)
     .await
@@ -234,13 +237,13 @@ pub async fn login(
     // Same failure path whether the user is unknown or the password is
     // wrong — don't leak which usernames exist.
     let Some((user_id, stored_hash)) = row else {
-        return Ok(Html(render::login_page(&state.app.name, Some("Invalid username or password."), false)).into_response());
+        return Ok(Html(render::login_page(&data.app.name, Some("Invalid username or password."), false)).into_response());
     };
     if !verify_password(password, &stored_hash) {
-        return Ok(Html(render::login_page(&state.app.name, Some("Invalid username or password."), false)).into_response());
+        return Ok(Html(render::login_page(&data.app.name, Some("Invalid username or password."), false)).into_response());
     }
 
-    let cookie = create_session(&state.pool, state.app.id, user_id)
+    let cookie = create_session(&state.pool, data.app.id, user_id)
         .await
         .map_err(err_response)?;
     Ok((StatusCode::SEE_OTHER, [(header::SET_COOKIE, cookie), (header::LOCATION, "/".to_string())]).into_response())
@@ -253,10 +256,11 @@ pub async fn setup(
     State(state): State<Arc<AppState>>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    if !state.app.auth_enabled {
+    let data = state.data();
+    if !data.app.auth_enabled {
         return Err((StatusCode::NOT_FOUND, "this app does not use authentication".to_string()));
     }
-    if user_count(&state.pool, state.app.id).await.map_err(err_response)? > 0 {
+    if user_count(&state.pool, data.app.id).await.map_err(err_response)? > 0 {
         return Err((StatusCode::FORBIDDEN, "setup already completed".to_string()));
     }
 
@@ -264,7 +268,7 @@ pub async fn setup(
     let password = values.get("password").map(|s| s.as_str()).unwrap_or_default();
     if username.is_empty() || password.len() < MIN_PASSWORD_LEN {
         return Ok(Html(render::login_page(
-            &state.app.name,
+            &data.app.name,
             Some("Username is required and the password needs at least 8 characters."),
             true,
         ))
@@ -276,14 +280,14 @@ pub async fn setup(
         "insert into pgapp_meta.users (app_id, username, password_hash, role)
          values ($1, $2, $3, 'admin') returning id",
     )
-    .bind(state.app.id)
+    .bind(data.app.id)
     .bind(username)
     .bind(&hash)
     .fetch_one(&state.pool)
     .await
     .map_err(|e| err_response(e.into()))?;
 
-    let cookie = create_session(&state.pool, state.app.id, user_id)
+    let cookie = create_session(&state.pool, data.app.id, user_id)
         .await
         .map_err(err_response)?;
     Ok((StatusCode::SEE_OTHER, [(header::SET_COOKIE, cookie), (header::LOCATION, "/".to_string())]).into_response())
@@ -309,17 +313,18 @@ pub async fn users_page(
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
     let current = require_admin(&auth)?;
+    let data = state.data();
 
     let users: Vec<(i32, String, String)> = sqlx::query_as(
         "select id, username, role from pgapp_meta.users where app_id = $1 order by username",
     )
-    .bind(state.app.id)
+    .bind(data.app.id)
     .fetch_all(&state.pool)
     .await
     .map_err(|e| err_response(e.into()))?;
 
     let ctx = HashMap::new();
-    let regions = resolve_regions(&state.pool, &state.app, None, &ctx)
+    let regions = resolve_regions(&state.pool, &data.app, None, &ctx)
         .await
         .map_err(err_response)?;
 
@@ -327,9 +332,9 @@ pub async fn users_page(
         &users,
         current.id,
         query.get("error").map(|s| s.as_str()),
-        state.app.chrome(&regions),
-        &state.icons,
-        &state.chart_lib,
+        data.app.chrome(&regions),
+        &data.icons,
+        &data.chart_lib,
         auth.display(),
     )))
 }
@@ -355,7 +360,7 @@ pub async fn users_create(
     let result = sqlx::query(
         "insert into pgapp_meta.users (app_id, username, password_hash, role) values ($1, $2, $3, $4)",
     )
-    .bind(state.app.id)
+    .bind(state.data().app.id)
     .bind(username)
     .bind(&hash)
     .bind(role)
@@ -384,7 +389,7 @@ pub async fn users_delete(
 
     sqlx::query("delete from pgapp_meta.users where id = $1 and app_id = $2")
         .bind(user_id)
-        .bind(state.app.id)
+        .bind(state.data().app.id)
         .execute(&state.pool)
         .await
         .map_err(|e| err_response(e.into()))?;

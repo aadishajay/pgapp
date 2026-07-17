@@ -1,7 +1,8 @@
 # Example application definition in pgapp's markup language.
-# This one file is the single source of truth: it is parsed once at
-# startup and synced into the in-database metadata (pgapp_meta.*),
-# which is what actually drives routing and rendering afterwards.
+# This one file is the single source of truth: it's parsed and synced
+# into the in-database metadata (pgapp_meta.*) at startup, and again
+# any time you visit /admin/reload — that sync is what actually drives
+# routing and rendering, not the file itself.
 #
 # Named-query SQL below references pgapp_data.todo_tasks directly —
 # that's this entity's physical table name (<app slug>_<entity slug>),

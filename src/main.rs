@@ -70,6 +70,7 @@ async fn main() -> anyhow::Result<()> {
             "disabled (no `auth { }` block in the markup)"
         }
     );
+    println!("  hot reload: http://{bind_addr}/admin/reload (re-syncs the markup file without restarting)");
     for page in &runtime_app.pages {
         let kinds: Vec<&str> = page
             .components
@@ -91,13 +92,16 @@ async fn main() -> anyhow::Result<()> {
 
     let state = Arc::new(server::AppState {
         pool,
-        app: runtime_app,
-        theme,
-        runtime_js,
+        markup_path,
+        data: std::sync::RwLock::new(Arc::new(server::AppData {
+            app: runtime_app,
+            theme,
+            runtime_js,
+            icons,
+            chart_lib,
+        })),
         item_types,
         actions: action_registry,
-        icons,
-        chart_lib,
     });
     let router = server::build_router(state);
 
