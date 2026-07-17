@@ -3,54 +3,142 @@
 //! the authority once the server starts handling requests.
 
 use anyhow::{Context, Result};
-use sqlx::PgPool;
+use sqlx::{Executor, PgPool, TypeInfo};
 use std::collections::HashMap;
 
 use super::types::{
-    LinkColumn, NavNode, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimeField, RuntimePage,
-    RuntimeQuery,
+    wrap_to_jsonb, LinkColumn, NavNode, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimeField,
+    RuntimePage, RuntimeQuery,
 };
 use crate::model::{FieldItem, FieldType};
 
-/// Turns `sql` (which may contain `:name` bind markers) into Postgres
-/// positional-parameter SQL plus the ordered list of names each `$N`
-/// stands for. Every substitution is `$N::text` — bind values always
-/// arrive as text (see `server::query_engine::run_named_query`), so a
-/// query comparing against a non-text column needs its own trailing
-/// cast, e.g. `where project_id = :project_id::integer`.
-///
-/// A literal `::` (Postgres's own cast operator) is left untouched, so
-/// existing casts in hand-written SQL are never mistaken for a bind
-/// marker.
-pub fn compile_named_query(sql: &str) -> (String, Vec<String>) {
+/// One piece of a named query's SQL text, as split by `tokenize_binds`:
+/// either literal SQL or a `:name` bind marker.
+#[derive(Debug, PartialEq)]
+enum Segment {
+    Text(String),
+    Bind(String),
+}
+
+/// Splits `sql` into literal-text/bind-marker segments, plus the
+/// distinct bind names in first-occurrence order (a name repeated
+/// later in the query reuses the same position — see
+/// `compile_named_query`). A literal `::` (Postgres's own cast
+/// operator) is left untouched, so a hand-written cast is never
+/// mistaken for a bind marker.
+fn tokenize_binds(sql: &str) -> (Vec<Segment>, Vec<String>) {
     let chars: Vec<char> = sql.chars().collect();
-    let mut out = String::new();
+    let mut segments = Vec::new();
+    let mut literal = String::new();
     let mut names: Vec<String> = Vec::new();
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
         if c == ':' && chars.get(i + 1) == Some(&':') {
-            out.push_str("::");
+            literal.push_str("::");
             i += 2;
         } else if c == ':' && chars.get(i + 1).is_some_and(|c| c.is_alphabetic() || *c == '_') {
+            if !literal.is_empty() {
+                segments.push(Segment::Text(std::mem::take(&mut literal)));
+            }
             let start = i + 1;
             let mut j = start;
             while j < chars.len() && (chars[j].is_alphanumeric() || chars[j] == '_') {
                 j += 1;
             }
             let name: String = chars[start..j].iter().collect();
-            let idx = names.iter().position(|n| n == &name).unwrap_or_else(|| {
+            if !names.contains(&name) {
                 names.push(name.clone());
-                names.len() - 1
-            });
-            out.push_str(&format!("${}::text", idx + 1));
+            }
+            segments.push(Segment::Bind(name));
             i = j;
         } else {
-            out.push(c);
+            literal.push(c);
             i += 1;
         }
     }
-    (out, names)
+    if !literal.is_empty() {
+        segments.push(Segment::Text(literal));
+    }
+    (segments, names)
+}
+
+/// Reassembles `segments` into SQL text, turning each `Bind(name)` into
+/// its positional parameter — bare `$N` when `casts` is `None`, or
+/// `$N::TYPE` when it's the resolved type for that position (see
+/// `compile_named_query`).
+fn render_segments(segments: &[Segment], names: &[String], casts: Option<&[String]>) -> String {
+    let mut out = String::new();
+    for seg in segments {
+        match seg {
+            Segment::Text(t) => out.push_str(t),
+            Segment::Bind(name) => {
+                // Always found: every Bind segment's name was pushed
+                // into `names` by the same tokenize_binds call.
+                let idx = names.iter().position(|n| n == name).unwrap();
+                match casts {
+                    Some(casts) => out.push_str(&format!("${}::{}", idx + 1, casts[idx])),
+                    None => out.push_str(&format!("${}", idx + 1)),
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Turns `sql` (which may contain `:name` bind markers) into Postgres
+/// positional-parameter SQL plus the ordered list of names each `$N`
+/// stands for — APEX-style bind items: the query author never writes
+/// a cast, because the bind's type isn't guessed or hand-declared, it's
+/// asked directly from Postgres.
+///
+/// `:project_id` in `where project_id = :project_id` becomes `$1::INT4`
+/// (or whatever `project_id`'s real column type is) automatically: this
+/// runs the exact wrapped shape the query is later executed in (see
+/// `wrap_to_jsonb`) through Postgres's own `Describe`, the same
+/// mechanism the wire protocol already uses to type an unadorned `$1`
+/// — so the result is never a guess and never goes stale. It's asked
+/// fresh every time the app loads (startup, or `/admin/reload`), so a
+/// column changed from `integer` to `bigint` under a query's feet is
+/// picked up on the next reload with no markup change, instead of
+/// silently miscomparing until some request happens to hit it.
+///
+/// A bind whose type genuinely can't be inferred (compared against
+/// nothing, or against two incompatible columns) makes this fail with
+/// Postgres's own error — at load time, not at first request — and a
+/// hand-written cast (`:project_id::integer`, the old style) still
+/// works exactly as before: it's just a redundant no-op layered under
+/// the auto-detected one.
+pub async fn compile_named_query(pool: &PgPool, sql: &str) -> Result<(String, Vec<String>)> {
+    let (segments, names) = tokenize_binds(sql);
+    if names.is_empty() {
+        return Ok((sql.to_string(), names));
+    }
+
+    let bare = render_segments(&segments, &names, None);
+    let described = pool
+        .describe(&wrap_to_jsonb(&bare))
+        .await
+        .with_context(|| {
+            format!(
+                "couldn't infer bind parameter types for named query SQL: {sql}\n\
+                 (Postgres couldn't tell what type one of the `:name` binds should be — \
+                 add an explicit cast, e.g. `:{}::text`, to disambiguate it)",
+                names[0]
+            )
+        })?;
+
+    let casts: Vec<String> = match described.parameters() {
+        Some(sqlx::Either::Left(params)) if params.len() == names.len() => {
+            params.iter().map(|p| p.name().to_string()).collect()
+        }
+        // Postgres always returns concrete types for every parameter
+        // position on the Postgres driver; this is just a safe
+        // fallback to the old behavior if that ever isn't true.
+        _ => names.iter().map(|_| "text".to_string()).collect(),
+    };
+
+    Ok((render_segments(&segments, &names, Some(&casts)), names))
 }
 
 /// Loads the current `runtime.js` content for `app_name` — whatever's in
@@ -181,7 +269,9 @@ async fn load_queries(
     let mut app_queries = HashMap::new();
     let mut page_queries: HashMap<i32, HashMap<String, RuntimeQuery>> = HashMap::new();
     for (page_id, name, sql_text) in rows {
-        let (sql, bind_names) = compile_named_query(&sql_text);
+        let (sql, bind_names) = compile_named_query(pool, &sql_text)
+            .await
+            .with_context(|| format!("named query '{name}'"))?;
         let rq = RuntimeQuery { sql, bind_names };
         match page_id {
             Some(pid) => {
@@ -368,24 +458,42 @@ fn build_nav_tree(
 mod tests {
     use super::*;
 
+    // The actual `Describe`-based type resolution in `compile_named_query`
+    // needs a live Postgres connection (see the live-verified example
+    // apps instead — every named query with binds in examples/ exercises
+    // it), but the pure lexer underneath it — splitting `:name` markers
+    // out of hand-written SQL, deduping repeats, leaving a literal `::`
+    // alone — doesn't, so that's what these test directly.
+
     #[test]
-    fn compiles_named_query_bind_markers() {
-        let (sql, names) = compile_named_query(
-            "select id as value, title as label from pgapp_data.demo_tasks
-             where project_id = :project_id::integer and status = :status",
+    fn tokenizes_bind_markers_and_dedupes_repeats() {
+        let (segments, names) = tokenize_binds(
+            "select * from t where a = :id::integer or b = :id::integer or c::text = 'x' and d = :status",
         );
-        assert_eq!(names, vec!["project_id".to_string(), "status".to_string()]);
-        assert!(sql.contains("project_id = $1::text::integer"));
-        assert!(sql.contains("status = $2::text"));
+        assert_eq!(names, vec!["id".to_string(), "status".to_string()]);
+        assert_eq!(segments.iter().filter(|s| **s == Segment::Bind("id".to_string())).count(), 2);
+        assert_eq!(segments.iter().filter(|s| **s == Segment::Bind("status".to_string())).count(), 1);
+        // A literal `::` (someone's own cast, on the bind or elsewhere)
+        // is never consumed as part of a bind marker.
+        assert!(segments.iter().any(|s| matches!(s, Segment::Text(t) if t.contains("::integer"))));
+        assert!(segments.iter().any(|s| matches!(s, Segment::Text(t) if t.contains("c::text"))));
     }
 
     #[test]
-    fn compile_named_query_dedupes_repeated_names_and_preserves_casts() {
-        let (sql, names) = compile_named_query(
-            "select * from t where a = :id::integer or b = :id::integer or c::text = 'x'",
+    fn renders_bare_and_typed_placeholders_from_the_same_segments() {
+        let (segments, names) = tokenize_binds("where a = :id or b = :id or c = :status");
+        assert_eq!(render_segments(&segments, &names, None), "where a = $1 or b = $1 or c = $2");
+        let casts = vec!["INT4".to_string(), "TEXT".to_string()];
+        assert_eq!(
+            render_segments(&segments, &names, Some(&casts)),
+            "where a = $1::INT4 or b = $1::INT4 or c = $2::TEXT"
         );
-        assert_eq!(names, vec!["id".to_string()]);
-        assert_eq!(sql.matches("$1::text::integer").count(), 2);
-        assert!(sql.contains("c::text"));
+    }
+
+    #[test]
+    fn sql_with_no_binds_is_returned_unchanged_by_the_tokenizer() {
+        let (segments, names) = tokenize_binds("select * from t where a::integer = 1");
+        assert!(names.is_empty());
+        assert_eq!(render_segments(&segments, &names, None), "select * from t where a::integer = 1");
     }
 }

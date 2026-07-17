@@ -8,13 +8,32 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::model::FieldItem;
 
-/// A named query, compiled once at load time: `sql` already uses
-/// positional `$N::text` parameters, and `bind_names[i]` is the bind
-/// context key that fills `$(i + 1)`.
+/// A named query, compiled at load time: `sql` already uses positional
+/// `$N::TYPE` parameters, and `bind_names[i]` is the bind context key
+/// that fills `$(i + 1)`. `TYPE` isn't hardcoded to `text` — see
+/// `compile_named_query` — it's whatever Postgres itself infers the
+/// bind's type to be from the query's own WHERE/comparison context,
+/// asked fresh via `Describe` every time the app loads (startup, or
+/// `/admin/reload`), so it can never go stale the way a hand-written
+/// cast can when a column's type changes underneath it.
 #[derive(Debug, Clone)]
 pub struct RuntimeQuery {
     pub sql: String,
     pub bind_names: Vec<String>,
+}
+
+/// The exact shape a named query's SQL is always run inside of (see
+/// `server::query_engine::run_named_query`) — wrapping in `to_jsonb`
+/// is what lets the generic layer decode any result shape, regardless
+/// of what columns a query selects or what Postgres types they are.
+/// `compile_named_query` asks Postgres to describe this same wrapped
+/// shape (not the bare inner SQL) so its bind-type inference matches
+/// reality exactly: the wrapper is just a projection and never changes
+/// how a placeholder's type is resolved, but keeping both call sites
+/// on one function means they can't quietly drift apart if this shape
+/// ever changes.
+pub fn wrap_to_jsonb(sql: &str) -> String {
+    format!("select to_jsonb(t) as j from ({sql}) as t")
 }
 
 /// Runtime view of a field, as reloaded from `pgapp_meta` (not from the

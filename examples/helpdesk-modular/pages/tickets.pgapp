@@ -42,7 +42,7 @@ page "Tickets" {
 page "TicketDetail" {
   query same_status {
     sql: "select id, subject, priority, agent from pgapp_data.helpdesk_tickets
-          where status = :status::text and id != :id::integer
+          where status = :status and id != :id
           order by id desc limit 8"
   }
   text "The status below arrived as a URL parameter forwarded by the report's linked column on the Tickets page."

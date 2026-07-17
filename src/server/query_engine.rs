@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use sqlx::PgPool;
 
-use crate::meta::{RegionRows, RuntimeApp, RuntimeComponent, RuntimePage, RuntimeQuery};
+use crate::meta::{wrap_to_jsonb, RegionRows, RuntimeApp, RuntimeComponent, RuntimePage, RuntimeQuery};
 use crate::model::FieldItem;
 
 /// Turns a `to_jsonb` result value into the display string the rest of
@@ -30,7 +30,7 @@ pub async fn run_named_query(
     rq: &RuntimeQuery,
     ctx: &HashMap<String, String>,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
-    let wrapped = format!("select to_jsonb(t) as j from ({}) as t", rq.sql);
+    let wrapped = wrap_to_jsonb(&rq.sql);
     let mut query = sqlx::query_scalar::<_, serde_json::Value>(&wrapped);
     for name in &rq.bind_names {
         query = query.bind(ctx.get(name).map(|s| s.as_str()));

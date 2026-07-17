@@ -97,10 +97,12 @@ app "Todo" {
   page "TaskDetail" {
     # :priority binds from the current row by default, or from the
     # ?priority= the Tasks report forwarded via its link: (...) — either
-    # way it's the same cross-page-parameter mechanism.
+    # way it's the same cross-page-parameter mechanism. Neither bind
+    # needs a cast: compile_named_query asks Postgres what type
+    # priority/id actually are and casts accordingly, every load.
     query siblings {
       sql: "select id, title from pgapp_data.todo_tasks
-            where priority = :priority::text and id != :id::integer
+            where priority = :priority and id != :id
             order by id"
     }
     region "Other tasks with the same priority" from query siblings

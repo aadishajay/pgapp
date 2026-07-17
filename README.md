@@ -517,18 +517,37 @@ scopes:
 `sql` can contain `:name` bind markers (a literal `::` Postgres cast is
 left alone, so ordinary casts in hand-written SQL are never mistaken for
 one). Every marker becomes a genuine bind parameter — never string
-interpolation — always cast as `$N::text`, so a query comparing against
-a non-text column needs its own trailing cast: `where project_id =
-:project_id::integer`. Bind values come from a page's incoming
-query-string parameters, plus — when editing/viewing one row — that
-row's own field values (query-string wins on conflict). That's also how
-a value on one page reaches a query on another: a report's `link:
-<field> -> page <Name> (field: param)` forwards a row's column as
-`?param=...` on the target page's URL, where its named queries can read
-it as `:param`. The "other tasks with the same priority" region above
-demonstrates this — try changing the forwarded `?priority=` in the URL
-and the region's results change with it, independent of the row
-actually being viewed.
+interpolation. Bind values come from a page's incoming query-string
+parameters, plus — when editing/viewing one row — that row's own field
+values (query-string wins on conflict). That's also how a value on one
+page reaches a query on another: a report's `link: <field> -> page
+<Name> (field: param)` forwards a row's column as `?param=...` on the
+target page's URL, where its named queries can read it as `:param`. The
+"other tasks with the same priority" region above demonstrates this —
+try changing the forwarded `?priority=` in the URL and the region's
+results change with it, independent of the row actually being viewed.
+
+**Bind items are typed automatically — APEX-style, but schema-derived
+rather than hand-declared.** Write `:project_id`, not
+`:project_id::integer`: `meta::compile_named_query` runs the query
+through Postgres's own `Describe` (the same mechanism the wire protocol
+already uses to figure out what type an unadorned `$1` needs to be) and
+casts each bind to whatever it comes back with — `$1::INT4`,
+`$2::BOOL`, `$3::TIMESTAMPTZ`, whatever the actual column is, chosen
+fresh every time the app loads (startup, or `/admin/reload`). This is
+deliberately *not* a type you declare in markup: a hand-typed `bind
+project_id: integer` would go stale in exactly the same silent way a
+hand-written `::integer` cast does the moment someone runs `alter table
+... alter column project_id type bigint` outside pgapp entirely — it'd
+just be the staleness relocated, not fixed. Asking Postgres fresh at
+every load means schema drift is either picked up automatically (the
+compiled cast changes to match) or rejected loudly right there, before
+any request ever sees it — never silently wrong at runtime. A bind
+whose type genuinely can't be inferred (compared against nothing, or
+against two incompatible columns with no disambiguating cast) fails
+`sync`/`reload` with Postgres's own error message; an explicit
+`:name::type` cast, the old style, still works fine as a manual
+override — it's just a redundant no-op layered under the automatic one.
 
 `radio`/`popup` queries must alias their columns `value` and, optionally,
 `label` (defaulting to `value` if omitted) — e.g. `select distinct
