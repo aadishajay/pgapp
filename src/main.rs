@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
 
     let pool = PgPoolOptions::new()
-        .max_connections(5)
+        .max_connections(instance::max_connections())
         .connect(&database_url)
         .await
         .with_context(|| format!("failed to connect to database '{database_url}'"))?;

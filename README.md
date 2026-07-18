@@ -669,6 +669,13 @@ by every application in it) than to a separate server per app. Every
 app keeps its own tables (`pgapp_data.<app>_<entity>`), sessions, and
 users; only the connection pool and Rust process are shared.
 
+The pool defaults to **20 connections** — comfortably above a
+handful of toy connections without assuming "bigger is always faster"
+(a Postgres backend is a full process, not a lightweight thread, so a
+few dozen is already generous for one server); override with
+`PGAPP_MAX_CONNECTIONS`. Same default and override for the
+`pgapp_admin` connection Instance mode's `pgapp run` serves through.
+
 **What's registered, not what's on the command line, decides what's
 served.** `pgapp_control.apps` (a schema of its own — pgapp managing
 itself, distinct from `pgapp_meta`'s per-app metadata) is the durable

@@ -34,6 +34,22 @@ use sqlx::PgPool;
 
 pub const ADMIN_ROLE: &str = "pgapp_admin";
 
+/// Pool size for connections that serve real HTTP traffic — the
+/// classic-mode server pool, and the `pgapp_admin` connection
+/// `pgapp run` reuses to serve an instance. Default is in the same
+/// ballpark as a typical APEX/ORDS pool for one moderately busy
+/// workspace: comfortably above a handful of toy connections, without
+/// assuming "bigger is always faster" (a Postgres backend is a full
+/// process, not a lightweight thread, so a few dozen is already
+/// generous for one server). Override with `PGAPP_MAX_CONNECTIONS`.
+pub fn max_connections() -> u32 {
+    std::env::var("PGAPP_MAX_CONNECTIONS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(20)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstanceFile {
     pub dbname: String,
@@ -162,7 +178,7 @@ pub async fn connect_as_admin(instance: &InstanceFile) -> Result<PgPool> {
         .username(&instance.admin_role)
         .password(&password);
     PgPoolOptions::new()
-        .max_connections(5)
+        .max_connections(max_connections())
         .connect_with(opts)
         .await
         .with_context(|| format!("failed to connect to '{}' as {}", instance.dbname, instance.admin_role))
