@@ -45,20 +45,36 @@ const DEFAULT_RUNTIME_JS: &str = include_str!("../runtime.js");
 /// `item ... as <kind>` and `action_registry` every `action ... calls
 /// <name>` against the compiled-in modules, so a typo fails at sync
 /// time with a clear message instead of silently rendering nothing.
+/// `data_schema` is where this app's entity tables live — `pgapp_data`
+/// for the classic flow, or a workspace's own schema (see
+/// `src/control.rs`); it's trusted to already be a validated identifier
+/// (see `instance::valid_identifier`), never end-user input.
 pub async fn sync_app(
     pool: &PgPool,
     app: &AppDef,
     registry: &Registry,
     action_registry: &actions::Registry,
+    data_schema: &str,
 ) -> Result<()> {
+    // Defense in depth: data_schema gets spliced directly into DDL
+    // below (Postgres has no bind-parameter form for identifiers), and
+    // unlike entity/page/field names it isn't lexer-restricted — it
+    // comes from a workspace's schema_name or the "pgapp_data" literal.
+    // Both are validated where they're chosen (src/instance.rs,
+    // src/control.rs), but this is the one place every path converges.
+    if !crate::instance::valid_identifier(data_schema) {
+        anyhow::bail!("'{data_schema}' is not a valid schema identifier");
+    }
+
     let app_id: i32 = sqlx::query_scalar(
-        "insert into pgapp_meta.apps (name, theme, icons, chart_lib, auth_enabled)
-         values ($1, $2, $3, $4, $5)
+        "insert into pgapp_meta.apps (name, theme, icons, chart_lib, auth_enabled, data_schema)
+         values ($1, $2, $3, $4, $5, $6)
          on conflict (name) do update set
             theme = excluded.theme,
             icons = excluded.icons,
             chart_lib = excluded.chart_lib,
-            auth_enabled = excluded.auth_enabled
+            auth_enabled = excluded.auth_enabled,
+            data_schema = excluded.data_schema
          returning id",
     )
     .bind(&app.name)
@@ -66,6 +82,7 @@ pub async fn sync_app(
     .bind(&app.icons)
     .bind(&app.chart_lib)
     .bind(app.auth)
+    .bind(data_schema)
     .fetch_one(pool)
     .await?;
 
@@ -136,8 +153,8 @@ pub async fn sync_app(
         }
 
         if entity.source_query.is_none() {
-            ensure_data_table(pool, &table_name, entity).await?;
-            verify_data_table(pool, &table_name, entity).await?;
+            ensure_data_table(pool, data_schema, &table_name, entity).await?;
+            verify_data_table(pool, data_schema, &table_name, entity).await?;
         }
         entity_ids.insert(entity.name.clone(), entity_id);
     }
@@ -668,17 +685,17 @@ fn build_component_config(
     }
 }
 
-async fn ensure_data_table(pool: &PgPool, table_name: &str, entity: &EntityDef) -> Result<()> {
+async fn ensure_data_table(pool: &PgPool, data_schema: &str, table_name: &str, entity: &EntityDef) -> Result<()> {
     let cols: Vec<String> = entity.fields.iter().map(|f| column_def(f, true)).collect();
 
     let sql = format!(
-        "create table if not exists pgapp_data.{table_name} ({})",
+        "create table if not exists {data_schema}.{table_name} ({})",
         cols.join(", ")
     );
     sqlx::raw_sql(&sql)
         .execute(pool)
         .await
-        .with_context(|| format!("failed to create data table pgapp_data.{table_name}"))?;
+        .with_context(|| format!("failed to create data table {data_schema}.{table_name}"))?;
 
     // The table may already have existed before a field was added to
     // the entity — CREATE TABLE IF NOT EXISTS doesn't add columns to an
@@ -691,14 +708,14 @@ async fn ensure_data_table(pool: &PgPool, table_name: &str, entity: &EntityDef) 
             continue; // the primary key only ever comes from CREATE TABLE
         }
         let alter_sql = format!(
-            "alter table pgapp_data.{table_name} add column if not exists {}",
+            "alter table {data_schema}.{table_name} add column if not exists {}",
             column_def(field, false)
         );
         sqlx::raw_sql(&alter_sql)
             .execute(pool)
             .await
             .with_context(|| {
-                format!("failed to add column '{}' to pgapp_data.{table_name}", field.name)
+                format!("failed to add column '{}' to {data_schema}.{table_name}", field.name)
             })?;
     }
 
@@ -713,11 +730,12 @@ async fn ensure_data_table(pool: &PgPool, table_name: &str, entity: &EntityDef) 
 /// present in the table but absent from the entity (removed fields,
 /// manual additions) are only warned about: they hold real data pgapp
 /// shouldn't judge.
-async fn verify_data_table(pool: &PgPool, table_name: &str, entity: &EntityDef) -> Result<()> {
+async fn verify_data_table(pool: &PgPool, data_schema: &str, table_name: &str, entity: &EntityDef) -> Result<()> {
     let actual: Vec<(String, String)> = sqlx::query_as(
         "select column_name, udt_name from information_schema.columns
-          where table_schema = 'pgapp_data' and table_name = $1",
+          where table_schema = $1 and table_name = $2",
     )
+    .bind(data_schema)
     .bind(table_name)
     .fetch_all(pool)
     .await?;
@@ -734,11 +752,11 @@ async fn verify_data_table(pool: &PgPool, table_name: &str, entity: &EntityDef) 
     for field in &entity.fields {
         match actual.get(&field.name) {
             None => mismatches.push(format!(
-                "column '{}' is missing from pgapp_data.{table_name}",
+                "column '{}' is missing from {data_schema}.{table_name}",
                 field.name
             )),
             Some(udt) if udt != expected_udt(field.ty) => mismatches.push(format!(
-                "column '{}' is {udt} in pgapp_data.{table_name} but the entity declares {} (expected {})",
+                "column '{}' is {udt} in {data_schema}.{table_name} but the entity declares {} (expected {})",
                 field.name,
                 field.ty.as_str(),
                 expected_udt(field.ty),
@@ -759,7 +777,7 @@ async fn verify_data_table(pool: &PgPool, table_name: &str, entity: &EntityDef) 
     for column in actual.keys() {
         if entity.fields.iter().all(|f| &f.name != column) {
             println!(
-                "pgapp: warning: pgapp_data.{table_name} has column '{column}' that entity '{}' \
+                "pgapp: warning: {data_schema}.{table_name} has column '{column}' that entity '{}' \
                  no longer declares (left untouched)",
                 entity.name
             );

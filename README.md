@@ -34,8 +34,8 @@ instead of a blank scaffold: `cargo run -- examples/helpdesk.pgapp`
 comment).
 
 Running against the same database again with a *different* `.pgapp`
-path adds a second app alongside the first — see "Multi-app
-workspaces" below.
+path adds a second app alongside the first — see "Multi-app routing"
+below.
 
 ## Idea
 
@@ -570,7 +570,8 @@ src/
   scaffold.rs         `pgapp new`/`pgapp create` (see "Scaffolding a new app")
   markup.rs           lexer + parser: .pgapp text -> model::AppDef (or a Fragment)
   source.rs           loads a file/dir into one AppDef, or a dir-of-dirs into a workspace of several
-  control.rs          pgapp_control.apps: the durable app registry (see "Multi-app workspaces")
+  control.rs          pgapp_control.apps/workspaces: the durable registry (see "Multi-app routing", "Instance mode")
+  instance.rs         instance file, pgapp_admin role, CLI-admin auth (see "Instance mode")
   model.rs            parsed-markup types (AppDef, PageDef, ComponentDef, FieldItem, ...)
   html.rs             shared escape/js_escape/url_encode helpers
   theme.rs            theme.css/theme.json loading (see "Theming")
@@ -633,7 +634,7 @@ To add another design system: `themes/<name>/theme.css` + `theme:
 ## Routes
 
 Every route lives under `/:app` — an app's URL slug (see "Multi-app
-workspaces"). On startup it prints each app's full URL and its
+routing"). On startup it prints each app's full URL and its
 pages' component kinds, e.g.
 `http://127.0.0.1:8080/todo/Tasks  [report, form, text, region]`.
 
@@ -660,7 +661,7 @@ A `Form` switches into edit mode via `?edit_<n>=<id>` (`<n>` = its
 `?r<n>_after=`/`?r<n>_before=` (entity-backed) or `?r<n>_page=`
 (query-sourced) the same way.
 
-## Multi-app workspaces
+## Multi-app routing
 
 One process, one shared `PgPool`, any number of apps — closer to how
 Oracle APEX actually pools connections (one pool per workspace, shared
@@ -698,6 +699,12 @@ Sessions are app-scoped even though the cookie name is shared: the
 token to another's routes, and `pgapp_meta.sessions`/`.users` are
 looked up by `app_id` regardless.
 
+Note: "workspace" above just means "a directory that declares several
+apps at once" — every app still shares the single global `pgapp_data`
+schema. For apps whose *data* actually needs to live in separate
+Postgres schemas (different teams, different access grants), see
+"Instance mode" below, which uses the same word for something stronger.
+
 ## Scaffolding a new app
 
 `pgapp new`/`pgapp create` generates a minimal, runnable starter app —
@@ -723,11 +730,93 @@ cargo pgapp create              # or: cargo pgapp new "My Project"
 
 See `pgapp new --help` for every flag.
 
+## Instance mode
+
+A durable, database-backed deployment model on top of everything
+above — for when apps genuinely need separate Postgres schemas (a
+team's own credentials, different access grants), not just separate
+`pgapp_control` rows. Entirely opt-in: `cargo run -- <path>` and
+friends are unaffected and keep working exactly as documented above.
+
+**Instance** = one target database, one dedicated `pgapp_admin`
+Postgres login role the server operates as from then on:
+
+```bash
+pgapp instance init
+```
+
+Prompts for a superuser-capable connection string, the database name
+(auto-created if missing, same as the Quickstart flow), a password to
+set for the new `pgapp_admin` role, and a separate local CLI admin
+password. Two different secrets, two different fates:
+
+- `pgapp_admin`'s Postgres password is **never written to disk** — a
+  one-way hash can't be used to reconnect, so every later command reads
+  it fresh from `PGAPP_ADMIN_DB_PASSWORD`.
+- The CLI admin password *is* stored, but only as an argon2 hash, in
+  `~/.pgapp/instances/<dbname>.json` (`0600`) — it just gates who's
+  allowed to run instance/workspace/app commands against this instance
+  at all, checked interactively (or via `PGAPP_CLI_ADMIN_PASSWORD` for
+  scripts), and has nothing to do with Postgres auth.
+
+**Workspace** = a Postgres schema an app's data tables live in:
+
+```bash
+pgapp workspace create <dbname>
+```
+
+Asks for a name, then whether to use an existing schema or create one.
+A new schema gets its own owning login role (password prompted,
+`pgapp_admin` is granted membership + USAGE/CREATE); an existing schema
+just asks whether to grant `pgapp_admin` USAGE/CREATE into it (using a
+connection that can actually perform that grant — `pgapp_admin` has no
+privileges of its own on a schema it didn't create).
+
+**App** = scaffolded and registered into a chosen workspace:
+
+```bash
+pgapp app create <dbname> [--workspace <slug>]
+```
+
+Same prompts as `pgapp new`'s interactive flow, plus a workspace
+picker (lists every registered workspace and lets you choose) when
+`--workspace` isn't given. Then serve it — and every other enabled app
+across the whole instance, classic and workspace-scoped alike, same
+"the registry decides what's served" rule as multi-app routing:
+
+```bash
+pgapp run <file>.pgapp --instance <dbname> [--workspace <slug>]
+```
+
+**Destroy**, for all three, always needs the CLI admin password first:
+
+- `pgapp instance destroy <dbname>` — always a hard delete: drops
+  every workspace schema/role pgapp itself created, `pgapp_meta`/
+  `pgapp_data`/`pgapp_control`, the `pgapp_admin` role, and the local
+  instance file. Asks for a superuser connection fresh (never stored)
+  and requires typing the database name to confirm.
+- `pgapp workspace destroy <dbname> <slug> [--hard|--soft]` — soft
+  just disables the registry row (schema/data untouched, reversible);
+  hard drops the schema and, if pgapp created it, its owning role too
+  (again via a fresh superuser connection) — refuses without an extra
+  typed confirmation if apps are still registered in it.
+- `pgapp app destroy <dbname> <slug> [--hard|--soft]` — soft disables;
+  hard drops its entity tables and `pgapp_meta` rows (using
+  `pgapp_admin`'s own connection — it already owns whatever it created).
+
+`pgapp workspace list <dbname>` and `pgapp apps` show what's currently
+registered.
+
 ## Roadmap (not in this slice)
 
-- Multi-*workspace* isolation (separate schema/pool per workspace, each
-  holding several apps) — today every app in a process shares one
-  schema/pool; see "Multi-app workspaces" for what's already there
+- Separate connection *pool* per workspace — "Instance mode" gives
+  every workspace its own schema/role, but all of them still share one
+  `PgPool` per process (matches how APEX itself pools connections; a
+  true pool-per-workspace would be a bigger, probably unnecessary,
+  change)
+- No CLI-driven credential rotation — a workspace/pgapp_admin password
+  is set once at creation; changing it means an ad hoc `ALTER ROLE`
+  today, no `pgapp instance rotate-password`-style command yet
 - More field types and real relationships (foreign keys) — named
   queries cover ad hoc joins today, but no schema-level entity-to-entity
   references yet

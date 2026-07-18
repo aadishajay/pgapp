@@ -89,7 +89,11 @@ impl AppEntry {
     /// same process are entirely unaffected.
     pub async fn reload(&self, pool: &PgPool, item_types: &item_types::Registry, actions: &actions::Registry) -> anyhow::Result<()> {
         let app_def = crate::source::load(&self.markup_path)?;
-        meta::sync_app(pool, &app_def, item_types, actions).await?;
+        // A reload keeps this app in whatever schema it's already
+        // synced into — it never migrates an app's data tables to a
+        // different schema on its own.
+        let data_schema = self.data().app.data_schema.clone();
+        meta::sync_app(pool, &app_def, item_types, actions, &data_schema).await?;
         let app = meta::load_app(pool, &app_def.name).await?;
         let runtime_js = meta::load_runtime_js(pool, &app_def.name).await?;
         let theme = crate::theme::load(app.theme.as_deref().unwrap_or("shadcn"))?;
@@ -270,22 +274,23 @@ fn row_from_sqlx(row: &sqlx::postgres::PgRow, entity: &RuntimeEntity) -> anyhow:
     Ok(map)
 }
 
-async fn fetch_rows(pool: &PgPool, entity: &RuntimeEntity) -> anyhow::Result<Vec<BTreeMap<String, Option<String>>>> {
+async fn fetch_rows(pool: &PgPool, data_schema: &str, entity: &RuntimeEntity) -> anyhow::Result<Vec<BTreeMap<String, Option<String>>>> {
     // `order by t.id`, qualified: the select list aliases `id::text as
     // id`, and an unqualified ORDER BY id would bind to that *text*
     // output column, sorting "10" before "2".
-    let sql = format!("select {} from pgapp_data.{} t order by t.id", select_columns(entity), entity.table_name);
+    let sql = format!("select {} from {data_schema}.{} t order by t.id", select_columns(entity), entity.table_name);
     let rows = sqlx::query(&sql).fetch_all(pool).await?;
     rows.iter().map(|r| row_from_sqlx(r, entity)).collect()
 }
 
 async fn fetch_row(
     pool: &PgPool,
+    data_schema: &str,
     entity: &RuntimeEntity,
     id: &str,
 ) -> anyhow::Result<Option<BTreeMap<String, Option<String>>>> {
     let sql = format!(
-        "select {} from pgapp_data.{} where id = $1::integer",
+        "select {} from {data_schema}.{} where id = $1::integer",
         select_columns(entity),
         entity.table_name
     );
@@ -373,8 +378,10 @@ impl ReportFilters {
 /// cursor implies a page on the other side of it. `COUNT(*)`/`OFFSET`
 /// never enter into it, so this stays cheap no matter how large the
 /// table gets.
+#[allow(clippy::too_many_arguments)]
 async fn fetch_report_rows(
     pool: &PgPool,
+    data_schema: &str,
     entity: &RuntimeEntity,
     filters: &ReportFilters,
     filter_columns: &[String],
@@ -409,7 +416,7 @@ async fn fetch_report_rows(
         format!("where {}", conditions.join(" and "))
     };
     let sql = format!(
-        "select {cols} from pgapp_data.{} t {where_clause} order by t.id {order} limit {lim}",
+        "select {cols} from {data_schema}.{} t {where_clause} order by t.id {order} limit {lim}",
         entity.table_name
     );
 
@@ -643,7 +650,7 @@ async fn render_component(
                 None => {
                     let after = query.get(&p_after).map(|s| s.as_str());
                     let before = query.get(&p_before).map(|s| s.as_str());
-                    let rp = fetch_report_rows(&state.pool, entity, &filters, columns, *page_size, after, before).await?;
+                    let rp = fetch_report_rows(&state.pool, &data.app.data_schema, entity, &filters, columns, *page_size, after, before).await?;
                     let prev_href = rp.has_prev.then(|| {
                         let id = rp.rows.first().and_then(|r| r.get("id")).and_then(|v| v.clone()).unwrap_or_default();
                         format!("/{app}/{page_name}?{p_before}={}{filter_qs}", url_encode(&id))
@@ -713,7 +720,7 @@ async fn render_component(
             }
             match query.get(&edit_param) {
                 Some(id) => {
-                    let row = fetch_row(&state.pool, entity, id)
+                    let row = fetch_row(&state.pool, &data.app.data_schema, entity, id)
                         .await?
                         .ok_or_else(|| anyhow::anyhow!("row '{id}' not found"))?;
                     let ctx = bind_context(query, Some(&row));
@@ -738,7 +745,7 @@ async fn render_component(
         RuntimeComponent::EditableTable { title, entity, columns, item_types, field_html, html } => {
             let ctx = bind_context(query, None);
             let choices = resolve_field_choices(&state.pool, &data.app, page, item_types, &ctx).await?;
-            let rows = fetch_rows(&state.pool, entity).await?;
+            let rows = fetch_rows(&state.pool, &data.app.data_schema, entity).await?;
             Ok(render::editable_table_html(
                 app,
                 page_name,
@@ -1058,7 +1065,8 @@ async fn create(
     match build_value_exprs(entity, fields, item_types, &values, &state.item_types) {
         Ok((columns, exprs, binds)) => {
             let sql = format!(
-                "insert into pgapp_data.{} ({}) values ({})",
+                "insert into {}.{} ({}) values ({})",
+                data.app.data_schema,
                 entity.table_name,
                 columns.join(", "),
                 exprs.join(", ")
@@ -1107,7 +1115,8 @@ async fn update(
             binds.push(id.clone());
             let where_placeholder = binds.len();
             let sql = format!(
-                "update pgapp_data.{} set {set_clause} where id = ${where_placeholder}::integer",
+                "update {}.{} set {set_clause} where id = ${where_placeholder}::integer",
+                data.app.data_schema,
                 entity.table_name
             );
             let mut sql_query = sqlx::query(&sql);
@@ -1147,7 +1156,7 @@ async fn delete(
     let component = component_at(page, idx)?;
     let (entity, _, _) = writable_fields(component, &page_name, idx)?;
 
-    let sql = format!("delete from pgapp_data.{} where id = $1::integer", entity.table_name);
+    let sql = format!("delete from {}.{} where id = $1::integer", data.app.data_schema, entity.table_name);
     sqlx::query(&sql)
         .bind(&id)
         .execute(&state.pool)
@@ -1180,7 +1189,7 @@ async fn api_list(
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("no such entity '{entity_name}'")))?;
 
     let rows = match &entity.source_query {
-        None => fetch_rows(&state.pool, entity).await.map_err(err_response)?,
+        None => fetch_rows(&state.pool, &data.app.data_schema, entity).await.map_err(err_response)?,
         Some(qname) => {
             let rq = data.app.queries.get(qname).ok_or_else(|| {
                 (

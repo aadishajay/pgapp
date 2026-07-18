@@ -157,14 +157,20 @@ pub async fn load_runtime_js(pool: &PgPool, app_name: &str) -> Result<String> {
 }
 
 pub async fn load_app(pool: &PgPool, app_name: &str) -> Result<RuntimeApp> {
-    let (app_id, theme, icons, chart_lib, auth_enabled): (i32, Option<String>, Option<String>, Option<String>, bool) =
-        sqlx::query_as(
-            "select id, theme, icons, chart_lib, auth_enabled from pgapp_meta.apps where name = $1",
-        )
-        .bind(app_name)
-        .fetch_one(pool)
-        .await
-        .with_context(|| format!("app '{app_name}' not found in pgapp_meta"))?;
+    let (app_id, data_schema, theme, icons, chart_lib, auth_enabled): (
+        i32,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        bool,
+    ) = sqlx::query_as(
+        "select id, data_schema, theme, icons, chart_lib, auth_enabled from pgapp_meta.apps where name = $1",
+    )
+    .bind(app_name)
+    .fetch_one(pool)
+    .await
+    .with_context(|| format!("app '{app_name}' not found in pgapp_meta"))?;
 
     let entities = load_entities(pool, app_id).await?;
 
@@ -205,6 +211,7 @@ pub async fn load_app(pool: &PgPool, app_name: &str) -> Result<RuntimeApp> {
     Ok(RuntimeApp {
         id: app_id,
         name: app_name.to_string(),
+        data_schema,
         theme,
         icons,
         chart_lib,

@@ -16,6 +16,13 @@ alter table pgapp_meta.apps add column if not exists theme text;
 alter table pgapp_meta.apps add column if not exists icons text;
 alter table pgapp_meta.apps add column if not exists chart_lib text;
 alter table pgapp_meta.apps add column if not exists auth_enabled boolean not null default false;
+-- Which schema this app's physical data tables live in — 'pgapp_data'
+-- for the classic single-workspace flow, or a workspace's own schema
+-- name when the app was created via `pgapp app create`/`pgapp run
+-- --workspace` (see src/control.rs, src/instance.rs). Every data-table
+-- reference in server.rs/meta/sync.rs is qualified by this, not a
+-- hardcoded literal.
+alter table pgapp_meta.apps add column if not exists data_schema text not null default 'pgapp_data';
 
 -- Authentication: one user store per app. Passwords are argon2 hashes
 -- (never plaintext); role is a free-form string checked against a

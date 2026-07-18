@@ -176,6 +176,11 @@ pub struct RuntimeApp {
     /// keyed by it.
     pub id: i32,
     pub name: String,
+    /// Which schema this app's physical data tables live in —
+    /// `pgapp_data` for the classic single-workspace flow, or a
+    /// workspace's own schema otherwise (see `src/control.rs`). Every
+    /// `pgapp_data.*` SQL literal in `server.rs` is this instead.
+    pub data_schema: String,
     /// App settings reloaded from `pgapp_meta.apps`, originally declared
     /// in the markup (`theme:` / `icons:` / `chart_lib:` / `auth { }`).
     pub theme: Option<String>,
