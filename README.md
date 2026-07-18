@@ -721,12 +721,19 @@ cargo run -- new Inventory --dir --theme vivid    # a directory scaffold instead
 cargo run -- create
 ```
 
-Also reachable as a real `cargo` subcommand once built and on `PATH`:
+`cargo install --path .` builds and installs **both** binaries this
+crate defines — `pgapp` itself (so every `cargo run -- <args>` example
+in this README becomes just `pgapp <args>`, no `cargo run --` needed)
+and `cargo-pgapp`, reachable as a real `cargo` subcommand:
 
 ```bash
-cargo install --path . --bin cargo-pgapp
-cargo pgapp create              # or: cargo pgapp new "My Project"
+cargo install --path .
+pgapp new "My Project"          # same as `cargo run -- new "My Project"`
+pgapp create                    # or: cargo pgapp create
 ```
+
+(`cargo install --path . --bin cargo-pgapp` installs just the `cargo
+pgapp` alias, if that's all you want.)
 
 See `pgapp new --help` for every flag.
 
@@ -737,6 +744,10 @@ above — for when apps genuinely need separate Postgres schemas (a
 team's own credentials, different access grants), not just separate
 `pgapp_control` rows. Entirely opt-in: `cargo run -- <path>` and
 friends are unaffected and keep working exactly as documented above.
+
+The commands below assume `pgapp` is installed (`cargo install --path
+.` — see "Scaffolding a new app"); swap in `cargo run --` if you'd
+rather not install it (e.g. `cargo run -- instance init`).
 
 **Instance** = one target database, one dedicated `pgapp_admin`
 Postgres login role the server operates as from then on:
