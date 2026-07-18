@@ -3,72 +3,69 @@
 An Oracle APEX-inspired, no/low-code application framework built on
 Postgres, written in Rust.
 
+## Quickstart
+
+All you need is Postgres reachable somewhere (any role that can
+`CREATE DATABASE`) and Rust installed — pgapp creates its own database
+and a working starter app for you.
+
+```bash
+cargo run -- create
+```
+
+Answer the four prompts (app name, database URL — defaults to
+`postgres://postgres:postgres@localhost:5432/pgapp` and is **created
+automatically if it doesn't exist yet** — theme, single file or
+directory). It syncs the new app into Postgres immediately and prints
+the exact next command:
+
+```bash
+cargo run -- <generated-file>.pgapp
+```
+
+Open `http://127.0.0.1:8080`. No manual `createdb`, no separate
+migration step, nothing to hand-edit first.
+
+For scripts/CI, skip the prompts entirely: `cargo run -- new <AppName>`
+(see "Scaffolding a new app" below). To try the richer bundled demo
+instead of a blank scaffold: `cargo run -- examples/helpdesk.pgapp`
+(needs `examples/helpdesk_functions.sql` run first — see its header
+comment).
+
 ## Idea
 
-- **In-database metadata**: applications, entities, fields, pages and
-  components are rows in Postgres (`pgapp_meta.*`), not config files
-  scattered across a repo. The server always serves off the database,
-  not off whatever was last parsed.
-- **A textual markup language** (`.pgapp` files, APEX-flavored) is how
-  you *author* an application. It's parsed and synced into the metadata
-  tables at startup and again any time you visit `/admin/reload` — the
-  database is the source of truth in between, and a resync never needs
-  a process restart. See "Hot reload" below.
-- **Composable pages**: a page isn't one of a fixed set of "kinds" — it's
-  an ordered list of independent **components**: a paginated read-only
-  `Report`, a create/edit `Form`, an inline-editable `EditableTable`, a
-  `Chart`, or plain `Text`/`Link`/`Region` content. Any combination, any
-  number, on one page — see "Components" below.
-- **Pluggable design system**: rendered HTML only ever uses a fixed set
-  of `.pgapp-*` classes; a swappable `theme.css` (see "Theming" below)
-  gives them their actual look. `assets/app.css`/`app.js` still exist as
-  a per-app override layer on top of whatever theme is active.
-- **Pluggable item types**: a form field's widget (Text, Checkbox,
-  Radio, Popup, a Slider, ...) is a component in its own file under
-  `src/item_types/`, not a hardcoded match arm — see "Item types" below.
-- **Pluggable charts and icons**: a `Chart` component's rendering
-  backend and a `Report`/`EditableTable` row's edit/delete glyphs are
-  both swappable the same way themes are — a dependency-free default,
-  plus a named alternative selected in the markup. See "Charts" and
-  "Icons" below.
-- **Named queries**: reusable SQL, declared once (app-wide or scoped to
-  one page) and referenced by name from LOVs, regions, charts, report
-  row sources, and whole read-only entities (`entity ... from query`) —
-  see "Named queries" below.
-- **Server-side actions** (the PL/SQL analog): named Rust modules in
-  `src/actions/`, invoked from a page by an `action "Label" calls
-  <name>` button — see "Server-side actions" below.
-- **Dynamic actions**: declarative client-side behavior — `on change of
-  <item> { show/hide/toggle/set/refresh }` — dispatched by the
-  DB-stored runtime.js. See "Dynamic actions" below.
-- **Interactive reports**: every report gets a search box, a per-column
-  filter, and named **saved views** (private or public) stored in
-  metadata — see "Report search & saved views" below.
-- **Authentication & authorization**: an `auth { }` block in the markup
-  puts the whole app behind a login (argon2-hashed passwords,
-  server-side sessions, a first-run admin setup screen, a built-in
-  /users admin page), and `requires: <role>` restricts individual pages
-  by role — see "Authentication & authorization" below.
-- **App settings live in the app definition**: `theme:`, `icons:`, and
-  `chart_lib:` are markup properties synced into `pgapp_meta.apps`,
-  not environment variables — the file describes the whole app,
-  including how it looks.
-- **A DB-stored JS runtime**: `/runtime.js` isn't a static file — it's a
-  row in `pgapp_meta`, seeded from a built-in default and editable from
-  there afterward. It exposes `pgapp.getItem`/`pgapp.setItem` so item
-  values are captured/set by a method call, not ad hoc DOM lookups.
-- **Rust instead of PostgREST**: rather than fronting Postgres with
-  PostgREST, pgapp's own Axum server owns routing directly, using the
-  metadata to build parameterized SQL on the fly.
-
-## Current status: vertical slice
+- **In-database metadata**: apps, entities, fields, pages, and
+  components are rows in Postgres (`pgapp_meta.*`); the server always
+  serves off the database, never off whatever was last parsed.
+- **A textual markup language** (`.pgapp` files, APEX-flavored) authors
+  an app; it's synced into metadata at startup and again on
+  `/admin/reload` — no restart needed to pick up a change.
+- **Composable pages**: a page is just an ordered list of independent
+  components (`Report`, `Form`, `EditableTable`, `Chart`, `Text`,
+  `Link`, `Region`, `Action`) — any combination, any number, one page.
+- **Pluggable everything**: theme (CSS only), item types (form
+  widgets), charts, icons — each is a small file dropped into its own
+  directory, selected by name in the markup, no framework code touched.
+- **Named queries**: reusable SQL, bind-typed automatically from the
+  schema, shared across LOVs, regions, charts, report sources, and
+  whole read-only entities.
+- **Server-side actions** (the PL/SQL analog): named Rust modules, or
+  a plain PL/pgSQL function call, invoked from a button.
+- **Dynamic actions**: declarative client-side behavior
+  (`on change of x { show/hide/toggle/set/refresh }`).
+- **Interactive reports**: search, per-column filter, and named saved
+  views (private or public), all in metadata.
+- **Auth**: an `auth { }` block puts the app behind argon2-hashed
+  logins and server-side sessions; `requires: <role>` gates pages.
+- **A DB-stored JS runtime**: `/runtime.js` is a metadata row, not a
+  static file — editable without touching the binary.
+- **Rust instead of PostgREST**: one Axum binary owns routing and
+  builds parameterized SQL from metadata directly.
 
 This is deliberately the *smallest end-to-end loop*, not the whole
-framework: one markup file → one app, hardcoded single-tenant, one field
-type set (`id`, `text`, `boolean`, `integer`, `timestamp`). It exists to
-prove the architecture end-to-end before building the bigger pieces
-(drag-and-drop builder UI, actions/flows, multi-app routing) on top of
-it.
+framework: single-tenant, one process per app, a handful of field
+types. It exists to prove the architecture before building the bigger
+pieces (drag-and-drop builder UI, multi-step flows, multi-app routing).
 
 ## Markup
 
@@ -121,8 +118,7 @@ app "Todo" {
   }
 
   # A page can hold any number of components. A Report + Form on the
-  # same page (as here) is the classic list+edit CRUD pattern — but
-  # they're two independent, composable pieces, not one fixed page kind.
+  # same page (as here) is the classic list+edit CRUD pattern.
   page "Tasks" {
     report "Tasks" of tasks {
       columns: title, priority, done, estimate_hours, created_at
@@ -150,14 +146,14 @@ app "Todo" {
   page "TaskDetail" {
     query siblings {
       sql: "select id, title from pgapp_data.todo_tasks
-            where priority = :priority::text and id != :id::integer
+            where priority = :priority and id != :id
             order by id"
     }
     region "Other tasks with the same priority" from query siblings
   }
 
-  # A Report sourced from a query instead of the entity table directly.
-  # No Form here, so it's read-only.
+  # A Report sourced from a query instead of the entity table. No Form
+  # here, so it's read-only.
   page "OpenTasks" {
     report "Open tasks" of tasks {
       source: query open
@@ -185,258 +181,149 @@ app "Todo" {
 }
 ```
 
-- `header { }` / `footer { }` (optional, top-level) declare app-wide
-  chrome shown on every page. They reuse the same component grammar as
-  a page body, but are restricted (checked at sync time) to
-  `text`/`link`/`region` — chrome has no per-request entity or
-  pagination context for a Report/Form/EditableTable/Chart to use.
-- `nav { }` (optional, top-level) declares the app's navigation bar.
-  Each `item "Label"` is either a leaf (`-> page <Name>`) or a group
-  (`{ ... }` of nested items) — nesting groups gives you a multi-level
-  menu, rendered site-wide. A leaf whose target page has `requires:
-  <role>` only shows up for a signed-in user who holds that role (or
-  is admin) — no separate markup for this, it's the same check the
-  page itself enforces on a direct visit. A group with every child
-  hidden this way disappears too, instead of rendering an empty
-  dropdown.
-- `entity` blocks describe a table: each `field` has a type, and
-  optionally `required` and/or a `default`.
-- `page "Name" { ... }` is just a name plus an ordered list of
-  components (and optional page-scoped `query` blocks) — see
-  "Components" below for what each one does. A page may also declare
-  `requires: <role>` — see "Authentication & authorization".
-- `theme:` / `icons:` / `chart_lib:` (optional, app level) select the
-  pluggable theme, icon pack, and chart library directories; `auth { }`
-  turns on login. These are part of the app definition and synced into
-  `pgapp_meta.apps` like everything else — there are no environment
-  variables for them.
-- Anything that targets a page by name (`nav` items, a report's `link:`,
-  a `link` component) uses a bare identifier, not a quoted string —
-  restricting link targets to the same safe charset as SQL identifiers.
-  Query and entity names are the same way.
+- `header { }` / `footer { }` (optional) — app-wide chrome, restricted
+  to `text`/`link`/`region`.
+- `nav { }` (optional) — the nav bar; each `item "Label"` is a leaf
+  (`-> page <Name>`) or a group (`{ nested items }`). A leaf whose
+  target page has `requires: <role>` only shows for a user holding
+  that role; a group left with no visible children disappears too.
+- `entity` blocks describe a table: each `field` has a type, optionally
+  `required` and/or a `default`.
+- `page "Name" { ... }` — a name plus an ordered list of components
+  (see "Components"), and optionally `requires: <role>`.
+- `theme:`/`icons:`/`chart_lib:`/`auth { }` (optional, app level) — part
+  of the app definition, synced into `pgapp_meta.apps`; no environment
+  variables involved.
+- Anything targeting a page/entity/query by name uses a bare
+  identifier (`[A-Za-z_][A-Za-z0-9_]*`), not a quoted string — the same
+  charset that's safe to splice into SQL as an identifier.
 
-See `src/markup.rs` for the full grammar and `examples/todo.pgapp` for a
-working example. `examples/helpdesk.pgapp` is a richer one — two
-entities, a chart dashboard, both pagination modes, auth, and every
-built-in item type — with demo data in `examples/helpdesk_seed.sql`, a
-feature-by-feature tour (with live screenshots) in
-`marketing/index.html`, and the colorful `themes/vivid/` theme selected
-by its own `theme: vivid` line: `cargo run -- examples/helpdesk.pgapp`.
+See `src/markup.rs` for the full grammar. `examples/helpdesk.pgapp` is
+a richer demo — two entities, a chart dashboard, both pagination modes,
+auth, every built-in item type — with seed data
+(`examples/helpdesk_seed.sql`), PL/pgSQL functions
+(`examples/helpdesk_functions.sql`, run before first sync), a
+feature-by-feature tour in `marketing/index.html`, and the `vivid`
+theme.
 
 ### One file, or a directory
 
 An app is authored as either a single `.pgapp` file or a **directory**
 of them — same grammar, zero refactoring to move between the two.
-Directory semantics are deliberately Terraform-shaped: every `.pgapp`
-file under the directory (recursively) merges into one app by name.
+Every `.pgapp` file under the directory (recursively) merges into one
+app by name (Terraform-shaped, no `include`, no import graph):
 
-- Exactly one file declares the `app "..." { }` block — settings,
-  `auth`, `nav`, and `header`/`footer` chrome live there.
-- Every other file is a *fragment*: any number of top-level `entity`,
-  `page`, and `query` blocks (top-level queries are app-scoped;
-  page-scoped queries stay inside their page as always). Fragments
-  reference each other by name exactly as within one file — the
-  metadata sync already resolves forward references, so file order
-  never matters.
-- There is no `include` statement and no import graph. The same name
-  declared in two files is a startup error naming both files, and parse
-  errors report `file (line N)`.
+- Exactly one file declares the `app "..." { }` block (settings, auth,
+  nav, header/footer).
+- Every other file is a *fragment*: top-level `entity`/`page`/`query`
+  blocks, referencing each other by name exactly as in one file.
+- The same name declared in two files is a startup error naming both.
 
-`examples/helpdesk-modular/` is the helpdesk app split this way — one
-file for the app shell, one per entity, one per page group:
-
-```
-examples/helpdesk-modular/
-  app.pgapp            app "Helpdesk" { theme, auth, nav, header, footer }
-  tickets.pgapp        entity "tickets" + its app-scoped queries
-  agents.pgapp         entity "agents" + the agent_names LOV query
-  pages/
-    dashboard.pgapp    page "Dashboard"
-    tickets.pgapp      pages "Tickets" + "TicketDetail"
-    agents.pgapp       page "Agents" (requires: admin)
-    backlog.pgapp      pages "Backlog" + "About"
-```
-
-Run it with `cargo run -- examples/helpdesk-modular` — it syncs to the
-same metadata as the single-file version. The file layout is purely an
-authoring convenience; the database never sees it.
+`examples/helpdesk-modular/` is the helpdesk app split this way — run
+it with `cargo run -- examples/helpdesk-modular`; it syncs to the same
+metadata as the single-file version.
 
 ## Components
 
 A page's body is `Vec<ComponentDef>` (`src/model.rs`) — there's no
-separate "page kind" the way there used to be. Seven kinds:
+fixed "page kind." Eight kinds:
 
-- **`report "Title" of <entity> { ... }`** — a read-only, paginated
-  table. `columns` are shown; `source: query <name>` sources rows from
-  a named query instead of the entity table directly (writes still
-  target the entity by id); `link: <field> -> page <Name> (extra: param,
-  ...)` turns that column into a link to another page, forwarding the
-  row's id as `?id=` plus any extra columns as named parameters;
-  `page_size` (default 20) controls pagination (see "Pagination"
-  below). If the same page also has a `Form` bound to the same entity,
-  each row automatically gets Edit/Delete actions that target it — no
-  extra config needed, just put both components on one page.
-- **`form "Title" of <entity> { ... }`** — a create/edit form. `fields`
-  lists the writable columns; `item <field> [as <kind> [(...)]] [attrs (...)]`
-  picks that field's widget (see "Item types" below) and/or sets
-  `id`/`class`/attributes on just that field's wrapper — either half is
-  optional, but at least one must be given (a bare `item name` with
-  neither does nothing and is rejected at parse time). Renders blank
-  (create mode) by default; visiting the page with `?edit_<n>=<id>`
-  (`<n>` is this component's position on the page, 0-based) switches it
-  into edit mode for that row, with a Delete button alongside Save.
+- **`report "Title" of <entity> { ... }`** — read-only, paginated
+  table. `columns`; `source: query <name>` sources rows from a query
+  instead (writes still target the entity by id); `link: <field> ->
+  page <Name> (extra: param, ...)` links a column, forwarding the row's
+  id plus extra params; `page_size` (default 20). A sibling `Form` for
+  the same entity on the same page gets automatic Edit/Delete actions.
+- **`form "Title" of <entity> { ... }`** — create/edit form. `fields`
+  lists writable columns; `item <field> [as <kind> [(...)]] [attrs
+  (...)]` picks a widget and/or sets `id`/`class`/attributes on that
+  field's wrapper (at least one of the two required). Blank by default;
+  `?edit_<n>=<id>` switches it into edit mode with a Delete button.
 - **`editable_table "Title" of <entity> { ... }`** — every row rendered
-  as its own inline-editable form (one per row) plus an "add new" row —
-  no separate list/edit split. A good fit for a small table you want to
-  bulk-tweak in place. Not paginated. Same `item <field> [as <kind>] [attrs (...)]`
-  syntax as `form`.
+  as its own inline-editable form, plus an "add new" row. Not
+  paginated. Same `item` syntax as `form`.
 - **`chart "Title" from query <name> { type: bar|line|area|scatter|pie|donut x: <col> y: <col> }`**
-  — renders the query's rows as a chart; see "Charts" below for all six
-  types and the pluggable rendering backend.
+  — see "Charts".
 - **`text "..."`** — static text.
 - **`link "Label" -> page <Name>`** — a link to another page.
-- **`region "Label" from query <name> { columns: ... }`** — a named
-  query's rows rendered as a plain, non-paginated table; sugar for a
-  small fixed-shape report without entity/pagination machinery.
-  `columns:` narrows/orders which of the query's result columns are
-  shown; omit it to show every column, alphabetically (a query result
-  has no inherent column order to fall back to otherwise).
+- **`region "Label" from query <name> { columns: ... }`** — a query's
+  rows as a plain, non-paginated table; `columns:` narrows/orders which
+  result columns show (default: every column, alphabetically).
 - **`action "Label" calls <module> (config...)`** — a button running a
-  registered server-side action module; see "Server-side actions".
+  server-side action module; see "Server-side actions".
 - **`on <event> of <item> { ... }`** — a client-side dynamic action;
-  not visible content, but stored/synced like any other component. See
-  "Dynamic actions".
-- Any component above can end with **`attrs (id: "...", class: "...", data_foo: "bar")`**
-  to set a custom `id`/extra CSS class/arbitrary HTML attributes on its
-  outer wrapper tag — see "Theming" below.
+  see "Dynamic actions".
+- Any component can end with **`attrs (id: "...", class: "...",
+  data_foo: "bar")`** to set a custom id/extra class/attribute on its
+  wrapper tag — see "Theming".
 
 ## Pagination
 
-`Report` pagination is backend-optimized to avoid the two classic
-expensive patterns (`COUNT(*)` and `OFFSET`-skipping over a large
-table), via `server::fetch_report_rows` / `query_engine::run_named_query_page`:
+Backend-optimized to avoid `COUNT(*)` and `OFFSET`-skipping a large
+table (`server::fetch_report_rows` / `query_engine::run_named_query_page`):
 
-- **Entity-backed** (no `source:`): **keyset ("seek") pagination** on
-  `id`. `?r<n>_after=<id>` / `?r<n>_before=<id>` (`<n>` = the report's
-  position on the page) fetch `page_size + 1` rows in that direction —
-  the extra row tells you whether *that* direction has more, and the
-  direction you arrived *from* always has more (reaching a page via a
-  cursor implies a page on the other side of it). Zero extra queries,
-  and it stays cheap regardless of table size.
-- **Query-sourced** (`source: query <name>`): an arbitrary query has no
-  assumed stable sort key, so this falls back to `?r<n>_page=<n>`
-  (`OFFSET`-based), but still avoids `COUNT(*)` by fetching
-  `page_size + 1` rows the same way.
+- **Entity-backed** (no `source:`): keyset ("seek") pagination on `id`
+  — `?r<n>_after=<id>` / `?r<n>_before=<id>`. Zero extra queries,
+  stays cheap regardless of table size.
+- **Query-sourced** (`source: query <name>`): no assumed sort key, so
+  it falls back to `?r<n>_page=<n>` (`OFFSET`), still avoiding
+  `COUNT(*)` by fetching one extra row.
 
 ## Report search & saved views
 
-Every `Report` renders an interactive toolbar:
-
-- **Search** (`r<n>_q`): case-insensitive substring match across all of
-  the report's visible columns.
-- **Column filter** (`r<n>_col` + `r<n>_val`): "column contains value",
-  with the column name validated against the report's own column list
-  (never spliced from raw request input).
-- Filters live in the URL, compose with both pagination modes (the
-  keyset cursor and OFFSET pages both stay inside the filtered set),
-  and all filter *values* are bind parameters.
-- **Saved views**: the current filter state can be saved under a name
-  into `pgapp_meta.report_views` — private to the signed-in user by
-  default, or **public** (visible to every user of the app) via the
-  checkbox. Views render as chips that apply their bookmarked filters;
-  a view's owner (or an admin) can delete it. Without auth enabled,
-  views are anonymous and shared.
+Every `Report` gets an interactive toolbar: **search** (`r<n>_q`,
+case-insensitive substring across visible columns), a **column filter**
+(`r<n>_col`/`r<n>_val`, column validated against the report's own
+list), and **saved views** (`pgapp_meta.report_views`) — private by
+default or public via checkbox, rendered as chips, deletable by their
+owner or an admin. All filter values are bind parameters; filters
+compose with both pagination modes.
 
 ## Query-backed entities
 
-`entity "status_summary" from query <name> { field ... }` declares a
-**read-only entity** backed by an app-scoped named query instead of a
-physical table — the APEX "view" pattern. No table is created; binding
-a `form` or `editable_table` to it is a sync-time error; reports over
-it paginate by OFFSET (arbitrary SQL has no assumed sort key) and
-`/api/:entity` serves the query's rows. The declared fields describe
-the query's columns for rendering.
+`entity "name" from query <name> { field ... }` — a **read-only**
+entity backed by a named query instead of a physical table (the APEX
+"view" pattern). No table created; binding a `form`/`editable_table` to
+it is a sync-time error; reports over it paginate by `OFFSET`.
 
 ## Deployment checks
 
 On every sync, each table-backed entity's physical table is verified
-against its declared fields via `information_schema`: a column whose
-*type* differs from the declaration (or is missing) fails startup with
-a message naming every mismatch — the alternative is a confusing cast
-error at request time. Columns present in the table but no longer
-declared are only warned about; they hold real data pgapp won't judge.
-(pgapp adds columns, but never changes or drops them.)
+against its declared fields via `information_schema`: a type mismatch
+or missing column fails startup naming every problem (rather than a
+confusing cast error at request time). Extra columns are only warned
+about. pgapp adds columns but never changes or drops them.
 
 ## Server-side actions
 
-The PL/SQL analog: a named piece of server-side Rust, one file per
-module under `src/actions/`, registered in `src/actions.rs` (same
-compile-time plugin pattern as item types):
+The PL/SQL analog: named Rust modules under `src/actions/`
+(`ServerAction` trait: `name()` + async `run(ctx) -> Result<String>`),
+invoked via `action "Label" calls <module> (config...)` — a button
+posting to `/:page/c/:idx/run`, gated by the page's `requires:` role.
+`ActionContext` carries the pool, app, page, config, and request params.
+Ships three modules:
 
-```rust
-pub trait ServerAction: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn run<'a>(&'a self, ctx: ActionContext<'a>) -> BoxFuture<'a, anyhow::Result<String>>;
-}
-```
+- **`run_query`** — executes a named query raw (may be a plain
+  `UPDATE`/`DELETE`/`INSERT`); binds are still `:name` markers, never
+  interpolation.
+- **`call_function`** — calls a plain PL/pgSQL function (`select
+  my_function()` as the query's SQL) and shows back whatever the
+  function itself returns; `raise exception '...'` inside it becomes
+  the error banner verbatim (`actions::clean_db_error`). The function
+  must already exist when the app is (first) synced/reloaded.
+- **`log_values`** — trivial demo, logs the parameter map.
 
-`ActionContext` carries the pool, the app, the page (so page-scoped
-queries resolve), the component's generic JSON config, and the
-request's merged parameter map. The returned string becomes a success
-notice banner; an `Err` becomes the error banner.
-
-A page invokes a module with `action "Close old tickets" calls
-run_query (query: "close_old")` — rendered as a button posting to
-`/:page/c/:idx/run`, gated by the page's `requires:` role like every
-other write. Three modules ship:
-
-- `run_query` — executes a named query **raw** (not wrapped in
-  `to_jsonb`), so the query may be a plain `UPDATE`/`DELETE`/`INSERT`;
-  binds still come from `:name` markers, never interpolation. Its
-  outcome message is always generic ("N row(s) affected").
-- `call_function` — PL/pgSQL's own seat at this table: calls a plain
-  SQL/PL/pgSQL function (`action "Close stale tickets" calls
-  call_function (query: "close_stale")`, where `close_stale`'s SQL is
-  `select close_stale_tickets()`) and shows back whatever *the
-  function itself* returns, wrapped in `to_jsonb` the same generic way
-  a named query's own rows are, so the return type is never a
-  constraint. `raise exception '...'` inside the function becomes the
-  page's error banner — stripped of sqlx's "error returned from
-  database:" wrapper (see `actions::clean_db_error`), so a hand-written
-  validation message shows up exactly as written — and whatever the
-  function `return`s on success becomes the notice. The function has
-  to already exist when the app is (first) synced or reloaded — same
-  requirement as a query referencing a table — see
-  `examples/helpdesk_functions.sql`'s comment for the run order.
-- `log_values` — a trivial demo of custom Rust: logs the parameter map.
-
-**Rust or PL/pgSQL, not one instead of the other.** `run_query`/
-`call_function` are the two ends of a spectrum, not a migration path
-away from `src/actions/*.rs`: anything that needs to leave the
-database — HTTP calls, email, another service — stays Rust, where it's
-typed, testable, and has an actual compiler; anything that's already
-row-level logic living beside the data (validation, integrity checks,
-bulk recalculation) is cheaper to write as a function and invoke with
-`call_function` than to round-trip through Rust for no reason. Neither
-module reinvents bind handling — both go through the exact same
-`:name` → `Describe`-resolved-type compilation as every other named
-query (see "Named queries" above), so a PL/pgSQL function's arguments
-never need hand-written casts either.
-
-pgapp doesn't ship an APEX-style grab-bag utility package (an
-`apex_util`/`apex_error` equivalent), and deliberately so: most of what
-those packages exist for — session-state accessors, page-item
-plumbing — has no analog here, since pgapp has no server-side session
-state to expose in the first place (a page's state is its URL and the
-database, not a stateful package instance). The one piece that
-*genuinely* generalizes — "a function raises a clean, user-facing
-error and the framework shows it verbatim" — isn't a package at all;
-it's `clean_db_error` plus the ordinary Postgres `raise exception`
-statement. Nothing to import, nothing to learn.
+Rust and PL/pgSQL aren't a migration path away from each other: anything
+leaving the database (HTTP, email) stays Rust; row-level logic already
+living beside the data is cheaper as a function via `call_function`.
+Both share the exact same `:name` → schema-typed bind compilation as
+every other named query. No `apex_util`-style grab-bag package is
+shipped — `clean_db_error` + `raise exception` covers the one thing
+that genuinely generalizes.
 
 ## Dynamic actions
 
-Declarative client-side behavior, APEX-style, in the page markup:
+Declarative client-side behavior, APEX-style:
 
 ```text
 on change of priority {
@@ -450,21 +337,16 @@ on change of agent {
 }
 ```
 
-Ops: `show <item>` / `hide <item>`, `toggle <item> when "<js expr>"`,
-`set <item> to "<js expr>"` (expressions may call `pgapp.getItem`),
-and `refresh <query>` — which re-fetches one region's rows from
-`GET /:page/region/:query`, sending the page's current item values as
-query parameters, so the region's `:binds` follow what the user just
-typed or picked. Pages emit their dynamic actions as one JSON blob;
-the DB-stored runtime.js binds and dispatches them (`setItem` fires
-`change` events, so actions chain — with a depth guard). Note:
-runtime.js is seeded once per app; existing deployments must delete
-their `pgapp_meta.app_runtime_js` row to pick up a newer seed.
+Ops: `show`/`hide <item>`, `toggle <item> when "<js expr>"`, `set
+<item> to "<js expr>"` (may call `pgapp.getItem`), `refresh <query>`
+(re-fetches one region via `GET /:page/region/:query`, sending current
+item values as query params). Dispatched by the DB-stored runtime.js;
+`setItem` fires `change` events so actions chain (depth-guarded).
 
 ## Item types
 
-A form field's widget is one small Rust file implementing this trait
-(`src/item_types.rs`):
+A form field's widget is one small Rust file (`src/item_types/`)
+implementing:
 
 ```rust
 pub trait ItemType: Send + Sync {
@@ -475,321 +357,172 @@ pub trait ItemType: Send + Sync {
 }
 ```
 
-`RenderArgs` carries the field's name/value/required-ness/column type,
-its raw JSON `config`, and (for anything whose config used `choices`/
-`query`) the already-resolved `(value, label)` pairs — resolving a
-`query` means an async DB call, so that happens once up front in
-`server::query_engine`, before any (synchronous) rendering runs.
-`read_value` only needs overriding when a field doesn't submit a plain
-value the usual way — Checkbox is the one built-in example, since an
-unchecked box never sends its key at all.
+`RenderArgs` carries name/value/required/column-type, raw JSON
+`config`, and (for `choices`/`query` configs) already-resolved
+`(value, label)` pairs.
 
 ```
-src/item_types.rs        registry() + the ItemType trait + default_kind_for
-src/item_types/
-  text.rs                default for text/integer/timestamp
-  readonly.rs             visible, not editable, round-trips via hidden input
-  checkbox.rs             default for boolean; read_value overridden
-  radio.rs                radio group over args.choices
-  popup.rs                "Pop Up LOV": <dialog> + search filter + pgapp.setItem(...)
-  slider.rs               <input type=range>, reads min/max/step from config
+text.rs      default for text/integer/timestamp
+readonly.rs  visible, not editable, round-trips via hidden input
+checkbox.rs  default for boolean
+radio.rs     radio group over args.choices
+popup.rs     "Pop Up LOV": <dialog> + search filter + pgapp.setItem(...)
+slider.rs    <input type=range>, reads min/max/step from config
 ```
 
-Adding a new one (say a date picker) means writing
-`src/item_types/date_picker.rs` implementing the trait and adding one
-line to `registry()` in `src/item_types.rs` — nothing in `markup.rs`,
-`meta/`, `server.rs`, or `render.rs` needs to change, since all of them
-only ever go through the registry by kind string and a generic JSON
-config. That said, this is a *compile-time* plugin point: Rust has no
-way to pick up a dropped-in `.rs` file without a rebuild. "Drop in a
-file" here means write it, register it, `cargo build`, restart — not
-hot-loading into a running process. A wrong/misspelled `kind` in markup
-is caught at sync time (`meta::sync_app` checks every declared kind
-against the registry) rather than failing silently at render time.
+Adding one (say a date picker): write `src/item_types/date_picker.rs`,
+add one line to `registry()` — nothing else changes, since everything
+goes through the registry by kind string and a generic JSON config.
+Compile-time plugin point (rebuild + restart, not hot-loaded); a
+misspelled `kind` is caught at sync time.
 
-Two config keys are reserved by convention, generic across every kind
-(see `server::query_engine::resolve_field_choices`): `choices` (a fixed
-list) and `query` (a named query's rows instead) — a component only
-needs to read `args.choices` to get either, without caring which one it
-was.
-
-`popup` (a "Pop Up LOV") renders every choice into the dialog up front,
-so its search box (`pgapp.filterPopup` in `/runtime.js`) filters
-client-side by substring match against each row's own text — no
-server round trip, no debouncing needed. `pgapp.openPopup` resets the
-search box and re-shows every row each time the dialog opens, so a
-filter from a previous look never lingers; an empty result shows a
-"No matches" row (`.pgapp-popup-empty`) instead of a blank list.
+`popup` renders every choice into the dialog up front; its search box
+(`pgapp.filterPopup`/`pgapp.openPopup` in `/runtime.js`) filters
+client-side by substring, resets on every open, and shows "No matches"
+instead of a blank list — all with no server round trip.
 
 ## Charts
 
-A `chart` component's `type:` is one of six built-in kinds
-(`model::CHART_TYPES`), checked at sync time — an unknown type is a
-sync-time error, never a silently blank chart:
+`type:` is one of six (`model::CHART_TYPES`), checked at sync time:
 
-- **`bar`** — one rect per row, height proportional to `y`.
-- **`line`** — a polyline through each row's point, plus a marker dot.
-- **`area`** — the same line, filled down to the baseline.
-- **`scatter`** — just the marker dots, no connecting line.
-- **`pie`** — one wedge per row, swept from 12 o'clock, sized by its
-  share of the total `y`; a side legend lists each label and share
-  since text rarely fits inside a thin wedge.
-- **`donut`** — a `pie` with the center punched out.
+| type | rendering |
+|---|---|
+| `bar` | one rect per row |
+| `line` | polyline + marker dots |
+| `area` | `line`, filled to baseline |
+| `scatter` | marker dots only |
+| `pie` | wedges from 12 o'clock, side legend |
+| `donut` | `pie` with the center punched out |
 
-`bar`/`line`/`area`/`scatter` share an x-axis of `x` (category) against
-`y` (value); `pie`/`donut` reuse the same two properties as a slice's
-label and value — there's no separate grammar for radial charts.
+`bar`/`line`/`area`/`scatter` use `x` (category)/`y` (value); `pie`/
+`donut` reuse the same two props as a slice's label/value.
 
-The rendering backend itself is pluggable the same way a theme is
-(`src/chart_lib.rs`):
-
-- **`inline`** (default) — every type above computed straight to inline
-  SVG server-side (`render::inline_svg_chart`, `cartesian_chart_svg`,
-  `radial_chart_svg`). No JS, no network fetch, works everywhere.
-- **any other name** — loads `chart-libs/<name>/chart.js`, served at
-  `GET /chart-lib.js` and linked from every page. For each chart, the
-  server instead emits a `<div class="pgapp-chart">` placeholder plus a
-  `<script type="application/json" class="pgapp-chart-data">` blob
-  (`{rows, x, y, type}`); the library's JS reads that and renders into
-  the div however it likes — canvas, its own SVG, a real charting
-  library. The server never needs to know how, so a pluggable library
-  is free to support only a subset of the six types (`canvas-bars`
-  below always draws bars regardless of `type`).
-
-Selected per app with `chart_lib: <name>` in the markup (default
-`inline`). `chart-libs/canvas-bars/`
-ships as a second, working example — a small dependency-free `<canvas>`
-bar-chart renderer — proving the plug point without requiring a CDN.
+Rendering backend is pluggable (`src/chart_lib.rs`): **`inline`**
+(default) computes straight to SVG server-side, no JS; any other name
+loads `chart-libs/<name>/chart.js`, and the server instead emits a
+`<script type="application/json" class="pgapp-chart-data">` blob
+(`{rows, x, y, type}`) for that JS to render however it likes.
+Selected with `chart_lib: <name>`. `chart-libs/canvas-bars/` ships as
+a working `<canvas>` example.
 
 ## Icons
 
 A `Report`/`EditableTable` row's Edit/Delete glyphs come from a
-pluggable "icon pack" (`src/icons.rs`), mirroring the theme contract:
-
-- **`builtin`** (default) — two hard-coded inline SVGs (a pencil, a
-  trash can). No network fetch, no font.
-- **any other name** — loads `icons/<name>/pack.json`:
-  `{"stylesheet": "<url>", "icons": {"edit": {"class": "...", "content":
-  "..."}, ...}}`. Icons render as `<i class="pgapp-icon <class>">
-  <content></i>`, and `stylesheet` is linked once in `<head>`. `content`
-  is optional and covers both flavors of font-based icon system: Font
-  Awesome-style packs give every icon its own class and leave `content`
-  empty (`icons/fontawesome/`); ligature-style packs like Material
-  Icons share one class across all icons and put the icon's name in
-  `content` (`icons/material/`). Either way nothing is fetched by this
-  server at render time — it only ever emits a class name and maybe a
-  word of text; the browser fetches the actual font/CSS from
-  `stylesheet`.
-
-Selected per app with `icons: <name>` in the markup (default `builtin`).
+pluggable icon pack (`src/icons.rs`): **`builtin`** (default, two
+inline SVGs, no network) or `icons/<name>/pack.json` (`{"stylesheet":
+"<url>", "icons": {"edit": {"class": "...", "content": "..."}}}` — Font
+Awesome-style or ligature-style like Material Icons both fit). Selected
+with `icons: <name>`.
 
 ## Named queries
 
-A `query <name> { sql: "..." }` block is reusable SQL, referenced by
-name from a `radio`/`popup` item type (`from query <name>`), a `region`
-or `chart` component, or a `report`'s `source: query <name>`. Two
-scopes:
+`query <name> { sql: "..." }` — reusable SQL, referenced from a
+`radio`/`popup` item (`from query <name>`), a `region`/`chart`
+component, or a `report`'s `source: query <name>`. App-scoped (top of
+`app { }`, visible everywhere) or page-scoped (visible only there,
+shadowing an app-scoped name).
 
-- Declared at the top of `app { }`: visible from every page.
-- Declared inside a `page { }` block: visible only there, shadowing an
-  app-scoped query of the same name.
+`:name` bind markers (a literal `::` cast is left alone) become real
+bind parameters, never interpolation. Values come from the page's
+query-string params, plus — when editing a row — that row's own
+field values. A report's `link: <field> -> page <Name> (field: param)`
+is how a value crosses pages, forwarding it as `?param=...` for the
+target page's queries to read back as `:param`.
 
-`sql` can contain `:name` bind markers (a literal `::` Postgres cast is
-left alone, so ordinary casts in hand-written SQL are never mistaken for
-one). Every marker becomes a genuine bind parameter — never string
-interpolation. Bind values come from a page's incoming query-string
-parameters, plus — when editing/viewing one row — that row's own field
-values (query-string wins on conflict). That's also how a value on one
-page reaches a query on another: a report's `link: <field> -> page
-<Name> (field: param)` forwards a row's column as `?param=...` on the
-target page's URL, where its named queries can read it as `:param`. The
-"other tasks with the same priority" region above demonstrates this —
-try changing the forwarded `?priority=` in the URL and the region's
-results change with it, independent of the row actually being viewed.
+**Binds are typed automatically from the schema**, APEX-style but not
+hand-declared: write `:project_id`, not `:project_id::integer`.
+`meta::compile_named_query` asks Postgres's own `Describe` what type
+each bind needs to be (fresh every load — startup or `/admin/reload`),
+so schema drift (`alter column ... type bigint`) is picked up
+automatically or rejected loudly at sync time, never silently wrong at
+runtime. An explicit `:name::type` cast still works (a redundant no-op
+under the automatic one).
 
-**Bind items are typed automatically — APEX-style, but schema-derived
-rather than hand-declared.** Write `:project_id`, not
-`:project_id::integer`: `meta::compile_named_query` runs the query
-through Postgres's own `Describe` (the same mechanism the wire protocol
-already uses to figure out what type an unadorned `$1` needs to be) and
-casts each bind to whatever it comes back with — `$1::INT4`,
-`$2::BOOL`, `$3::TIMESTAMPTZ`, whatever the actual column is, chosen
-fresh every time the app loads (startup, or `/admin/reload`). This is
-deliberately *not* a type you declare in markup: a hand-typed `bind
-project_id: integer` would go stale in exactly the same silent way a
-hand-written `::integer` cast does the moment someone runs `alter table
-... alter column project_id type bigint` outside pgapp entirely — it'd
-just be the staleness relocated, not fixed. Asking Postgres fresh at
-every load means schema drift is either picked up automatically (the
-compiled cast changes to match) or rejected loudly right there, before
-any request ever sees it — never silently wrong at runtime. A bind
-whose type genuinely can't be inferred (compared against nothing, or
-against two incompatible columns with no disambiguating cast) fails
-`sync`/`reload` with Postgres's own error message; an explicit
-`:name::type` cast, the old style, still works fine as a manual
-override — it's just a redundant no-op layered under the automatic one.
-
-`radio`/`popup` queries must alias their columns `value` and, optionally,
-`label` (defaulting to `value` if omitted) — e.g. `select distinct
-assignee as value from ...`. A `report`'s `source: query <name>` needs
-an `id` column plus whatever the report's `columns` reference by name;
-writes (create/update/delete) still always target the underlying
-entity by id, regardless of what the report itself selects. A `region`
-has no column requirements — it renders whatever the query returns. A
-`chart` needs whatever columns its `x`/`y` name.
-
-Query SQL isn't translated from logical entity names — it references
-the entity's real physical table (`pgapp_data.<app slug>_<entity
-slug>`, printed at startup for each page). This also means query results
-are decoded generically (via Postgres's `to_jsonb`) rather than through
-the same typed pipeline as entity-bound CRUD, so there's no column-type
-checking on a query's own SELECT list beyond what Postgres itself
-enforces.
+`radio`/`popup` queries alias columns `value` and optionally `label`
+(defaults to `value`). A `report`'s `source:` query needs an `id`
+column plus whatever `columns` reference. A `region` has no
+requirements. A `chart` needs whatever `x`/`y` name. Query SQL
+references the entity's real physical table
+(`pgapp_data.<app>_<entity>`, printed at startup) and is decoded
+generically via `to_jsonb`, so there's no compile-time column-type
+checking beyond what Postgres itself enforces.
 
 ## Authentication & authorization
 
-Opt in per app with an `auth { }` block (the block is empty today,
-reserved for future options). With it present:
+Opt in with an `auth { }` block:
 
-- **Every page requires a signed-in user.** Unauthenticated requests
-  redirect to `/login`. Only the login flow and static assets
-  (`/theme.css`, `/runtime.js`, `/chart-lib.js`, `/assets/*`) stay
-  public.
-- **First run bootstraps the admin.** When the app has no users, the
-  login page becomes a one-time "create the admin account" form
-  (`POST /setup`, which refuses the moment any user exists). After
-  that, admins manage accounts on the built-in `/users` page — users
-  are deliberately *not* declarable in markup, because passwords don't
-  belong in a source file.
-- **Passwords are argon2id hashes**, never plaintext, in
-  `pgapp_meta.users`. Sessions are server-side rows in
-  `pgapp_meta.sessions`; the browser holds only a random token in an
-  HttpOnly `SameSite=Lax` cookie, so any session can be revoked by
-  deleting its row. Sign out deletes the row, not just the cookie.
-- **Roles gate pages.** A user has one `role` (a free-form string —
-  `admin`, `support`, whatever your pages need). A page declaring
-  `requires: support` is visible only to users holding that role;
-  `admin` passes every check. Reads and writes through the page are
-  gated alike (a 403 on the page is a 403 on its create/update/delete
-  routes too). Pages without `requires:` need any signed-in user.
+- Every page requires a signed-in user; only `/login` and static
+  assets stay public.
+- First run bootstraps the admin (`POST /setup`, one-time); after that,
+  admins manage accounts on the built-in `/users` page. Users are never
+  declared in markup.
+- Passwords are argon2id hashes in `pgapp_meta.users`; sessions are
+  server-side rows in `pgapp_meta.sessions` (an HttpOnly, `SameSite=Lax`
+  cookie holds only a random token — revoking a session means deleting
+  its row).
+- A user has one `role` (free-form string). `requires: <role>` gates a
+  page (and its create/update/delete routes) to that role or admin.
 
-Apps without an `auth { }` block skip all of this and stay public —
-`examples/todo.pgapp` runs open, `examples/helpdesk.pgapp` runs behind
-a login with an admin-only Agents page.
+Without `auth { }`, an app stays fully public
+(`examples/todo.pgapp`); `examples/helpdesk.pgapp` runs behind a login
+with an admin-only Agents page.
 
 ## Runtime JS
 
-`GET /runtime.js` isn't a static file: it's a row in
-`pgapp_meta.app_runtime_js`, seeded from a built-in default (`src/runtime.js`)
-the first time an app is synced and left alone after that — so it's
-metadata like everything else, editable in the database without
-touching the binary. It's auto-linked into every rendered page and
-defines `window.pgapp.getItem(name)` / `.setItem(name, value)`, which
-work the same way regardless of whether `name` is a plain input, a
-checkbox, a radio group, or a popup LOV's hidden input. The popup LOV's
-"pick a value" buttons call `pgapp.setItem(...)` rather than touching
-the DOM directly — capturing/setting an item's value by a method call is
-the point, so any future custom action code has one consistent API.
+`GET /runtime.js` is a row in `pgapp_meta.app_runtime_js`, seeded from
+`src/runtime.js` on first sync and left alone after — editable in the
+database without touching the binary. Defines
+`window.pgapp.getItem(name)`/`.setItem(name, value)`, working the same
+regardless of whether `name` is a plain input, checkbox, radio group,
+or popup's hidden input. Also owns `pgapp.alert`/`pgapp.confirm`
+(promise-based, themed `.pgapp-dialog-*` overlays instead of native
+browser dialogs — any `<form data-pgapp-confirm="...">` uses this
+automatically), the dynamic-action dispatcher, and the popup search
+filter.
 
-It also owns three UI behaviors that are deliberately *not* left to the
-browser's native, unstyleable dialogs:
-
-- `pgapp.alert(message)` / `pgapp.confirm(message)` — promise-based, and
-  rendered as a themed `.pgapp-dialog-*` overlay instead of
-  `window.alert`/`window.confirm`. Any `<form data-pgapp-confirm="...">`
-  (used by every delete button) is intercepted automatically: submit is
-  paused, the dialog shown, and the form actually submits only once the
-  user confirms.
-- Dynamic actions' `refresh` op and the nested-nav click-toggle (below).
-
-Since it's a database row rather than a static asset, editing it
-directly in the database takes effect the moment the next request for
-`/runtime.js` comes in — no restart needed. If you change the *built-in
-default* in `src/runtime.js` and want an existing app to pick it up,
-delete its row from `pgapp_meta.app_runtime_js` and hit `/admin/reload`
-(see "Hot reload" below); sync only seeds that row on an app's first
-sync, so with the row still present, reload alone won't touch it.
+Since it's a DB row, editing it directly takes effect on the next
+request — no restart. To pick up a newer *built-in* default after
+changing `src/runtime.js`, delete the app's `pgapp_meta.app_runtime_js`
+row and hit `/admin/reload` (sync only seeds that row once).
 
 ## Hot reload
 
-Editing markup used to mean stopping and re-running the binary — the
-`.pgapp` file was parsed, synced, and loaded into memory exactly once,
-in `main()`, before the server ever started listening.
-`GET`/`POST /admin/reload` replaces that with an in-process resync:
+`GET`/`POST /admin/reload` re-syncs the markup file into `pgapp_meta`
+and reloads the running app in place — no restart. `AppState` splits
+fields that can't change without a rebuild (`pool`, `item_types`,
+`actions`) from everything markup-derived (`app`, `theme`,
+`runtime_js`, `icons`, `chart_lib`), the latter behind
+`RwLock<Arc<AppData>>`; each request snapshots it once at the top, so a
+concurrent reload can't mix a new `RuntimeApp` with a stale `Theme`. A
+failed reload (bad markup) never swaps in — the old snapshot keeps
+serving, and the error shows on the reload page. The page itself offers
+an editable textarea (single-file apps) or "reload from disk"
+(directory apps), gated to the `admin` role when auth is enabled.
 
-- `AppState` splits its fields into the ones that come from the pool
-  connection or compiled-in Rust code (`pool`, `item_types`, `actions`
-  — these can't change without a rebuild) and everything markup-derived
-  (`app`, `theme`, `runtime_js`, `icons`, `chart_lib`), bundled into an
-  `AppData` behind a `RwLock<Arc<AppData>>`.
-- `AppState::reload()` re-runs the exact same
-  `source::load` → `meta::sync_app` → `meta::load_app` (plus
-  `load_runtime_js`/`theme::load`/`icons::load`/`chart_lib::load`)
-  pipeline `main()` runs at startup, then swaps the result in with one
-  atomic pointer write. Every handler takes a snapshot (`state.data()`,
-  an `Arc` clone) at the top of the request and uses only that for the
-  rest of it — a concurrent reload can never leave one request looking
-  at a new `RuntimeApp` paired with a stale `Theme`.
-- If parsing, syncing, or loading fails partway (bad markup, a
-  validation error), the swap never happens — the old snapshot keeps
-  being served, and the error comes back as `?error=...` on the reload
-  page instead of taking the app down.
-- The `/admin/reload` page itself shows the current markup file in an
-  editable textarea (single-file apps only — a directory-based app,
-  see "Modular apps" below, has no one file to hand back to the
-  browser and can only be re-read from disk after editing it there),
-  with **Save & reload** and **Reload from disk** buttons.
-- Access follows the same "everyone's an admin" fallback the rest of
-  the app uses when there's no `auth { }` block; with auth enabled it's
-  restricted to the `admin` role, same as `/users`.
-
-What this doesn't change: `item_types`, `actions`, and the HTTP routing
-table itself are Rust code (`src/item_types/`, `src/actions/`,
-`build_router`) — adding a *new* item type or action module is still a
-compile-time change (`cargo build` + restart), since reload only
-re-syncs what markup can express. A new `on <event> of <item> { ... }`
-dynamic action block, a new page, field, or entity, a changed `theme:`/
-`icons:`/`chart_lib:` setting — all of that is a markup change, so
-reload picks it up with no restart.
+Not covered: new item types/actions, or the routing table itself, are
+still Rust code — those need `cargo build` + restart. Markup changes
+(new page/field/entity, a changed `theme:`, a new dynamic action) don't.
 
 ## Report edit/create popup
 
 A `Form` that's a `Report`'s edit/create companion (same entity, same
-page) doesn't render as a block sitting in page flow below the table —
-that pushes the table down and reappears on every load even when nobody
-asked to edit anything. Instead:
-
-- The report gets a **"+ New"** button next to its title.
-- The form renders only when its `edit_<idx>=<id>` or `new_<idx>=1` query
-  flag is present, as a `position: fixed` **non-modal** popup
-  (`.pgapp-form-floating`) — no dimming backdrop, so the report stays
-  visible and usable behind it. A `×` in the corner (and a "Cancel" link)
-  close it.
-- A standalone `Form` with no sibling `Report` on the page is unaffected
-  — it keeps rendering inline, since there's no table for it to sit
-  awkwardly below.
-- Every mutating action (save, delete, run a page action, apply a report
-  filter, save/delete a view) redirects to `#pgapp-c<idx>` — a stable
-  per-component anchor — instead of the bare page URL, so the browser
-  lands back near the component you were just looking at instead of
-  resetting scroll to the top.
+page) renders as a `position: fixed`, non-modal popup
+(`.pgapp-form-floating`) only when its `?edit_<idx>=<id>`/`?new_<idx>=1`
+flag is present — not as a block that pushes the table down on every
+load. The report gets a "+ New" button; the popup has a `×`/Cancel to
+close, with no dimming backdrop so the report stays usable behind it.
+A standalone `Form` (no sibling `Report`) is unaffected. Every mutating
+action redirects to `#pgapp-c<idx>` instead of the bare page URL, so
+scroll position is preserved.
 
 ## Mobile
 
-No per-app work is required for a usable narrow-viewport layout: a
-`<meta name="viewport">` tag, tables wrapped in a horizontally-scrolling
-container instead of blowing out the page width, and each shipped theme
-carries the same `@media (max-width: 640px)` rules (nav wraps, the
-report toolbar stacks, the floating form becomes a near-full-width
-sheet). A custom theme only needs to add its own rules if it wants
-something other than this default behavior.
-
-Nested nav menus (multi-level `nav { ... }` chrome) also gained a
-click-to-toggle caret button next to any item with children, bound by
-`runtime.js`. The old hover-only behavior had two problems: no
-equivalent on touch devices at all, and a hover gap between the parent
-link and the submenu that could close the menu before a cursor reached
-it. The caret works with both mouse and touch; hovering still works too.
+No per-app work required: a viewport meta tag, horizontally-scrolling
+table wrappers, and each shipped theme's `@media (max-width: 640px)`
+rules (nav wraps, report toolbar stacks, floating form becomes a
+near-full-width sheet). Multi-level `nav` also has a click-to-toggle
+caret (touch has no `:hover`), working alongside the existing hover
+behavior.
 
 ## Architecture
 
@@ -810,35 +543,26 @@ it. The caret works with both mouse and touch; hovering still works too.
    Axum router (src/server.rs) ── generic, metadata-driven CRUD + JSON
 ```
 
-Because every SQL identifier (table/column name) used at request time
-comes from `pgapp_meta` — populated only from markup identifiers that
-were already restricted to `[A-Za-z_][A-Za-z0-9_]*` by the lexer — it's
-safe to splice them into generated SQL. All user-supplied *values* are
-always sent as bind parameters, cast in SQL to the field's declared type
-(e.g. `$1::boolean`), since the generic layer doesn't know column types
-at compile time.
-
-A page's components live in one generic table,
-`pgapp_meta.components (id, app_id, page_id, slot, kind, ordinal,
-config jsonb)` — the same "generic JSON config" pattern used for item
-types, extended up to the whole-component level, so adding a new
-component kind never requires a schema change. `config` embeds
-page/entity/query *names* directly (not ids), validated once at sync
-time (mirroring how item kinds are checked against the registry) —
-nothing downstream needs another join to resolve them.
+Every SQL identifier (table/column) used at request time comes from
+`pgapp_meta`, populated only from markup identifiers the lexer already
+restricted to `[A-Za-z_][A-Za-z0-9_]*` — safe to splice into generated
+SQL. All user *values* are always bind parameters, cast to the field's
+declared type. A page's components live in one generic table
+(`pgapp_meta.components (..., kind, config jsonb)`) — the same
+generic-JSON-config pattern item types use, extended to whole
+components, so a new component kind never needs a schema change.
 
 ### Source layout
 
 ```
 src/
-  lib.rs              the library crate every binary below depends on — same modules,
-                      one compile
-  main.rs             the `pgapp` server binary: wires registry, theme, icons, chart lib
-  bin/cargo-pgapp.rs  the `cargo-pgapp` binary: `cargo pgapp` forwards to scaffold::run
+  lib.rs              the library crate every binary below depends on
+  main.rs             the `pgapp` server binary
+  bin/cargo-pgapp.rs  the `cargo-pgapp` binary (`cargo pgapp` -> scaffold::run)
   scaffold.rs         `pgapp new`/`pgapp create` (see "Scaffolding a new app")
   markup.rs           lexer + parser: .pgapp text -> model::AppDef (or a Fragment)
   source.rs           loads a file or merges a directory of .pgapp files into one AppDef
-  model.rs            the parsed-markup types (AppDef, PageDef, ComponentDef, FieldItem, ...)
+  model.rs            parsed-markup types (AppDef, PageDef, ComponentDef, FieldItem, ...)
   html.rs             shared escape/js_escape/url_encode helpers
   theme.rs            theme.css/theme.json loading (see "Theming")
   icons.rs            icon pack loading (see "Icons")
@@ -847,7 +571,7 @@ src/
   item_types.rs       the ItemType trait + registry() (see "Item types")
   item_types/         one file per component: text, readonly, checkbox, radio, popup, slider
   actions.rs          the ServerAction trait + registry() (see "Server-side actions")
-  actions/            one file per module: run_query, log_values
+  actions/            one file per module: run_query, call_function, log_values
   meta.rs             module root: ensure_schema + re-exports
   meta/
     types.rs          the runtime model (RuntimeApp, RuntimePage, RuntimeComponent, Chrome, ...)
@@ -864,133 +588,45 @@ chart-libs/           pluggable chart libraries: canvas-bars/
 
 ## Theming
 
-pgapp doesn't hardcode a look. Every server-rendered element carries one
-of a fixed set of classes — `pgapp-nav`, `pgapp-link`, `pgapp-title`,
-`pgapp-subtitle`, `pgapp-table`, `pgapp-form`, `pgapp-field`,
-`pgapp-label`, `pgapp-input`, `pgapp-select`, `pgapp-btn` (+
-`pgapp-btn-primary` / `pgapp-btn-destructive` / `pgapp-btn-secondary` /
-`pgapp-btn-disabled`), `pgapp-inline-form`, `pgapp-alert` (+
-`pgapp-alert-error`), `pgapp-navbar` (+
-`pgapp-navbar-item` / `pgapp-navbar-label` / `pgapp-navbar-submenu`),
-`pgapp-items`, `pgapp-text`, `pgapp-header`, `pgapp-footer`,
-`pgapp-checkbox`, `pgapp-readonly`, `pgapp-radio-group` (+
-`pgapp-radio-option`), `pgapp-popup` (+ `pgapp-popup-dialog` /
-`pgapp-popup-search` / `pgapp-popup-list` / `pgapp-popup-empty`), `pgapp-region` (+ `pgapp-region-title`),
-`pgapp-report`, `pgapp-form-panel`, `pgapp-editable-table` (+
-`pgapp-editable-row-wrap` / `pgapp-editable-row`), `pgapp-row-actions`,
-`pgapp-pagination`, `pgapp-icon`, `pgapp-chart` (+ `pgapp-chart-svg`) —
-and nothing else. A **theme** is what gives those classes an actual
-appearance. This is the whole contract; anything that satisfies it is a
-valid theme, regardless of what design system it's built on.
+Every server-rendered element carries one of a fixed set of
+`.pgapp-*` classes (`pgapp-nav`, `pgapp-table`, `pgapp-form`,
+`pgapp-field`, `pgapp-input`, `pgapp-btn` + variants, `pgapp-report`,
+`pgapp-chart`, `pgapp-popup` + subparts, `pgapp-region`,
+`pgapp-editable-table`, `pgapp-alert`, `pgapp-pagination`, `pgapp-icon`,
+and a few more — grep `render.rs` for the exhaustive list) and nothing
+else. A **theme** just gives those classes an appearance; that's the
+whole contract.
 
-### Per-component overrides: `attrs (...)`
+**Per-instance overrides**: any component can end with `attrs (id:
+"...", class: "...", data_foo: "bar")` — `id`/`class` are reserved
+(`class` *appends* to the required class, never replacing it), any
+other key becomes an attribute (`_` → `-`). On `form`/`editable_table`,
+`item <field> attrs (...)` does the same one level deeper, for just
+that field's wrapper, independent of (or combined with) an `as <kind>`
+override. Both are pure opt-in — unset, a component/field renders
+exactly as before.
 
-The class list above is *kind*-level — every `report` gets
-`pgapp-report`, every `chart` gets `pgapp-chart`, and so on — which is
-enough for a theme to style a kind consistently, but not enough to
-single out one specific instance (e.g. "make just the Dashboard's
-status chart taller" or "give this one report a JS hook to find it
-by"). Any component can end with a trailing `attrs (...)`:
+A theme is `themes/<name>/theme.css` (required) + `theme.json`
+(optional, `{"label", "description"}`), selected with `theme: <name>`
+(default `shadcn`) — a missing theme refuses startup with a clear
+error.
 
-```
-chart "Tickets by status" from query by_status {
-  type: donut  x: label  y: value
-} attrs (id: "status-chart", class: "pgapp-chart-tall")
+**Shipped**: `shadcn` (default zinc palette, HSL vars, light/dark),
+`plain` (zero design-system assumptions), `vivid` (colorful demo
+theme, used by `examples/helpdesk.pgapp`), `google_m3` (Material
+Design 3 — tonal surfaces, pill buttons, 4px field radius, 28px dialog
+corners; selected as `google_m3` since markup identifiers can't
+contain hyphens).
 
-report "Open backlog" of tickets {
-  columns: subject, priority, agent
-} attrs (data_testid: "backlog-report")
-```
+To add another design system: `themes/<name>/theme.css` + `theme:
+<name>` — no Rust changes.
 
-`id` and `class` are reserved: `id` sets the wrapper tag's `id`
-attribute; `class` is *appended* to the component's own required
-`pgapp-*` class(es), never replacing them, so existing theme selectors
-still match. Every other key becomes a plain attribute on the wrapper
-tag, with `_` rewritten to `-` (grammar identifiers can't contain
-hyphens directly) — `data_testid: "backlog-report"` renders as
-`data-testid="backlog-report"`. Unset entirely, a component renders
-exactly as before — `attrs (...)` is pure opt-in, synced/reloaded the
-same as everything else (see `model::HtmlAttrs`, threaded through
-`meta::sync`/`meta::load` and applied in `render.rs`'s `merged_class`/
-`extra_attrs`).
-
-The same mechanism goes one level deeper on `form`/`editable_table`:
-`item <field> attrs (...)` sets `id`/`class`/attributes on just that
-one field's `<div class="pgapp-field">` wrapper, independently of (and
-combinable with) an `as <kind>` item type override:
-
-```
-editable_table "Support agents" of agents {
-  columns: name, team, active
-  item name attrs (id: "agent-name", class: "pgapp-field-wide")
-}
-```
-
-`as <kind>` and `attrs (...)` are each optional on an `item` line, but
-at least one is required — a bare `item name` with neither sets
-nothing and is a sync-time error. On an `editable_table`, an `id` set
-this way repeats on every row's copy of that field (one row = one
-render of the same field markup), producing duplicate DOM ids — fine
-for `class`/`data-*` hooks, but prefer those over `id` here; `id` is
-unambiguous on a `form`, which renders the field only once.
-
-### The contract
-
-A theme is a directory at `themes/<name>/` containing:
-
-- `theme.css` (required) — styles the `.pgapp-*` classes above however
-  it wants (CSS variables + utility-style rules, plain selectors,
-  whatever the source design system uses). Served at `GET /theme.css`
-  and linked first in `<head>`, before `assets/app.css`.
-- `theme.json` (optional) — `{ "label": "...", "description": "..." }`,
-  human-facing metadata, printed at startup. Doesn't affect rendering.
-
-Select a theme with `theme: <name>` in the app's markup (default:
-`shadcn`) — the app definition owns its look, not the process
-environment. If
-`themes/<name>/theme.css` doesn't exist, the server refuses to start
-with a clear error rather than silently falling back.
-
-### Shipped themes
-
-- `themes/shadcn/` (default) — shadcn/ui's default zinc palette:
-  HSL custom properties (`--background`, `--primary`, `--border`,
-  `--radius`, ...) with light/dark handled via
-  `prefers-color-scheme`.
-- `themes/plain/` — the same classes styled with plain CSS and zero
-  design-system assumptions, proving the contract isn't shadcn-specific.
-- `themes/vivid/` — a colorful demo theme: indigo-to-fuchsia gradients,
-  pill navigation, card surfaces. Used by `examples/helpdesk.pgapp`.
-- `themes/google_m3/` — Material Design 3 (Material You): tonal
-  surface-container cards instead of borders/shadows, pill-shaped
-  filled/tonal buttons, outlined text fields with M3's own 4px field
-  radius, 28px dialog corners, a Google-blue seed palette, light/dark
-  via `prefers-color-scheme`. (Selected as `theme: google_m3` — a
-  markup identifier can't contain a hyphen, hence the underscore.)
-
-To add another design system (Bootstrap, a custom brand kit, ...),
-create `themes/<name>/theme.css` styling the classes above and run with
-`theme: <name>` in the app's markup — `<name>` has to be a valid
-identifier (letters/digits/underscore, no hyphens), since it's parsed
-the same way any other markup identifier is. No Rust changes needed —
-theming is fully decoupled from the framework.
-
-## Running it
-
-Requires a reachable Postgres instance.
-
-```bash
-export DATABASE_URL=postgres://postgres:postgres@localhost:5432/pgapp
-createdb -U postgres pgapp   # if it doesn't exist yet
-
-cargo run                     # serves examples/todo.pgapp on 127.0.0.1:8080
-# or: cargo run -- path/to/your.pgapp
-```
+## Routes
 
 On startup it prints the URL and component kinds for each page, e.g.
 `http://127.0.0.1:8080/Tasks  [report, form, text, region]`.
 
-- `GET  /`                              — redirects to the app's first page (declaration order in the markup)
+- `GET  /`                              — redirects to the app's first page
 - `GET  /:page`                         — renders every component on the page, in order
 - `POST /:page/c/:idx/create`           — create a row (`Form`/`EditableTable` only, by component index)
 - `POST /:page/c/:idx/update/:id`       — update a row
@@ -1003,39 +639,32 @@ On startup it prints the URL and component kinds for each page, e.g.
 - `POST /setup`                         — one-time admin bootstrap; refuses once any user exists
 - `POST /logout`                        — deletes the server-side session
 - `GET  /users` (+ create/delete POSTs) — built-in user management, admin role only
-- `GET  /admin/reload` (+ POST)         — re-syncs the markup file into `pgapp_meta` and reloads the running app, no restart — see "Hot reload"
+- `GET  /admin/reload` (+ POST)         — re-syncs the markup file into `pgapp_meta` and reloads the running app, no restart
 - `GET  /runtime.js`                    — the DB-stored `pgapp` JS runtime
 - `GET  /chart-lib.js`                  — the active pluggable chart library's JS (404 when `chart_lib` is the built-in `inline`)
 
-A `Form` switches into edit mode for one row via `?edit_<n>=<id>` on its
-page's URL (`<n>` = the form's 0-based position on the page); a
-`Report`'s pagination uses `?r<n>_after=`/`?r<n>_before=` (entity-backed)
-or `?r<n>_page=` (query-sourced) the same way — see "Pagination" above.
+A `Form` switches into edit mode via `?edit_<n>=<id>` (`<n>` = its
+0-based position on the page); a `Report`'s pagination uses
+`?r<n>_after=`/`?r<n>_before=` (entity-backed) or `?r<n>_page=`
+(query-sourced) the same way.
 
 ## Scaffolding a new app
 
 `pgapp new`/`pgapp create` generates a minimal, runnable starter app —
 one entity, one page with the classic Report+Form CRUD pattern, a nav
-link to it — instead of starting from a blank file. Two modes:
+link to it:
 
 ```bash
-# Flag-driven: non-interactive, never touches a database, only writes
-# files. Good for scripts/CI.
+# Non-interactive, DB-free — for scripts/CI:
 cargo run -- new "My Project"                    # -> my_project.pgapp
 cargo run -- new Inventory inventory.pgapp        # explicit path
 cargo run -- new Inventory --dir --theme vivid    # a directory scaffold instead
 
-# Interactive, create-react-app style: prompts for whatever's missing
-# (app name, database URL, theme, single file vs. directory), then
-# connects to that database and syncs the new app immediately — the
-# same ensure_schema/sync_app the server runs on every startup — so
-# it's ready to `cargo run` as soon as the prompts finish.
+# Interactive (see "Quickstart" above):
 cargo run -- create
 ```
 
-It's also reachable as a real `cargo` subcommand (`src/bin/cargo-pgapp.rs`,
-sharing all of the above through the `pgapp` library crate — see
-`src/lib.rs`) once that binary is on `PATH`:
+Also reachable as a real `cargo` subcommand once built and on `PATH`:
 
 ```bash
 cargo install --path . --bin cargo-pgapp
@@ -1048,46 +677,30 @@ See `pgapp new --help` for every flag.
 
 - Multi-app routing (`/:app/:page`) instead of one app per process
 - More field types and real relationships (foreign keys) — named
-  queries cover ad hoc joins/filters today, but there's no schema-level
-  concept of one entity referencing another yet
-- A real drag-and-drop builder UI that edits the markup/metadata
-- Multi-step `flow` blocks (server-side actions and client-side
-  dynamic actions exist now; chaining them into declarative multi-step
-  flows with conditions is the next layer)
-- runtime.js is seeded once per app and then owned by the database —
-  picking up a newer built-in seed (e.g. the dynamic-action
-  dispatcher) requires deleting the `pgapp_meta.app_runtime_js` row;
-  a versioned-seed upgrade story is missing
-- Field-level authorization (page-level `requires:` exists; hiding
-  individual columns/fields by role doesn't yet), plus password change/
-  reset flows — today a forgotten password means an admin deletes and
-  recreates the account
-- Login sessions are plain HTTP-compatible (no `Secure` cookie
-  attribute), fine for localhost; a real deployment behind TLS should
-  add it
-- Item type config is currently always flat strings (`serde_json::Value`
-  values are strings even for Slider's numeric-looking `min`/`max`); a
-  component that wanted structured config (nested objects, arrays of
-  objects) would have to encode/decode that itself
-- Migrating existing data tables when field definitions change beyond
-  adding a column: `ensure_data_table` now runs `ADD COLUMN IF NOT
-  EXISTS` for new fields on an existing table (without `NOT NULL`, to
-  avoid breaking on existing rows), but doesn't handle renames, type
-  changes, or drops
-- Separate field lists for create vs. edit forms, so e.g. a `readonly`
-  field with a meaningful default doesn't get nulled out on create
-- Region/LOV resolution shares one `RegionRows` map per request keyed
-  only by query name; a page-scoped query and an app-scoped one (used
-  by header/footer) that happen to share a name on the same request
-  would collide there — rare, and documented rather than guarded against
-- No compile-time or startup-time validation of a named query's SQL
-  beyond the bind-marker scan — a typo in `sql` surfaces as a runtime
-  error the first time that query actually runs
-- A `Report`'s edit/delete row actions only wire up to a `Form` bound to
-  the *same entity on the same page*; a `Report` that should edit
-  through a form on a different page isn't supported yet
-- CSS-class icon packs whose stylesheet is a remote CDN URL (Font
-  Awesome, Material Icons) need outbound network access to actually
-  render glyphs in the browser — the mechanism (class name + stylesheet
-  link) is wired and verified, but a network-restricted environment
-  shows blank icons until that stylesheet loads
+  queries cover ad hoc joins today, but no schema-level entity-to-entity
+  references yet
+- A real drag-and-drop builder UI
+- Multi-step `flow` blocks chaining actions/dynamic actions with
+  conditions
+- runtime.js is seeded once per app; picking up a newer built-in seed
+  needs deleting the `pgapp_meta.app_runtime_js` row — no versioned
+  upgrade story yet
+- Field-level authorization (page-level `requires:` exists, per-column
+  doesn't), plus password reset flows (today an admin deletes/recreates
+  the account)
+- Login sessions have no `Secure` cookie attribute — fine for
+  localhost, add it behind TLS
+- Item type config is always flat strings, even for numeric-looking
+  values (Slider's `min`/`max`)
+- `ensure_data_table` adds columns to an existing table but doesn't
+  handle renames, type changes, or drops
+- Separate create vs. edit field lists (a `readonly` field with a
+  meaningful default doesn't get nulled out on create)
+- `RegionRows` is keyed only by query name per request — a page-scoped
+  and an app-scoped query sharing a name would collide (rare, not
+  guarded against)
+- No validation of a named query's SQL beyond the bind-marker scan — a
+  typo surfaces as a runtime error on first use
+- A `Report`'s row actions only wire to a `Form` on the *same page*
+- CSS-icon packs whose stylesheet is a remote CDN URL need outbound
+  network access to actually render glyphs

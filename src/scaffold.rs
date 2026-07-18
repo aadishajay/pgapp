@@ -164,17 +164,66 @@ async fn run_interactive(parsed: ParsedArgs) -> Result<()> {
 /// every server startup — `ensure_schema` then `sync_app` — so an
 /// interactively-scaffolded app is immediately synced, not just
 /// written to disk.
+/// Connects to `database_url` and runs exactly what `main.rs` runs on
+/// every server startup — `ensure_schema` then `sync_app` — so an
+/// interactively-scaffolded app is immediately synced, not just
+/// written to disk. If the target database itself doesn't exist yet
+/// (the single most common first-run snag for someone who only knows
+/// Postgres, not this project's own setup steps), creates it and
+/// retries once instead of making that a manual `createdb` step.
 async fn provision(target: &str, database_url: &str) -> Result<()> {
     let app_def = crate::source::load(target)?;
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(2)
-        .connect(database_url)
-        .await
-        .with_context(|| format!("failed to connect to '{database_url}'"))?;
+    let pool = match connect(database_url).await {
+        Ok(pool) => pool,
+        Err(e) if is_missing_database_error(&e) => {
+            create_database(database_url).await?;
+            connect(database_url).await.with_context(|| format!("failed to connect to '{database_url}'"))?
+        }
+        Err(e) => return Err(e).with_context(|| format!("failed to connect to '{database_url}'")),
+    };
     crate::meta::ensure_schema(&pool).await?;
     let item_types = crate::item_types::registry();
     let action_registry = crate::actions::registry();
     crate::meta::sync_app(&pool, &app_def, &item_types, &action_registry).await?;
+    Ok(())
+}
+
+async fn connect(database_url: &str) -> sqlx::Result<sqlx::PgPool> {
+    sqlx::postgres::PgPoolOptions::new().max_connections(2).connect(database_url).await
+}
+
+/// Postgres error code 3D000 = `invalid_catalog_name`, raised when the
+/// named database doesn't exist — the one connection failure worth
+/// auto-recovering from; anything else (bad host, bad credentials) is
+/// a real problem the user needs to see, not paper over.
+fn is_missing_database_error(e: &sqlx::Error) -> bool {
+    e.as_database_error().and_then(|db_err| db_err.code()).as_deref() == Some("3D000")
+}
+
+/// Connects to the same server's `postgres` maintenance database and
+/// issues `CREATE DATABASE` for whatever database `database_url`
+/// names — the one piece of setup a plain `cargo run`/`pgapp create`
+/// can't do for itself otherwise, since a brand new Postgres install
+/// only ever has `postgres`/template databases to begin with.
+async fn create_database(database_url: &str) -> Result<()> {
+    let target_opts: sqlx::postgres::PgConnectOptions =
+        database_url.parse().with_context(|| format!("'{database_url}' isn't a valid Postgres URL"))?;
+    let db_name = target_opts
+        .get_database()
+        .ok_or_else(|| anyhow::anyhow!("'{database_url}' doesn't name a database to create"))?
+        .to_string();
+    let maintenance_opts = target_opts.database("postgres");
+
+    println!("Database '{db_name}' doesn't exist yet — creating it...");
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(maintenance_opts)
+        .await
+        .context("failed to connect to the 'postgres' maintenance database to create it")?;
+    sqlx::query(&format!("create database \"{}\"", db_name.replace('"', "\"\"")))
+        .execute(&pool)
+        .await
+        .with_context(|| format!("failed to create database '{db_name}'"))?;
     Ok(())
 }
 
