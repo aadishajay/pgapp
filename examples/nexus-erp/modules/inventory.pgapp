@@ -1,0 +1,244 @@
+# Inventory module: entities + list/detail/quick-edit pages.
+
+entity "products" {
+  field id: id
+  field product_name: text required
+  field status: text default Active
+  field unit_price: integer default 0
+  field is_taxable: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query products_names {
+  sql: "select product_name as value from pgapp_data.nexus_erp_products order by 1"
+}
+
+entity "categories" {
+  field id: id
+  field category_name: text required
+  field status: text default Active
+  field sort_order: integer default 0
+  field is_featured: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query categories_names {
+  sql: "select category_name as value from pgapp_data.nexus_erp_categories order by 1"
+}
+
+entity "warehouses" {
+  field id: id
+  field warehouse_name: text required
+  field status: text default Operational
+  field capacity_units: integer default 0
+  field is_primary: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query warehouses_names {
+  sql: "select warehouse_name as value from pgapp_data.nexus_erp_warehouses order by 1"
+}
+
+entity "stock_levels" {
+  field id: id
+  field sku: text required
+  field status: text default InStock
+  field quantity_on_hand: integer default 0
+  field needs_reorder: boolean default false
+  field product_name: text
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query stock_levels_names {
+  sql: "select sku as value from pgapp_data.nexus_erp_stock_levels order by 1"
+}
+
+entity "stock_movements" {
+  field id: id
+  field movement_reference: text required
+  field status: text default Inbound
+  field quantity_moved: integer default 0
+  field is_approved: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query stock_movements_names {
+  sql: "select movement_reference as value from pgapp_data.nexus_erp_stock_movements order by 1"
+}
+
+page "Products" {
+  text "Inventory / Products — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Products" of products {
+    columns: product_name, status, unit_price, is_taxable, created_at
+    link: product_name -> page ProductsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit products" of products {
+    fields: product_name, status, unit_price, is_taxable, notes
+    item status as radio ("Active", "Discontinued", "Backordered")
+    item notes as readonly
+  }
+
+  link "Quick edit products" -> page ProductsQuickEdit
+}
+
+query products_peer_status {
+  sql: "select id, product_name, status, unit_price from pgapp_data.nexus_erp_products
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "ProductsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Products report's linked column."
+  region "Other products with the same status" from query products_peer_status
+  link "Back to products" -> page Products
+}
+
+page "ProductsQuickEdit" {
+  editable_table "Products quick edit" of products {
+    columns: product_name, status, is_taxable
+  }
+}
+
+page "Categories" {
+  text "Inventory / Categories — 2 statuses tracked. Click a row to see peers with the same status."
+  report "Categories" of categories {
+    columns: category_name, status, sort_order, is_featured, created_at
+    link: category_name -> page CategoriesDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit categories" of categories {
+    fields: category_name, status, sort_order, is_featured, notes
+    item status as radio ("Active", "Inactive")
+    item notes as readonly
+  }
+
+  link "Quick edit categories" -> page CategoriesQuickEdit
+}
+
+query categories_peer_status {
+  sql: "select id, category_name, status, sort_order from pgapp_data.nexus_erp_categories
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "CategoriesDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Categories report's linked column."
+  region "Other categories with the same status" from query categories_peer_status
+  link "Back to categories" -> page Categories
+}
+
+page "CategoriesQuickEdit" {
+  editable_table "Categories quick edit" of categories {
+    columns: category_name, status, is_featured
+  }
+}
+
+page "Warehouses" {
+  text "Inventory / Warehouses — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Warehouses" of warehouses {
+    columns: warehouse_name, status, capacity_units, is_primary, created_at
+    link: warehouse_name -> page WarehousesDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit warehouses" of warehouses {
+    fields: warehouse_name, status, capacity_units, is_primary, notes
+    item status as radio ("Operational", "Maintenance", "Closed")
+    item notes as readonly
+  }
+
+  link "Quick edit warehouses" -> page WarehousesQuickEdit
+}
+
+query warehouses_peer_status {
+  sql: "select id, warehouse_name, status, capacity_units from pgapp_data.nexus_erp_warehouses
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "WarehousesDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Warehouses report's linked column."
+  region "Other warehouses with the same status" from query warehouses_peer_status
+  link "Back to warehouses" -> page Warehouses
+}
+
+page "WarehousesQuickEdit" {
+  editable_table "Warehouses quick edit" of warehouses {
+    columns: warehouse_name, status, is_primary
+  }
+}
+
+page "StockLevels" {
+  text "Inventory / Stock levels — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Stock levels" of stock_levels {
+    columns: sku, status, quantity_on_hand, needs_reorder, created_at
+    link: sku -> page StockLevelsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit stock levels" of stock_levels {
+    fields: sku, status, quantity_on_hand, needs_reorder, product_name, notes
+    item status as radio ("InStock", "LowStock", "OutOfStock")
+    item product_name as popup from query products_names
+    item notes as readonly
+  }
+
+  link "Quick edit stock levels" -> page StockLevelsQuickEdit
+}
+
+query stock_levels_peer_status {
+  sql: "select id, sku, status, quantity_on_hand from pgapp_data.nexus_erp_stock_levels
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "StockLevelsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Stock levels report's linked column."
+  region "Other stock levels with the same status" from query stock_levels_peer_status
+  link "Back to stock levels" -> page StockLevels
+}
+
+page "StockLevelsQuickEdit" {
+  editable_table "Stock levels quick edit" of stock_levels {
+    columns: sku, status, needs_reorder
+  }
+}
+
+page "StockMovements" {
+  text "Inventory / Stock movements — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Stock movements" of stock_movements {
+    columns: movement_reference, status, quantity_moved, is_approved, created_at
+    link: movement_reference -> page StockMovementsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit stock movements" of stock_movements {
+    fields: movement_reference, status, quantity_moved, is_approved, notes
+    item status as radio ("Inbound", "Outbound", "Transfer", "Adjustment")
+    item notes as readonly
+  }
+
+  link "Quick edit stock movements" -> page StockMovementsQuickEdit
+}
+
+query stock_movements_peer_status {
+  sql: "select id, movement_reference, status, quantity_moved from pgapp_data.nexus_erp_stock_movements
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "StockMovementsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Stock movements report's linked column."
+  region "Other stock movements with the same status" from query stock_movements_peer_status
+  link "Back to stock movements" -> page StockMovements
+}
+
+page "StockMovementsQuickEdit" {
+  editable_table "Stock movements quick edit" of stock_movements {
+    columns: movement_reference, status, is_approved
+  }
+}
+

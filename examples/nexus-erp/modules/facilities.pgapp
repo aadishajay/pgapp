@@ -1,0 +1,244 @@
+# Facilities module: entities + list/detail/quick-edit pages.
+
+entity "assets" {
+  field id: id
+  field asset_name: text required
+  field status: text default InUse
+  field asset_value: integer default 0
+  field is_leased: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query assets_names {
+  sql: "select asset_name as value from pgapp_data.nexus_erp_assets order by 1"
+}
+
+entity "locations" {
+  field id: id
+  field location_name: text required
+  field status: text default Active
+  field square_footage: integer default 0
+  field is_headquarters: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query locations_names {
+  sql: "select location_name as value from pgapp_data.nexus_erp_locations order by 1"
+}
+
+entity "contracts" {
+  field id: id
+  field contract_name: text required
+  field status: text default Draft
+  field contract_value: integer default 0
+  field is_auto_renew: boolean default false
+  field location_name: text
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query contracts_names {
+  sql: "select contract_name as value from pgapp_data.nexus_erp_contracts order by 1"
+}
+
+entity "maintenance_requests" {
+  field id: id
+  field request_reference: text required
+  field status: text default Submitted
+  field priority_level: integer default 0
+  field is_urgent: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query maintenance_requests_names {
+  sql: "select request_reference as value from pgapp_data.nexus_erp_maintenance_requests order by 1"
+}
+
+entity "reservations" {
+  field id: id
+  field reservation_reference: text required
+  field status: text default Requested
+  field attendee_count: integer default 0
+  field is_recurring: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query reservations_names {
+  sql: "select reservation_reference as value from pgapp_data.nexus_erp_reservations order by 1"
+}
+
+page "Assets" {
+  text "Facilities / Assets — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Assets" of assets {
+    columns: asset_name, status, asset_value, is_leased, created_at
+    link: asset_name -> page AssetsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit assets" of assets {
+    fields: asset_name, status, asset_value, is_leased, notes
+    item status as radio ("InUse", "InStorage", "Disposed")
+    item notes as readonly
+  }
+
+  link "Quick edit assets" -> page AssetsQuickEdit
+}
+
+query assets_peer_status {
+  sql: "select id, asset_name, status, asset_value from pgapp_data.nexus_erp_assets
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "AssetsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Assets report's linked column."
+  region "Other assets with the same status" from query assets_peer_status
+  link "Back to assets" -> page Assets
+}
+
+page "AssetsQuickEdit" {
+  editable_table "Assets quick edit" of assets {
+    columns: asset_name, status, is_leased
+  }
+}
+
+page "Locations" {
+  text "Facilities / Locations — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Locations" of locations {
+    columns: location_name, status, square_footage, is_headquarters, created_at
+    link: location_name -> page LocationsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit locations" of locations {
+    fields: location_name, status, square_footage, is_headquarters, notes
+    item status as radio ("Active", "Closed", "Renovating")
+    item notes as readonly
+  }
+
+  link "Quick edit locations" -> page LocationsQuickEdit
+}
+
+query locations_peer_status {
+  sql: "select id, location_name, status, square_footage from pgapp_data.nexus_erp_locations
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "LocationsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Locations report's linked column."
+  region "Other locations with the same status" from query locations_peer_status
+  link "Back to locations" -> page Locations
+}
+
+page "LocationsQuickEdit" {
+  editable_table "Locations quick edit" of locations {
+    columns: location_name, status, is_headquarters
+  }
+}
+
+page "Contracts" {
+  text "Facilities / Contracts — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Contracts" of contracts {
+    columns: contract_name, status, contract_value, is_auto_renew, created_at
+    link: contract_name -> page ContractsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit contracts" of contracts {
+    fields: contract_name, status, contract_value, is_auto_renew, location_name, notes
+    item status as radio ("Draft", "Active", "Expired", "Terminated")
+    item location_name as popup from query locations_names
+    item notes as readonly
+  }
+
+  link "Quick edit contracts" -> page ContractsQuickEdit
+}
+
+query contracts_peer_status {
+  sql: "select id, contract_name, status, contract_value from pgapp_data.nexus_erp_contracts
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "ContractsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Contracts report's linked column."
+  region "Other contracts with the same status" from query contracts_peer_status
+  link "Back to contracts" -> page Contracts
+}
+
+page "ContractsQuickEdit" {
+  editable_table "Contracts quick edit" of contracts {
+    columns: contract_name, status, is_auto_renew
+  }
+}
+
+page "MaintenanceRequests" {
+  text "Facilities / Maintenance requests — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Maintenance requests" of maintenance_requests {
+    columns: request_reference, status, priority_level, is_urgent, created_at
+    link: request_reference -> page MaintenanceRequestsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit maintenance requests" of maintenance_requests {
+    fields: request_reference, status, priority_level, is_urgent, notes
+    item status as radio ("Submitted", "Scheduled", "Completed")
+    item notes as readonly
+  }
+
+  link "Quick edit maintenance requests" -> page MaintenanceRequestsQuickEdit
+}
+
+query maintenance_requests_peer_status {
+  sql: "select id, request_reference, status, priority_level from pgapp_data.nexus_erp_maintenance_requests
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "MaintenanceRequestsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Maintenance requests report's linked column."
+  region "Other maintenance requests with the same status" from query maintenance_requests_peer_status
+  link "Back to maintenance requests" -> page MaintenanceRequests
+}
+
+page "MaintenanceRequestsQuickEdit" {
+  editable_table "Maintenance requests quick edit" of maintenance_requests {
+    columns: request_reference, status, is_urgent
+  }
+}
+
+page "Reservations" {
+  text "Facilities / Reservations — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Reservations" of reservations {
+    columns: reservation_reference, status, attendee_count, is_recurring, created_at
+    link: reservation_reference -> page ReservationsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit reservations" of reservations {
+    fields: reservation_reference, status, attendee_count, is_recurring, notes
+    item status as radio ("Requested", "Confirmed", "Cancelled")
+    item notes as readonly
+  }
+
+  link "Quick edit reservations" -> page ReservationsQuickEdit
+}
+
+query reservations_peer_status {
+  sql: "select id, reservation_reference, status, attendee_count from pgapp_data.nexus_erp_reservations
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "ReservationsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Reservations report's linked column."
+  region "Other reservations with the same status" from query reservations_peer_status
+  link "Back to reservations" -> page Reservations
+}
+
+page "ReservationsQuickEdit" {
+  editable_table "Reservations quick edit" of reservations {
+    columns: reservation_reference, status, is_recurring
+  }
+}
+

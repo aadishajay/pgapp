@@ -1,0 +1,33 @@
+# HR dashboard: status split + recent activity for the module's two lead entities.
+
+query hr_hero_by_status {
+  sql: "select status as label, count(*) as value from pgapp_data.nexus_erp_employees group by status order by 1"
+}
+
+query hr_second_by_status {
+  sql: "select status as label, count(*) as value from pgapp_data.nexus_erp_departments group by status order by 1"
+}
+
+query hr_hero_recent {
+  sql: "select id, full_name, status from pgapp_data.nexus_erp_employees order by id desc limit 6"
+}
+
+query hr_second_recent {
+  sql: "select id, department_name, status from pgapp_data.nexus_erp_departments order by id desc limit 6"
+}
+
+page "HRDashboard" {
+  text "HR at a glance: Employees and Departments status split and latest activity."
+  chart "Employees by status" from query hr_hero_by_status {
+    type: bar
+    x: label
+    y: value
+  }
+  chart "Departments by status" from query hr_second_by_status {
+    type: donut
+    x: label
+    y: value
+  }
+  region "Latest employees" from query hr_hero_recent
+  region "Latest departments" from query hr_second_recent
+}

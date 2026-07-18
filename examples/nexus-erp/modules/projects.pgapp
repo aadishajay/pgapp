@@ -1,0 +1,244 @@
+# Projects module: entities + list/detail/quick-edit pages.
+
+entity "projects" {
+  field id: id
+  field project_name: text required
+  field status: text default Planning
+  field budget_allocated: integer default 0
+  field is_at_risk: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query projects_names {
+  sql: "select project_name as value from pgapp_data.nexus_erp_projects order by 1"
+}
+
+entity "tasks" {
+  field id: id
+  field task_name: text required
+  field status: text default Todo
+  field estimated_hours: integer default 0
+  field is_blocked: boolean default false
+  field project_name: text
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query tasks_names {
+  sql: "select task_name as value from pgapp_data.nexus_erp_tasks order by 1"
+}
+
+entity "milestones" {
+  field id: id
+  field milestone_name: text required
+  field status: text default Upcoming
+  field completion_percent: integer default 0
+  field is_critical: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query milestones_names {
+  sql: "select milestone_name as value from pgapp_data.nexus_erp_milestones order by 1"
+}
+
+entity "timesheets" {
+  field id: id
+  field timesheet_reference: text required
+  field status: text default Draft
+  field hours_logged: integer default 0
+  field is_overtime: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query timesheets_names {
+  sql: "select timesheet_reference as value from pgapp_data.nexus_erp_timesheets order by 1"
+}
+
+entity "project_risks" {
+  field id: id
+  field risk_name: text required
+  field status: text default Identified
+  field impact_score: integer default 0
+  field is_high_priority: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query project_risks_names {
+  sql: "select risk_name as value from pgapp_data.nexus_erp_project_risks order by 1"
+}
+
+page "Projects" {
+  text "Projects / Projects — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Projects" of projects {
+    columns: project_name, status, budget_allocated, is_at_risk, created_at
+    link: project_name -> page ProjectsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit projects" of projects {
+    fields: project_name, status, budget_allocated, is_at_risk, notes
+    item status as radio ("Planning", "Active", "OnHold", "Completed")
+    item notes as readonly
+  }
+
+  link "Quick edit projects" -> page ProjectsQuickEdit
+}
+
+query projects_peer_status {
+  sql: "select id, project_name, status, budget_allocated from pgapp_data.nexus_erp_projects
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "ProjectsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Projects report's linked column."
+  region "Other projects with the same status" from query projects_peer_status
+  link "Back to projects" -> page Projects
+}
+
+page "ProjectsQuickEdit" {
+  editable_table "Projects quick edit" of projects {
+    columns: project_name, status, is_at_risk
+  }
+}
+
+page "Tasks" {
+  text "Projects / Tasks — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Tasks" of tasks {
+    columns: task_name, status, estimated_hours, is_blocked, created_at
+    link: task_name -> page TasksDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit tasks" of tasks {
+    fields: task_name, status, estimated_hours, is_blocked, project_name, notes
+    item status as radio ("Todo", "InProgress", "Review", "Done")
+    item project_name as popup from query projects_names
+    item notes as readonly
+  }
+
+  link "Quick edit tasks" -> page TasksQuickEdit
+}
+
+query tasks_peer_status {
+  sql: "select id, task_name, status, estimated_hours from pgapp_data.nexus_erp_tasks
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "TasksDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Tasks report's linked column."
+  region "Other tasks with the same status" from query tasks_peer_status
+  link "Back to tasks" -> page Tasks
+}
+
+page "TasksQuickEdit" {
+  editable_table "Tasks quick edit" of tasks {
+    columns: task_name, status, is_blocked
+  }
+}
+
+page "Milestones" {
+  text "Projects / Milestones — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Milestones" of milestones {
+    columns: milestone_name, status, completion_percent, is_critical, created_at
+    link: milestone_name -> page MilestonesDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit milestones" of milestones {
+    fields: milestone_name, status, completion_percent, is_critical, notes
+    item status as radio ("Upcoming", "Reached", "Missed")
+    item notes as readonly
+  }
+
+  link "Quick edit milestones" -> page MilestonesQuickEdit
+}
+
+query milestones_peer_status {
+  sql: "select id, milestone_name, status, completion_percent from pgapp_data.nexus_erp_milestones
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "MilestonesDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Milestones report's linked column."
+  region "Other milestones with the same status" from query milestones_peer_status
+  link "Back to milestones" -> page Milestones
+}
+
+page "MilestonesQuickEdit" {
+  editable_table "Milestones quick edit" of milestones {
+    columns: milestone_name, status, is_critical
+  }
+}
+
+page "Timesheets" {
+  text "Projects / Timesheets — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Timesheets" of timesheets {
+    columns: timesheet_reference, status, hours_logged, is_overtime, created_at
+    link: timesheet_reference -> page TimesheetsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit timesheets" of timesheets {
+    fields: timesheet_reference, status, hours_logged, is_overtime, notes
+    item status as radio ("Draft", "Submitted", "Approved")
+    item notes as readonly
+  }
+
+  link "Quick edit timesheets" -> page TimesheetsQuickEdit
+}
+
+query timesheets_peer_status {
+  sql: "select id, timesheet_reference, status, hours_logged from pgapp_data.nexus_erp_timesheets
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "TimesheetsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Timesheets report's linked column."
+  region "Other timesheets with the same status" from query timesheets_peer_status
+  link "Back to timesheets" -> page Timesheets
+}
+
+page "TimesheetsQuickEdit" {
+  editable_table "Timesheets quick edit" of timesheets {
+    columns: timesheet_reference, status, is_overtime
+  }
+}
+
+page "ProjectRisks" {
+  text "Projects / Project risks — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Project risks" of project_risks {
+    columns: risk_name, status, impact_score, is_high_priority, created_at
+    link: risk_name -> page ProjectRisksDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit project risks" of project_risks {
+    fields: risk_name, status, impact_score, is_high_priority, notes
+    item status as radio ("Identified", "Mitigating", "Resolved", "Escalated")
+    item notes as readonly
+  }
+
+  link "Quick edit project risks" -> page ProjectRisksQuickEdit
+}
+
+query project_risks_peer_status {
+  sql: "select id, risk_name, status, impact_score from pgapp_data.nexus_erp_project_risks
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "ProjectRisksDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Project risks report's linked column."
+  region "Other project risks with the same status" from query project_risks_peer_status
+  link "Back to project risks" -> page ProjectRisks
+}
+
+page "ProjectRisksQuickEdit" {
+  editable_table "Project risks quick edit" of project_risks {
+    columns: risk_name, status, is_high_priority
+  }
+}
+

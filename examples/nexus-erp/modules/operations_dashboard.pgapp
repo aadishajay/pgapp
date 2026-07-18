@@ -1,0 +1,33 @@
+# Operations dashboard: status split + recent activity for the module's two lead entities.
+
+query operations_hero_by_status {
+  sql: "select status as label, count(*) as value from pgapp_data.nexus_erp_work_orders group by status order by 1"
+}
+
+query operations_second_by_status {
+  sql: "select status as label, count(*) as value from pgapp_data.nexus_erp_boms group by status order by 1"
+}
+
+query operations_hero_recent {
+  sql: "select id, work_order_number, status from pgapp_data.nexus_erp_work_orders order by id desc limit 6"
+}
+
+query operations_second_recent {
+  sql: "select id, bom_name, status from pgapp_data.nexus_erp_boms order by id desc limit 6"
+}
+
+page "OperationsDashboard" {
+  text "Operations at a glance: Work orders and BOMs status split and latest activity."
+  chart "Work orders by status" from query operations_hero_by_status {
+    type: bar
+    x: label
+    y: value
+  }
+  chart "BOMs by status" from query operations_second_by_status {
+    type: donut
+    x: label
+    y: value
+  }
+  region "Latest work orders" from query operations_hero_recent
+  region "Latest boms" from query operations_second_recent
+}

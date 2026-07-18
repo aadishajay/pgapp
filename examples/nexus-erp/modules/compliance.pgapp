@@ -1,0 +1,244 @@
+# Compliance module: entities + list/detail/quick-edit pages.
+
+entity "policies" {
+  field id: id
+  field policy_name: text required
+  field status: text default Draft
+  field version_number: integer default 0
+  field is_mandatory: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query policies_names {
+  sql: "select policy_name as value from pgapp_data.nexus_erp_policies order by 1"
+}
+
+entity "audit_logs" {
+  field id: id
+  field audit_reference: text required
+  field status: text default Open
+  field finding_count: integer default 0
+  field is_high_risk: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query audit_logs_names {
+  sql: "select audit_reference as value from pgapp_data.nexus_erp_audit_logs order by 1"
+}
+
+entity "approvals" {
+  field id: id
+  field approval_reference: text required
+  field status: text default Pending
+  field approval_level: integer default 0
+  field is_escalated: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query approvals_names {
+  sql: "select approval_reference as value from pgapp_data.nexus_erp_approvals order by 1"
+}
+
+entity "notifications" {
+  field id: id
+  field notification_title: text required
+  field status: text default Unread
+  field priority_score: integer default 0
+  field is_broadcast: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query notifications_names {
+  sql: "select notification_title as value from pgapp_data.nexus_erp_notifications order by 1"
+}
+
+entity "documents" {
+  field id: id
+  field document_title: text required
+  field status: text default Draft
+  field page_count: integer default 0
+  field is_confidential: boolean default false
+  field policy_name: text
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query documents_names {
+  sql: "select document_title as value from pgapp_data.nexus_erp_documents order by 1"
+}
+
+page "Policies" {
+  text "Compliance / Policies — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Policies" of policies {
+    columns: policy_name, status, version_number, is_mandatory, created_at
+    link: policy_name -> page PoliciesDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit policies" of policies {
+    fields: policy_name, status, version_number, is_mandatory, notes
+    item status as radio ("Draft", "Active", "UnderReview", "Retired")
+    item notes as readonly
+  }
+
+  link "Quick edit policies" -> page PoliciesQuickEdit
+}
+
+query policies_peer_status {
+  sql: "select id, policy_name, status, version_number from pgapp_data.nexus_erp_policies
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "PoliciesDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Policies report's linked column."
+  region "Other policies with the same status" from query policies_peer_status
+  link "Back to policies" -> page Policies
+}
+
+page "PoliciesQuickEdit" {
+  editable_table "Policies quick edit" of policies {
+    columns: policy_name, status, is_mandatory
+  }
+}
+
+page "AuditLogs" {
+  text "Compliance / Audit logs — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Audit logs" of audit_logs {
+    columns: audit_reference, status, finding_count, is_high_risk, created_at
+    link: audit_reference -> page AuditLogsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit audit logs" of audit_logs {
+    fields: audit_reference, status, finding_count, is_high_risk, notes
+    item status as radio ("Open", "InReview", "Closed")
+    item notes as readonly
+  }
+
+  link "Quick edit audit logs" -> page AuditLogsQuickEdit
+}
+
+query audit_logs_peer_status {
+  sql: "select id, audit_reference, status, finding_count from pgapp_data.nexus_erp_audit_logs
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "AuditLogsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Audit logs report's linked column."
+  region "Other audit logs with the same status" from query audit_logs_peer_status
+  link "Back to audit logs" -> page AuditLogs
+}
+
+page "AuditLogsQuickEdit" {
+  editable_table "Audit logs quick edit" of audit_logs {
+    columns: audit_reference, status, is_high_risk
+  }
+}
+
+page "Approvals" {
+  text "Compliance / Approvals — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Approvals" of approvals {
+    columns: approval_reference, status, approval_level, is_escalated, created_at
+    link: approval_reference -> page ApprovalsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit approvals" of approvals {
+    fields: approval_reference, status, approval_level, is_escalated, notes
+    item status as radio ("Pending", "Approved", "Rejected")
+    item notes as readonly
+  }
+
+  link "Quick edit approvals" -> page ApprovalsQuickEdit
+}
+
+query approvals_peer_status {
+  sql: "select id, approval_reference, status, approval_level from pgapp_data.nexus_erp_approvals
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "ApprovalsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Approvals report's linked column."
+  region "Other approvals with the same status" from query approvals_peer_status
+  link "Back to approvals" -> page Approvals
+}
+
+page "ApprovalsQuickEdit" {
+  editable_table "Approvals quick edit" of approvals {
+    columns: approval_reference, status, is_escalated
+  }
+}
+
+page "Notifications" {
+  text "Compliance / Notifications — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Notifications" of notifications {
+    columns: notification_title, status, priority_score, is_broadcast, created_at
+    link: notification_title -> page NotificationsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit notifications" of notifications {
+    fields: notification_title, status, priority_score, is_broadcast, notes
+    item status as radio ("Unread", "Read", "Archived")
+    item notes as readonly
+  }
+
+  link "Quick edit notifications" -> page NotificationsQuickEdit
+}
+
+query notifications_peer_status {
+  sql: "select id, notification_title, status, priority_score from pgapp_data.nexus_erp_notifications
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "NotificationsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Notifications report's linked column."
+  region "Other notifications with the same status" from query notifications_peer_status
+  link "Back to notifications" -> page Notifications
+}
+
+page "NotificationsQuickEdit" {
+  editable_table "Notifications quick edit" of notifications {
+    columns: notification_title, status, is_broadcast
+  }
+}
+
+page "Documents" {
+  text "Compliance / Documents — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Documents" of documents {
+    columns: document_title, status, page_count, is_confidential, created_at
+    link: document_title -> page DocumentsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit documents" of documents {
+    fields: document_title, status, page_count, is_confidential, policy_name, notes
+    item status as radio ("Draft", "Final", "Expired")
+    item policy_name as popup from query policies_names
+    item notes as readonly
+  }
+
+  link "Quick edit documents" -> page DocumentsQuickEdit
+}
+
+query documents_peer_status {
+  sql: "select id, document_title, status, page_count from pgapp_data.nexus_erp_documents
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "DocumentsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Documents report's linked column."
+  region "Other documents with the same status" from query documents_peer_status
+  link "Back to documents" -> page Documents
+}
+
+page "DocumentsQuickEdit" {
+  editable_table "Documents quick edit" of documents {
+    columns: document_title, status, is_confidential
+  }
+}
+

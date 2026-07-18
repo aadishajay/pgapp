@@ -1,0 +1,33 @@
+# Facilities dashboard: status split + recent activity for the module's two lead entities.
+
+query facilities_hero_by_status {
+  sql: "select status as label, count(*) as value from pgapp_data.nexus_erp_assets group by status order by 1"
+}
+
+query facilities_second_by_status {
+  sql: "select status as label, count(*) as value from pgapp_data.nexus_erp_locations group by status order by 1"
+}
+
+query facilities_hero_recent {
+  sql: "select id, asset_name, status from pgapp_data.nexus_erp_assets order by id desc limit 6"
+}
+
+query facilities_second_recent {
+  sql: "select id, location_name, status from pgapp_data.nexus_erp_locations order by id desc limit 6"
+}
+
+page "FacilitiesDashboard" {
+  text "Facilities at a glance: Assets and Locations status split and latest activity."
+  chart "Assets by status" from query facilities_hero_by_status {
+    type: bar
+    x: label
+    y: value
+  }
+  chart "Locations by status" from query facilities_second_by_status {
+    type: donut
+    x: label
+    y: value
+  }
+  region "Latest assets" from query facilities_hero_recent
+  region "Latest locations" from query facilities_second_recent
+}

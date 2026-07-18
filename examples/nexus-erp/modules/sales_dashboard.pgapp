@@ -1,0 +1,33 @@
+# Sales dashboard: status split + recent activity for the module's two lead entities.
+
+query sales_hero_by_status {
+  sql: "select status as label, count(*) as value from pgapp_data.nexus_erp_quotes group by status order by 1"
+}
+
+query sales_second_by_status {
+  sql: "select status as label, count(*) as value from pgapp_data.nexus_erp_sales_orders group by status order by 1"
+}
+
+query sales_hero_recent {
+  sql: "select id, quote_number, status from pgapp_data.nexus_erp_quotes order by id desc limit 6"
+}
+
+query sales_second_recent {
+  sql: "select id, order_number, status from pgapp_data.nexus_erp_sales_orders order by id desc limit 6"
+}
+
+page "SalesDashboard" {
+  text "Sales at a glance: Quotes and Sales orders status split and latest activity."
+  chart "Quotes by status" from query sales_hero_by_status {
+    type: bar
+    x: label
+    y: value
+  }
+  chart "Sales orders by status" from query sales_second_by_status {
+    type: donut
+    x: label
+    y: value
+  }
+  region "Latest quotes" from query sales_hero_recent
+  region "Latest sales orders" from query sales_second_recent
+}

@@ -1,0 +1,244 @@
+# Marketing module: entities + list/detail/quick-edit pages.
+
+entity "campaigns" {
+  field id: id
+  field campaign_name: text required
+  field status: text default Planned
+  field budget_spent: integer default 0
+  field is_paid: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query campaigns_names {
+  sql: "select campaign_name as value from pgapp_data.nexus_erp_campaigns order by 1"
+}
+
+entity "marketing_leads" {
+  field id: id
+  field lead_name: text required
+  field status: text default New
+  field lead_score: integer default 0
+  field is_mql: boolean default false
+  field campaign_name: text
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query marketing_leads_names {
+  sql: "select lead_name as value from pgapp_data.nexus_erp_marketing_leads order by 1"
+}
+
+entity "email_templates" {
+  field id: id
+  field template_name: text required
+  field status: text default Draft
+  field open_rate_percent: integer default 0
+  field is_default: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query email_templates_names {
+  sql: "select template_name as value from pgapp_data.nexus_erp_email_templates order by 1"
+}
+
+entity "segments" {
+  field id: id
+  field segment_name: text required
+  field status: text default Active
+  field audience_size: integer default 0
+  field is_dynamic: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query segments_names {
+  sql: "select segment_name as value from pgapp_data.nexus_erp_segments order by 1"
+}
+
+entity "events" {
+  field id: id
+  field event_name: text required
+  field status: text default Planned
+  field attendee_count: integer default 0
+  field is_virtual: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query events_names {
+  sql: "select event_name as value from pgapp_data.nexus_erp_events order by 1"
+}
+
+page "Campaigns" {
+  text "Marketing / Campaigns — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Campaigns" of campaigns {
+    columns: campaign_name, status, budget_spent, is_paid, created_at
+    link: campaign_name -> page CampaignsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit campaigns" of campaigns {
+    fields: campaign_name, status, budget_spent, is_paid, notes
+    item status as radio ("Planned", "Running", "Completed", "Cancelled")
+    item notes as readonly
+  }
+
+  link "Quick edit campaigns" -> page CampaignsQuickEdit
+}
+
+query campaigns_peer_status {
+  sql: "select id, campaign_name, status, budget_spent from pgapp_data.nexus_erp_campaigns
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "CampaignsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Campaigns report's linked column."
+  region "Other campaigns with the same status" from query campaigns_peer_status
+  link "Back to campaigns" -> page Campaigns
+}
+
+page "CampaignsQuickEdit" {
+  editable_table "Campaigns quick edit" of campaigns {
+    columns: campaign_name, status, is_paid
+  }
+}
+
+page "MarketingLeads" {
+  text "Marketing / Marketing leads — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Marketing leads" of marketing_leads {
+    columns: lead_name, status, lead_score, is_mql, created_at
+    link: lead_name -> page MarketingLeadsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit marketing leads" of marketing_leads {
+    fields: lead_name, status, lead_score, is_mql, campaign_name, notes
+    item status as radio ("New", "Nurturing", "Qualified", "Disqualified")
+    item campaign_name as popup from query campaigns_names
+    item notes as readonly
+  }
+
+  link "Quick edit marketing leads" -> page MarketingLeadsQuickEdit
+}
+
+query marketing_leads_peer_status {
+  sql: "select id, lead_name, status, lead_score from pgapp_data.nexus_erp_marketing_leads
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "MarketingLeadsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Marketing leads report's linked column."
+  region "Other marketing leads with the same status" from query marketing_leads_peer_status
+  link "Back to marketing leads" -> page MarketingLeads
+}
+
+page "MarketingLeadsQuickEdit" {
+  editable_table "Marketing leads quick edit" of marketing_leads {
+    columns: lead_name, status, is_mql
+  }
+}
+
+page "EmailTemplates" {
+  text "Marketing / Email templates — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Email templates" of email_templates {
+    columns: template_name, status, open_rate_percent, is_default, created_at
+    link: template_name -> page EmailTemplatesDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit email templates" of email_templates {
+    fields: template_name, status, open_rate_percent, is_default, notes
+    item status as radio ("Draft", "Active", "Retired")
+    item notes as readonly
+  }
+
+  link "Quick edit email templates" -> page EmailTemplatesQuickEdit
+}
+
+query email_templates_peer_status {
+  sql: "select id, template_name, status, open_rate_percent from pgapp_data.nexus_erp_email_templates
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "EmailTemplatesDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Email templates report's linked column."
+  region "Other email templates with the same status" from query email_templates_peer_status
+  link "Back to email templates" -> page EmailTemplates
+}
+
+page "EmailTemplatesQuickEdit" {
+  editable_table "Email templates quick edit" of email_templates {
+    columns: template_name, status, is_default
+  }
+}
+
+page "Segments" {
+  text "Marketing / Segments — 2 statuses tracked. Click a row to see peers with the same status."
+  report "Segments" of segments {
+    columns: segment_name, status, audience_size, is_dynamic, created_at
+    link: segment_name -> page SegmentsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit segments" of segments {
+    fields: segment_name, status, audience_size, is_dynamic, notes
+    item status as radio ("Active", "Inactive")
+    item notes as readonly
+  }
+
+  link "Quick edit segments" -> page SegmentsQuickEdit
+}
+
+query segments_peer_status {
+  sql: "select id, segment_name, status, audience_size from pgapp_data.nexus_erp_segments
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "SegmentsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Segments report's linked column."
+  region "Other segments with the same status" from query segments_peer_status
+  link "Back to segments" -> page Segments
+}
+
+page "SegmentsQuickEdit" {
+  editable_table "Segments quick edit" of segments {
+    columns: segment_name, status, is_dynamic
+  }
+}
+
+page "Events" {
+  text "Marketing / Events — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Events" of events {
+    columns: event_name, status, attendee_count, is_virtual, created_at
+    link: event_name -> page EventsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit events" of events {
+    fields: event_name, status, attendee_count, is_virtual, notes
+    item status as radio ("Planned", "Live", "Completed", "Cancelled")
+    item notes as readonly
+  }
+
+  link "Quick edit events" -> page EventsQuickEdit
+}
+
+query events_peer_status {
+  sql: "select id, event_name, status, attendee_count from pgapp_data.nexus_erp_events
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "EventsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Events report's linked column."
+  region "Other events with the same status" from query events_peer_status
+  link "Back to events" -> page Events
+}
+
+page "EventsQuickEdit" {
+  editable_table "Events quick edit" of events {
+    columns: event_name, status, is_virtual
+  }
+}
+

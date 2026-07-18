@@ -1,0 +1,244 @@
+# Operations module: entities + list/detail/quick-edit pages.
+
+entity "work_orders" {
+  field id: id
+  field work_order_number: text required
+  field status: text default Scheduled
+  field estimated_hours: integer default 0
+  field is_priority: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query work_orders_names {
+  sql: "select work_order_number as value from pgapp_data.nexus_erp_work_orders order by 1"
+}
+
+entity "boms" {
+  field id: id
+  field bom_name: text required
+  field status: text default Draft
+  field component_count: integer default 0
+  field is_active: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query boms_names {
+  sql: "select bom_name as value from pgapp_data.nexus_erp_boms order by 1"
+}
+
+entity "machines" {
+  field id: id
+  field machine_name: text required
+  field status: text default Running
+  field uptime_percent: integer default 0
+  field needs_service: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query machines_names {
+  sql: "select machine_name as value from pgapp_data.nexus_erp_machines order by 1"
+}
+
+entity "maintenance_logs" {
+  field id: id
+  field log_reference: text required
+  field status: text default Scheduled
+  field downtime_minutes: integer default 0
+  field is_unplanned: boolean default false
+  field machine_name: text
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query maintenance_logs_names {
+  sql: "select log_reference as value from pgapp_data.nexus_erp_maintenance_logs order by 1"
+}
+
+entity "quality_checks" {
+  field id: id
+  field check_reference: text required
+  field status: text default Passed
+  field defect_count: integer default 0
+  field requires_rework: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query quality_checks_names {
+  sql: "select check_reference as value from pgapp_data.nexus_erp_quality_checks order by 1"
+}
+
+page "WorkOrders" {
+  text "Operations / Work orders — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Work orders" of work_orders {
+    columns: work_order_number, status, estimated_hours, is_priority, created_at
+    link: work_order_number -> page WorkOrdersDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit work orders" of work_orders {
+    fields: work_order_number, status, estimated_hours, is_priority, notes
+    item status as radio ("Scheduled", "InProgress", "Completed", "Cancelled")
+    item notes as readonly
+  }
+
+  link "Quick edit work orders" -> page WorkOrdersQuickEdit
+}
+
+query work_orders_peer_status {
+  sql: "select id, work_order_number, status, estimated_hours from pgapp_data.nexus_erp_work_orders
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "WorkOrdersDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Work orders report's linked column."
+  region "Other work orders with the same status" from query work_orders_peer_status
+  link "Back to work orders" -> page WorkOrders
+}
+
+page "WorkOrdersQuickEdit" {
+  editable_table "Work orders quick edit" of work_orders {
+    columns: work_order_number, status, is_priority
+  }
+}
+
+page "Boms" {
+  text "Operations / BOMs — 3 statuses tracked. Click a row to see peers with the same status."
+  report "BOMs" of boms {
+    columns: bom_name, status, component_count, is_active, created_at
+    link: bom_name -> page BomsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit boms" of boms {
+    fields: bom_name, status, component_count, is_active, notes
+    item status as radio ("Draft", "Approved", "Obsolete")
+    item notes as readonly
+  }
+
+  link "Quick edit boms" -> page BomsQuickEdit
+}
+
+query boms_peer_status {
+  sql: "select id, bom_name, status, component_count from pgapp_data.nexus_erp_boms
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "BomsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the BOMs report's linked column."
+  region "Other boms with the same status" from query boms_peer_status
+  link "Back to boms" -> page Boms
+}
+
+page "BomsQuickEdit" {
+  editable_table "BOMs quick edit" of boms {
+    columns: bom_name, status, is_active
+  }
+}
+
+page "Machines" {
+  text "Operations / Machines — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Machines" of machines {
+    columns: machine_name, status, uptime_percent, needs_service, created_at
+    link: machine_name -> page MachinesDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit machines" of machines {
+    fields: machine_name, status, uptime_percent, needs_service, notes
+    item status as radio ("Running", "Idle", "Maintenance", "Down")
+    item notes as readonly
+  }
+
+  link "Quick edit machines" -> page MachinesQuickEdit
+}
+
+query machines_peer_status {
+  sql: "select id, machine_name, status, uptime_percent from pgapp_data.nexus_erp_machines
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "MachinesDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Machines report's linked column."
+  region "Other machines with the same status" from query machines_peer_status
+  link "Back to machines" -> page Machines
+}
+
+page "MachinesQuickEdit" {
+  editable_table "Machines quick edit" of machines {
+    columns: machine_name, status, needs_service
+  }
+}
+
+page "MaintenanceLogs" {
+  text "Operations / Maintenance logs — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Maintenance logs" of maintenance_logs {
+    columns: log_reference, status, downtime_minutes, is_unplanned, created_at
+    link: log_reference -> page MaintenanceLogsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit maintenance logs" of maintenance_logs {
+    fields: log_reference, status, downtime_minutes, is_unplanned, machine_name, notes
+    item status as radio ("Scheduled", "InProgress", "Completed")
+    item machine_name as popup from query machines_names
+    item notes as readonly
+  }
+
+  link "Quick edit maintenance logs" -> page MaintenanceLogsQuickEdit
+}
+
+query maintenance_logs_peer_status {
+  sql: "select id, log_reference, status, downtime_minutes from pgapp_data.nexus_erp_maintenance_logs
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "MaintenanceLogsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Maintenance logs report's linked column."
+  region "Other maintenance logs with the same status" from query maintenance_logs_peer_status
+  link "Back to maintenance logs" -> page MaintenanceLogs
+}
+
+page "MaintenanceLogsQuickEdit" {
+  editable_table "Maintenance logs quick edit" of maintenance_logs {
+    columns: log_reference, status, is_unplanned
+  }
+}
+
+page "QualityChecks" {
+  text "Operations / Quality checks — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Quality checks" of quality_checks {
+    columns: check_reference, status, defect_count, requires_rework, created_at
+    link: check_reference -> page QualityChecksDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit quality checks" of quality_checks {
+    fields: check_reference, status, defect_count, requires_rework, notes
+    item status as radio ("Passed", "Failed", "Pending")
+    item notes as readonly
+  }
+
+  link "Quick edit quality checks" -> page QualityChecksQuickEdit
+}
+
+query quality_checks_peer_status {
+  sql: "select id, check_reference, status, defect_count from pgapp_data.nexus_erp_quality_checks
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "QualityChecksDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Quality checks report's linked column."
+  region "Other quality checks with the same status" from query quality_checks_peer_status
+  link "Back to quality checks" -> page QualityChecks
+}
+
+page "QualityChecksQuickEdit" {
+  editable_table "Quality checks quick edit" of quality_checks {
+    columns: check_reference, status, requires_rework
+  }
+}
+

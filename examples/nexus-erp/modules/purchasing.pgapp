@@ -1,0 +1,244 @@
+# Purchasing module: entities + list/detail/quick-edit pages.
+
+entity "suppliers" {
+  field id: id
+  field supplier_name: text required
+  field status: text default Approved
+  field rating_score: integer default 0
+  field is_preferred: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query suppliers_names {
+  sql: "select supplier_name as value from pgapp_data.nexus_erp_suppliers order by 1"
+}
+
+entity "purchase_orders" {
+  field id: id
+  field po_number: text required
+  field status: text default Draft
+  field po_total: integer default 0
+  field is_urgent: boolean default false
+  field supplier_name: text
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query purchase_orders_names {
+  sql: "select po_number as value from pgapp_data.nexus_erp_purchase_orders order by 1"
+}
+
+entity "purchase_order_lines" {
+  field id: id
+  field line_reference: text required
+  field status: text default Pending
+  field line_quantity: integer default 0
+  field is_backordered: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query purchase_order_lines_names {
+  sql: "select line_reference as value from pgapp_data.nexus_erp_purchase_order_lines order by 1"
+}
+
+entity "goods_receipts" {
+  field id: id
+  field receipt_number: text required
+  field status: text default Pending
+  field received_quantity: integer default 0
+  field has_discrepancy: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query goods_receipts_names {
+  sql: "select receipt_number as value from pgapp_data.nexus_erp_goods_receipts order by 1"
+}
+
+entity "supplier_invoices" {
+  field id: id
+  field invoice_reference: text required
+  field status: text default Unpaid
+  field invoice_amount: integer default 0
+  field is_overdue: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query supplier_invoices_names {
+  sql: "select invoice_reference as value from pgapp_data.nexus_erp_supplier_invoices order by 1"
+}
+
+page "Suppliers" {
+  text "Purchasing / Suppliers — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Suppliers" of suppliers {
+    columns: supplier_name, status, rating_score, is_preferred, created_at
+    link: supplier_name -> page SuppliersDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit suppliers" of suppliers {
+    fields: supplier_name, status, rating_score, is_preferred, notes
+    item status as radio ("Approved", "Pending", "Blacklisted")
+    item notes as readonly
+  }
+
+  link "Quick edit suppliers" -> page SuppliersQuickEdit
+}
+
+query suppliers_peer_status {
+  sql: "select id, supplier_name, status, rating_score from pgapp_data.nexus_erp_suppliers
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "SuppliersDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Suppliers report's linked column."
+  region "Other suppliers with the same status" from query suppliers_peer_status
+  link "Back to suppliers" -> page Suppliers
+}
+
+page "SuppliersQuickEdit" {
+  editable_table "Suppliers quick edit" of suppliers {
+    columns: supplier_name, status, is_preferred
+  }
+}
+
+page "PurchaseOrders" {
+  text "Purchasing / Purchase orders — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Purchase orders" of purchase_orders {
+    columns: po_number, status, po_total, is_urgent, created_at
+    link: po_number -> page PurchaseOrdersDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit purchase orders" of purchase_orders {
+    fields: po_number, status, po_total, is_urgent, supplier_name, notes
+    item status as radio ("Draft", "Submitted", "Approved", "Received")
+    item supplier_name as popup from query suppliers_names
+    item notes as readonly
+  }
+
+  link "Quick edit purchase orders" -> page PurchaseOrdersQuickEdit
+}
+
+query purchase_orders_peer_status {
+  sql: "select id, po_number, status, po_total from pgapp_data.nexus_erp_purchase_orders
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "PurchaseOrdersDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Purchase orders report's linked column."
+  region "Other purchase orders with the same status" from query purchase_orders_peer_status
+  link "Back to purchase orders" -> page PurchaseOrders
+}
+
+page "PurchaseOrdersQuickEdit" {
+  editable_table "Purchase orders quick edit" of purchase_orders {
+    columns: po_number, status, is_urgent
+  }
+}
+
+page "PurchaseOrderLines" {
+  text "Purchasing / PO lines — 3 statuses tracked. Click a row to see peers with the same status."
+  report "PO lines" of purchase_order_lines {
+    columns: line_reference, status, line_quantity, is_backordered, created_at
+    link: line_reference -> page PurchaseOrderLinesDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit po lines" of purchase_order_lines {
+    fields: line_reference, status, line_quantity, is_backordered, notes
+    item status as radio ("Pending", "Received", "Cancelled")
+    item notes as readonly
+  }
+
+  link "Quick edit po lines" -> page PurchaseOrderLinesQuickEdit
+}
+
+query purchase_order_lines_peer_status {
+  sql: "select id, line_reference, status, line_quantity from pgapp_data.nexus_erp_purchase_order_lines
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "PurchaseOrderLinesDetail" {
+  text "The status below arrived as a URL parameter forwarded by the PO lines report's linked column."
+  region "Other po lines with the same status" from query purchase_order_lines_peer_status
+  link "Back to po lines" -> page PurchaseOrderLines
+}
+
+page "PurchaseOrderLinesQuickEdit" {
+  editable_table "PO lines quick edit" of purchase_order_lines {
+    columns: line_reference, status, is_backordered
+  }
+}
+
+page "GoodsReceipts" {
+  text "Purchasing / Goods receipts — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Goods receipts" of goods_receipts {
+    columns: receipt_number, status, received_quantity, has_discrepancy, created_at
+    link: receipt_number -> page GoodsReceiptsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit goods receipts" of goods_receipts {
+    fields: receipt_number, status, received_quantity, has_discrepancy, notes
+    item status as radio ("Pending", "Inspected", "Accepted", "Rejected")
+    item notes as readonly
+  }
+
+  link "Quick edit goods receipts" -> page GoodsReceiptsQuickEdit
+}
+
+query goods_receipts_peer_status {
+  sql: "select id, receipt_number, status, received_quantity from pgapp_data.nexus_erp_goods_receipts
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "GoodsReceiptsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Goods receipts report's linked column."
+  region "Other goods receipts with the same status" from query goods_receipts_peer_status
+  link "Back to goods receipts" -> page GoodsReceipts
+}
+
+page "GoodsReceiptsQuickEdit" {
+  editable_table "Goods receipts quick edit" of goods_receipts {
+    columns: receipt_number, status, has_discrepancy
+  }
+}
+
+page "SupplierInvoices" {
+  text "Purchasing / Supplier invoices — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Supplier invoices" of supplier_invoices {
+    columns: invoice_reference, status, invoice_amount, is_overdue, created_at
+    link: invoice_reference -> page SupplierInvoicesDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit supplier invoices" of supplier_invoices {
+    fields: invoice_reference, status, invoice_amount, is_overdue, notes
+    item status as radio ("Unpaid", "Paid", "Disputed")
+    item notes as readonly
+  }
+
+  link "Quick edit supplier invoices" -> page SupplierInvoicesQuickEdit
+}
+
+query supplier_invoices_peer_status {
+  sql: "select id, invoice_reference, status, invoice_amount from pgapp_data.nexus_erp_supplier_invoices
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "SupplierInvoicesDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Supplier invoices report's linked column."
+  region "Other supplier invoices with the same status" from query supplier_invoices_peer_status
+  link "Back to supplier invoices" -> page SupplierInvoices
+}
+
+page "SupplierInvoicesQuickEdit" {
+  editable_table "Supplier invoices quick edit" of supplier_invoices {
+    columns: invoice_reference, status, is_overdue
+  }
+}
+

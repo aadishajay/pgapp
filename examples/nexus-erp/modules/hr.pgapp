@@ -1,0 +1,244 @@
+# HR module: entities + list/detail/quick-edit pages.
+
+entity "employees" {
+  field id: id
+  field full_name: text required
+  field status: text default Active
+  field annual_salary: integer default 0
+  field is_manager: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query employees_names {
+  sql: "select full_name as value from pgapp_data.nexus_erp_employees order by 1"
+}
+
+entity "departments" {
+  field id: id
+  field department_name: text required
+  field status: text default Active
+  field headcount: integer default 0
+  field is_cost_center: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query departments_names {
+  sql: "select department_name as value from pgapp_data.nexus_erp_departments order by 1"
+}
+
+entity "positions" {
+  field id: id
+  field title: text required
+  field status: text default Open
+  field pay_grade: integer default 0
+  field is_remote: boolean default false
+  field department_name: text
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query positions_names {
+  sql: "select title as value from pgapp_data.nexus_erp_positions order by 1"
+}
+
+entity "leave_requests" {
+  field id: id
+  field request_reference: text required
+  field status: text default Pending
+  field days_requested: integer default 0
+  field is_emergency: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query leave_requests_names {
+  sql: "select request_reference as value from pgapp_data.nexus_erp_leave_requests order by 1"
+}
+
+entity "attendance" {
+  field id: id
+  field attendance_reference: text required
+  field status: text default Present
+  field hours_worked: integer default 0
+  field is_overtime: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query attendance_names {
+  sql: "select attendance_reference as value from pgapp_data.nexus_erp_attendance order by 1"
+}
+
+page "Employees" {
+  text "HR / Employees — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Employees" of employees {
+    columns: full_name, status, annual_salary, is_manager, created_at
+    link: full_name -> page EmployeesDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit employees" of employees {
+    fields: full_name, status, annual_salary, is_manager, notes
+    item status as radio ("Active", "OnLeave", "Terminated")
+    item notes as readonly
+  }
+
+  link "Quick edit employees" -> page EmployeesQuickEdit
+}
+
+query employees_peer_status {
+  sql: "select id, full_name, status, annual_salary from pgapp_data.nexus_erp_employees
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "EmployeesDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Employees report's linked column."
+  region "Other employees with the same status" from query employees_peer_status
+  link "Back to employees" -> page Employees
+}
+
+page "EmployeesQuickEdit" {
+  editable_table "Employees quick edit" of employees {
+    columns: full_name, status, is_manager
+  }
+}
+
+page "Departments" {
+  text "HR / Departments — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Departments" of departments {
+    columns: department_name, status, headcount, is_cost_center, created_at
+    link: department_name -> page DepartmentsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit departments" of departments {
+    fields: department_name, status, headcount, is_cost_center, notes
+    item status as radio ("Active", "Restructuring", "Closed")
+    item notes as readonly
+  }
+
+  link "Quick edit departments" -> page DepartmentsQuickEdit
+}
+
+query departments_peer_status {
+  sql: "select id, department_name, status, headcount from pgapp_data.nexus_erp_departments
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "DepartmentsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Departments report's linked column."
+  region "Other departments with the same status" from query departments_peer_status
+  link "Back to departments" -> page Departments
+}
+
+page "DepartmentsQuickEdit" {
+  editable_table "Departments quick edit" of departments {
+    columns: department_name, status, is_cost_center
+  }
+}
+
+page "Positions" {
+  text "HR / Positions — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Positions" of positions {
+    columns: title, status, pay_grade, is_remote, created_at
+    link: title -> page PositionsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit positions" of positions {
+    fields: title, status, pay_grade, is_remote, department_name, notes
+    item status as radio ("Open", "Filled", "Frozen")
+    item department_name as popup from query departments_names
+    item notes as readonly
+  }
+
+  link "Quick edit positions" -> page PositionsQuickEdit
+}
+
+query positions_peer_status {
+  sql: "select id, title, status, pay_grade from pgapp_data.nexus_erp_positions
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "PositionsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Positions report's linked column."
+  region "Other positions with the same status" from query positions_peer_status
+  link "Back to positions" -> page Positions
+}
+
+page "PositionsQuickEdit" {
+  editable_table "Positions quick edit" of positions {
+    columns: title, status, is_remote
+  }
+}
+
+page "LeaveRequests" {
+  text "HR / Leave requests — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Leave requests" of leave_requests {
+    columns: request_reference, status, days_requested, is_emergency, created_at
+    link: request_reference -> page LeaveRequestsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit leave requests" of leave_requests {
+    fields: request_reference, status, days_requested, is_emergency, notes
+    item status as radio ("Pending", "Approved", "Denied")
+    item notes as readonly
+  }
+
+  link "Quick edit leave requests" -> page LeaveRequestsQuickEdit
+}
+
+query leave_requests_peer_status {
+  sql: "select id, request_reference, status, days_requested from pgapp_data.nexus_erp_leave_requests
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "LeaveRequestsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Leave requests report's linked column."
+  region "Other leave requests with the same status" from query leave_requests_peer_status
+  link "Back to leave requests" -> page LeaveRequests
+}
+
+page "LeaveRequestsQuickEdit" {
+  editable_table "Leave requests quick edit" of leave_requests {
+    columns: request_reference, status, is_emergency
+  }
+}
+
+page "Attendance" {
+  text "HR / Attendance — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Attendance" of attendance {
+    columns: attendance_reference, status, hours_worked, is_overtime, created_at
+    link: attendance_reference -> page AttendanceDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit attendance" of attendance {
+    fields: attendance_reference, status, hours_worked, is_overtime, notes
+    item status as radio ("Present", "Absent", "Late", "Excused")
+    item notes as readonly
+  }
+
+  link "Quick edit attendance" -> page AttendanceQuickEdit
+}
+
+query attendance_peer_status {
+  sql: "select id, attendance_reference, status, hours_worked from pgapp_data.nexus_erp_attendance
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "AttendanceDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Attendance report's linked column."
+  region "Other attendance with the same status" from query attendance_peer_status
+  link "Back to attendance" -> page Attendance
+}
+
+page "AttendanceQuickEdit" {
+  editable_table "Attendance quick edit" of attendance {
+    columns: attendance_reference, status, is_overtime
+  }
+}
+

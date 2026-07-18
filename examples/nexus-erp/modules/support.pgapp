@@ -1,0 +1,244 @@
+# Support module: entities + list/detail/quick-edit pages.
+
+entity "tickets" {
+  field id: id
+  field subject: text required
+  field status: text default Open
+  field satisfaction_score: integer default 0
+  field is_urgent: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query tickets_names {
+  sql: "select subject as value from pgapp_data.nexus_erp_tickets order by 1"
+}
+
+entity "agents" {
+  field id: id
+  field agent_name: text required
+  field status: text default Active
+  field tickets_closed: integer default 0
+  field is_lead: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query agents_names {
+  sql: "select agent_name as value from pgapp_data.nexus_erp_agents order by 1"
+}
+
+entity "knowledge_articles" {
+  field id: id
+  field article_title: text required
+  field status: text default Draft
+  field view_count: integer default 0
+  field is_featured: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query knowledge_articles_names {
+  sql: "select article_title as value from pgapp_data.nexus_erp_knowledge_articles order by 1"
+}
+
+entity "slas" {
+  field id: id
+  field sla_name: text required
+  field status: text default Active
+  field response_minutes: integer default 0
+  field is_critical: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query slas_names {
+  sql: "select sla_name as value from pgapp_data.nexus_erp_slas order by 1"
+}
+
+entity "escalations" {
+  field id: id
+  field escalation_reference: text required
+  field status: text default Raised
+  field severity_level: integer default 0
+  field is_customer_facing: boolean default false
+  field escalated_ticket: text
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query escalations_names {
+  sql: "select escalation_reference as value from pgapp_data.nexus_erp_escalations order by 1"
+}
+
+page "Tickets" {
+  text "Support / Tickets — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Tickets" of tickets {
+    columns: subject, status, satisfaction_score, is_urgent, created_at
+    link: subject -> page TicketsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit tickets" of tickets {
+    fields: subject, status, satisfaction_score, is_urgent, notes
+    item status as radio ("Open", "InProgress", "Resolved", "Closed")
+    item notes as readonly
+  }
+
+  link "Quick edit tickets" -> page TicketsQuickEdit
+}
+
+query tickets_peer_status {
+  sql: "select id, subject, status, satisfaction_score from pgapp_data.nexus_erp_tickets
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "TicketsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Tickets report's linked column."
+  region "Other tickets with the same status" from query tickets_peer_status
+  link "Back to tickets" -> page Tickets
+}
+
+page "TicketsQuickEdit" {
+  editable_table "Tickets quick edit" of tickets {
+    columns: subject, status, is_urgent
+  }
+}
+
+page "Agents" {
+  text "Support / Agents — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Agents" of agents {
+    columns: agent_name, status, tickets_closed, is_lead, created_at
+    link: agent_name -> page AgentsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit agents" of agents {
+    fields: agent_name, status, tickets_closed, is_lead, notes
+    item status as radio ("Active", "Away", "Offline")
+    item notes as readonly
+  }
+
+  link "Quick edit agents" -> page AgentsQuickEdit
+}
+
+query agents_peer_status {
+  sql: "select id, agent_name, status, tickets_closed from pgapp_data.nexus_erp_agents
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "AgentsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Agents report's linked column."
+  region "Other agents with the same status" from query agents_peer_status
+  link "Back to agents" -> page Agents
+}
+
+page "AgentsQuickEdit" {
+  editable_table "Agents quick edit" of agents {
+    columns: agent_name, status, is_lead
+  }
+}
+
+page "KnowledgeArticles" {
+  text "Support / Knowledge articles — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Knowledge articles" of knowledge_articles {
+    columns: article_title, status, view_count, is_featured, created_at
+    link: article_title -> page KnowledgeArticlesDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit knowledge articles" of knowledge_articles {
+    fields: article_title, status, view_count, is_featured, notes
+    item status as radio ("Draft", "Published", "Archived")
+    item notes as readonly
+  }
+
+  link "Quick edit knowledge articles" -> page KnowledgeArticlesQuickEdit
+}
+
+query knowledge_articles_peer_status {
+  sql: "select id, article_title, status, view_count from pgapp_data.nexus_erp_knowledge_articles
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "KnowledgeArticlesDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Knowledge articles report's linked column."
+  region "Other knowledge articles with the same status" from query knowledge_articles_peer_status
+  link "Back to knowledge articles" -> page KnowledgeArticles
+}
+
+page "KnowledgeArticlesQuickEdit" {
+  editable_table "Knowledge articles quick edit" of knowledge_articles {
+    columns: article_title, status, is_featured
+  }
+}
+
+page "Slas" {
+  text "Support / SLAs — 3 statuses tracked. Click a row to see peers with the same status."
+  report "SLAs" of slas {
+    columns: sla_name, status, response_minutes, is_critical, created_at
+    link: sla_name -> page SlasDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit slas" of slas {
+    fields: sla_name, status, response_minutes, is_critical, notes
+    item status as radio ("Active", "Breached", "Expired")
+    item notes as readonly
+  }
+
+  link "Quick edit slas" -> page SlasQuickEdit
+}
+
+query slas_peer_status {
+  sql: "select id, sla_name, status, response_minutes from pgapp_data.nexus_erp_slas
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "SlasDetail" {
+  text "The status below arrived as a URL parameter forwarded by the SLAs report's linked column."
+  region "Other slas with the same status" from query slas_peer_status
+  link "Back to slas" -> page Slas
+}
+
+page "SlasQuickEdit" {
+  editable_table "SLAs quick edit" of slas {
+    columns: sla_name, status, is_critical
+  }
+}
+
+page "Escalations" {
+  text "Support / Escalations — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Escalations" of escalations {
+    columns: escalation_reference, status, severity_level, is_customer_facing, created_at
+    link: escalation_reference -> page EscalationsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit escalations" of escalations {
+    fields: escalation_reference, status, severity_level, is_customer_facing, escalated_ticket, notes
+    item status as radio ("Raised", "InReview", "Resolved")
+    item escalated_ticket as popup from query tickets_names
+    item notes as readonly
+  }
+
+  link "Quick edit escalations" -> page EscalationsQuickEdit
+}
+
+query escalations_peer_status {
+  sql: "select id, escalation_reference, status, severity_level from pgapp_data.nexus_erp_escalations
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "EscalationsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Escalations report's linked column."
+  region "Other escalations with the same status" from query escalations_peer_status
+  link "Back to escalations" -> page Escalations
+}
+
+page "EscalationsQuickEdit" {
+  editable_table "Escalations quick edit" of escalations {
+    columns: escalation_reference, status, is_customer_facing
+  }
+}
+

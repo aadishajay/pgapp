@@ -1,0 +1,129 @@
+# Nexus ERP: a ~200-page pgapp application modeling a medium-size
+# company's core systems (CRM, sales, inventory, purchasing, HR,
+# finance, projects, support, marketing, operations, facilities,
+# compliance) — built to exercise every component kind at scale and
+# as a load-test fixture. See src/source.rs for the directory-merge rule.
+
+app "Nexus ERP" {
+  theme: google_m3
+
+  header {
+    text "Nexus ERP — a 200-page pgapp demo covering a medium company's core systems"
+  }
+
+  footer {
+    text "Built with pgapp: Postgres-native metadata, Rust server, pluggable everything."
+    link "Company dashboard" -> page CompanyDashboard
+  }
+
+  nav {
+    item "Company" -> page CompanyDashboard
+    item "CRM" {
+      item "Accounts" -> page Accounts
+      item "Contacts" -> page Contacts
+      item "Leads" -> page Leads
+      item "Opportunities" -> page Opportunities
+      item "Activities" -> page Activities
+      item "Dashboard" -> page CRMDashboard
+    }
+    item "Sales" {
+      item "Quotes" -> page Quotes
+      item "Sales orders" -> page SalesOrders
+      item "Invoices" -> page Invoices
+      item "Payments" -> page Payments
+      item "Price lists" -> page PriceLists
+      item "Dashboard" -> page SalesDashboard
+    }
+    item "Inventory" {
+      item "Products" -> page Products
+      item "Categories" -> page Categories
+      item "Warehouses" -> page Warehouses
+      item "Stock levels" -> page StockLevels
+      item "Stock movements" -> page StockMovements
+      item "Dashboard" -> page InventoryDashboard
+    }
+    item "Purchasing" {
+      item "Suppliers" -> page Suppliers
+      item "Purchase orders" -> page PurchaseOrders
+      item "PO lines" -> page PurchaseOrderLines
+      item "Goods receipts" -> page GoodsReceipts
+      item "Supplier invoices" -> page SupplierInvoices
+      item "Dashboard" -> page PurchasingDashboard
+    }
+    item "HR" {
+      item "Employees" -> page Employees
+      item "Departments" -> page Departments
+      item "Positions" -> page Positions
+      item "Leave requests" -> page LeaveRequests
+      item "Attendance" -> page Attendance
+      item "Dashboard" -> page HRDashboard
+    }
+    item "Finance" {
+      item "Ledger accounts" -> page LedgerAccounts
+      item "Expenses" -> page Expenses
+      item "Budgets" -> page Budgets
+      item "AR invoices" -> page ArInvoices
+      item "AP bills" -> page ApBills
+      item "Dashboard" -> page FinanceDashboard
+    }
+    item "Projects" {
+      item "Projects" -> page Projects
+      item "Tasks" -> page Tasks
+      item "Milestones" -> page Milestones
+      item "Timesheets" -> page Timesheets
+      item "Project risks" -> page ProjectRisks
+      item "Dashboard" -> page ProjectsDashboard
+    }
+    item "Support" {
+      item "Tickets" -> page Tickets
+      item "Agents" -> page Agents
+      item "Knowledge articles" -> page KnowledgeArticles
+      item "SLAs" -> page Slas
+      item "Escalations" -> page Escalations
+      item "Dashboard" -> page SupportDashboard
+    }
+    item "Marketing" {
+      item "Campaigns" -> page Campaigns
+      item "Marketing leads" -> page MarketingLeads
+      item "Email templates" -> page EmailTemplates
+      item "Segments" -> page Segments
+      item "Events" -> page Events
+      item "Dashboard" -> page MarketingDashboard
+    }
+    item "Operations" {
+      item "Work orders" -> page WorkOrders
+      item "BOMs" -> page Boms
+      item "Machines" -> page Machines
+      item "Maintenance logs" -> page MaintenanceLogs
+      item "Quality checks" -> page QualityChecks
+      item "Dashboard" -> page OperationsDashboard
+    }
+    item "Facilities" {
+      item "Assets" -> page Assets
+      item "Locations" -> page Locations
+      item "Contracts" -> page Contracts
+      item "Maintenance requests" -> page MaintenanceRequests
+      item "Reservations" -> page Reservations
+      item "Dashboard" -> page FacilitiesDashboard
+    }
+    item "Compliance" {
+      item "Policies" -> page Policies
+      item "Audit logs" -> page AuditLogs
+      item "Approvals" -> page Approvals
+      item "Notifications" -> page Notifications
+      item "Documents" -> page Documents
+      item "Dashboard" -> page ComplianceDashboard
+    }
+    item "Reports" {
+      item "Revenue" -> page RevenueReport
+      item "Headcount" -> page HeadcountReport
+      item "Inventory valuation" -> page InventoryValuationReport
+      item "Ticket SLA" -> page TicketSlaReport
+      item "Project health" -> page ProjectHealthReport
+    }
+    item "Admin" {
+      item "Settings" -> page Settings
+      item "Audit trail" -> page AuditTrail
+    }
+  }
+}

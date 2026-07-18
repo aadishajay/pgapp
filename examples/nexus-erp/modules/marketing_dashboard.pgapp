@@ -1,0 +1,33 @@
+# Marketing dashboard: status split + recent activity for the module's two lead entities.
+
+query marketing_hero_by_status {
+  sql: "select status as label, count(*) as value from pgapp_data.nexus_erp_campaigns group by status order by 1"
+}
+
+query marketing_second_by_status {
+  sql: "select status as label, count(*) as value from pgapp_data.nexus_erp_marketing_leads group by status order by 1"
+}
+
+query marketing_hero_recent {
+  sql: "select id, campaign_name, status from pgapp_data.nexus_erp_campaigns order by id desc limit 6"
+}
+
+query marketing_second_recent {
+  sql: "select id, lead_name, status from pgapp_data.nexus_erp_marketing_leads order by id desc limit 6"
+}
+
+page "MarketingDashboard" {
+  text "Marketing at a glance: Campaigns and Marketing leads status split and latest activity."
+  chart "Campaigns by status" from query marketing_hero_by_status {
+    type: bar
+    x: label
+    y: value
+  }
+  chart "Marketing leads by status" from query marketing_second_by_status {
+    type: donut
+    x: label
+    y: value
+  }
+  region "Latest campaigns" from query marketing_hero_recent
+  region "Latest marketing leads" from query marketing_second_recent
+}

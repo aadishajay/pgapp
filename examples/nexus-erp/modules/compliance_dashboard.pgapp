@@ -1,0 +1,33 @@
+# Compliance dashboard: status split + recent activity for the module's two lead entities.
+
+query compliance_hero_by_status {
+  sql: "select status as label, count(*) as value from pgapp_data.nexus_erp_policies group by status order by 1"
+}
+
+query compliance_second_by_status {
+  sql: "select status as label, count(*) as value from pgapp_data.nexus_erp_audit_logs group by status order by 1"
+}
+
+query compliance_hero_recent {
+  sql: "select id, policy_name, status from pgapp_data.nexus_erp_policies order by id desc limit 6"
+}
+
+query compliance_second_recent {
+  sql: "select id, audit_reference, status from pgapp_data.nexus_erp_audit_logs order by id desc limit 6"
+}
+
+page "ComplianceDashboard" {
+  text "Compliance at a glance: Policies and Audit logs status split and latest activity."
+  chart "Policies by status" from query compliance_hero_by_status {
+    type: bar
+    x: label
+    y: value
+  }
+  chart "Audit logs by status" from query compliance_second_by_status {
+    type: donut
+    x: label
+    y: value
+  }
+  region "Latest policies" from query compliance_hero_recent
+  region "Latest audit logs" from query compliance_second_recent
+}

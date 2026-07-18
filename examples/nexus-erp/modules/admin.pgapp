@@ -1,0 +1,24 @@
+# Admin utilities: server info + a filtered view onto compliance data.
+
+query server_info {
+  sql: "select version() as postgres_version, now() as server_time, current_database() as database_name"
+}
+
+query high_risk_audits {
+  sql: "select id, audit_reference, status, finding_count from pgapp_data.nexus_erp_audit_logs
+        where is_high_risk = true order by id desc limit 20"
+}
+
+page "Settings" {
+  text "Nexus ERP runtime settings and the Postgres instance backing it."
+  region "Server info" from query server_info
+}
+
+page "AuditTrail" {
+  text "High-risk findings pulled from the Compliance module's audit log."
+  report "High-risk audit findings" of audit_logs {
+    source: query high_risk_audits
+    columns: audit_reference, status, finding_count
+    page_size: 10
+  }
+}

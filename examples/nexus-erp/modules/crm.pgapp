@@ -1,0 +1,243 @@
+# CRM module: entities + list/detail/quick-edit pages.
+
+entity "accounts" {
+  field id: id
+  field company_name: text required
+  field status: text default Prospect
+  field annual_revenue: integer default 0
+  field is_active: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query accounts_names {
+  sql: "select company_name as value from pgapp_data.nexus_erp_accounts order by 1"
+}
+
+entity "contacts" {
+  field id: id
+  field full_name: text required
+  field status: text default Lead
+  field is_primary: boolean default false
+  field account_name: text
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query contacts_names {
+  sql: "select full_name as value from pgapp_data.nexus_erp_contacts order by 1"
+}
+
+entity "leads" {
+  field id: id
+  field lead_name: text required
+  field status: text default New
+  field estimated_value: integer default 0
+  field is_hot: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query leads_names {
+  sql: "select lead_name as value from pgapp_data.nexus_erp_leads order by 1"
+}
+
+entity "opportunities" {
+  field id: id
+  field opportunity_name: text required
+  field status: text default Open
+  field deal_value: integer default 0
+  field is_priority: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query opportunities_names {
+  sql: "select opportunity_name as value from pgapp_data.nexus_erp_opportunities order by 1"
+}
+
+entity "activities" {
+  field id: id
+  field subject: text required
+  field status: text default Planned
+  field duration_minutes: integer default 0
+  field is_billable: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query activities_names {
+  sql: "select subject as value from pgapp_data.nexus_erp_activities order by 1"
+}
+
+page "Accounts" {
+  text "CRM / Accounts — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Accounts" of accounts {
+    columns: company_name, status, annual_revenue, is_active, created_at
+    link: company_name -> page AccountsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit accounts" of accounts {
+    fields: company_name, status, annual_revenue, is_active, notes
+    item status as radio ("Prospect", "Active", "Churned")
+    item notes as readonly
+  }
+
+  link "Quick edit accounts" -> page AccountsQuickEdit
+}
+
+query accounts_peer_status {
+  sql: "select id, company_name, status, annual_revenue from pgapp_data.nexus_erp_accounts
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "AccountsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Accounts report's linked column."
+  region "Other accounts with the same status" from query accounts_peer_status
+  link "Back to accounts" -> page Accounts
+}
+
+page "AccountsQuickEdit" {
+  editable_table "Accounts quick edit" of accounts {
+    columns: company_name, status, is_active
+  }
+}
+
+page "Contacts" {
+  text "CRM / Contacts — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Contacts" of contacts {
+    columns: full_name, status, is_primary, created_at
+    link: full_name -> page ContactsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit contacts" of contacts {
+    fields: full_name, status, is_primary, account_name, notes
+    item status as radio ("Lead", "Qualified", "Customer")
+    item account_name as popup from query accounts_names
+    item notes as readonly
+  }
+
+  link "Quick edit contacts" -> page ContactsQuickEdit
+}
+
+query contacts_peer_status {
+  sql: "select id, full_name, status from pgapp_data.nexus_erp_contacts
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "ContactsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Contacts report's linked column."
+  region "Other contacts with the same status" from query contacts_peer_status
+  link "Back to contacts" -> page Contacts
+}
+
+page "ContactsQuickEdit" {
+  editable_table "Contacts quick edit" of contacts {
+    columns: full_name, status, is_primary
+  }
+}
+
+page "Leads" {
+  text "CRM / Leads — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Leads" of leads {
+    columns: lead_name, status, estimated_value, is_hot, created_at
+    link: lead_name -> page LeadsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit leads" of leads {
+    fields: lead_name, status, estimated_value, is_hot, notes
+    item status as radio ("New", "Contacted", "Converted", "Lost")
+    item notes as readonly
+  }
+
+  link "Quick edit leads" -> page LeadsQuickEdit
+}
+
+query leads_peer_status {
+  sql: "select id, lead_name, status, estimated_value from pgapp_data.nexus_erp_leads
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "LeadsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Leads report's linked column."
+  region "Other leads with the same status" from query leads_peer_status
+  link "Back to leads" -> page Leads
+}
+
+page "LeadsQuickEdit" {
+  editable_table "Leads quick edit" of leads {
+    columns: lead_name, status, is_hot
+  }
+}
+
+page "Opportunities" {
+  text "CRM / Opportunities — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Opportunities" of opportunities {
+    columns: opportunity_name, status, deal_value, is_priority, created_at
+    link: opportunity_name -> page OpportunitiesDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit opportunities" of opportunities {
+    fields: opportunity_name, status, deal_value, is_priority, notes
+    item status as radio ("Open", "Won", "Lost")
+    item notes as readonly
+  }
+
+  link "Quick edit opportunities" -> page OpportunitiesQuickEdit
+}
+
+query opportunities_peer_status {
+  sql: "select id, opportunity_name, status, deal_value from pgapp_data.nexus_erp_opportunities
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "OpportunitiesDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Opportunities report's linked column."
+  region "Other opportunities with the same status" from query opportunities_peer_status
+  link "Back to opportunities" -> page Opportunities
+}
+
+page "OpportunitiesQuickEdit" {
+  editable_table "Opportunities quick edit" of opportunities {
+    columns: opportunity_name, status, is_priority
+  }
+}
+
+page "Activities" {
+  text "CRM / Activities — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Activities" of activities {
+    columns: subject, status, duration_minutes, is_billable, created_at
+    link: subject -> page ActivitiesDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit activities" of activities {
+    fields: subject, status, duration_minutes, is_billable, notes
+    item status as radio ("Planned", "Completed", "Cancelled")
+    item notes as readonly
+  }
+
+  link "Quick edit activities" -> page ActivitiesQuickEdit
+}
+
+query activities_peer_status {
+  sql: "select id, subject, status, duration_minutes from pgapp_data.nexus_erp_activities
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "ActivitiesDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Activities report's linked column."
+  region "Other activities with the same status" from query activities_peer_status
+  link "Back to activities" -> page Activities
+}
+
+page "ActivitiesQuickEdit" {
+  editable_table "Activities quick edit" of activities {
+    columns: subject, status, is_billable
+  }
+}
+

@@ -1,0 +1,87 @@
+# Cross-module reporting: query-backed (read-only) entities feeding
+# ordinary Report components, same pattern as helpdesk's status_summary.
+
+query revenue_by_status {
+  sql: "select status as label, count(*) as records, sum(deal_value) as total_value
+        from pgapp_data.nexus_erp_opportunities group by status order by 1"
+}
+entity "revenue_summary" from query revenue_by_status {
+  field label: text
+  field records: integer
+  field total_value: integer
+}
+page "RevenueReport" {
+  text "Opportunity pipeline value grouped by status."
+  report "Revenue by opportunity status" of revenue_summary {
+    columns: label, records, total_value
+    page_size: 10
+  }
+}
+
+query headcount_by_status {
+  sql: "select status as label, count(*) as records, sum(annual_salary) as total_salary
+        from pgapp_data.nexus_erp_employees group by status order by 1"
+}
+entity "headcount_summary" from query headcount_by_status {
+  field label: text
+  field records: integer
+  field total_salary: integer
+}
+page "HeadcountReport" {
+  text "Employee headcount and payroll cost grouped by employment status."
+  report "Headcount by status" of headcount_summary {
+    columns: label, records, total_salary
+    page_size: 10
+  }
+}
+
+query inventory_by_status {
+  sql: "select status as label, count(*) as records, sum(quantity_on_hand) as total_quantity
+        from pgapp_data.nexus_erp_stock_levels group by status order by 1"
+}
+entity "inventory_valuation" from query inventory_by_status {
+  field label: text
+  field records: integer
+  field total_quantity: integer
+}
+page "InventoryValuationReport" {
+  text "Stock position grouped by status."
+  report "Stock levels by status" of inventory_valuation {
+    columns: label, records, total_quantity
+    page_size: 10
+  }
+}
+
+query ticket_sla_by_status {
+  sql: "select status as label, count(*) as records, avg(satisfaction_score)::int as avg_satisfaction
+        from pgapp_data.nexus_erp_tickets group by status order by 1"
+}
+entity "ticket_sla_summary" from query ticket_sla_by_status {
+  field label: text
+  field records: integer
+  field avg_satisfaction: integer
+}
+page "TicketSlaReport" {
+  text "Support ticket volume and average satisfaction grouped by status."
+  report "Tickets by status" of ticket_sla_summary {
+    columns: label, records, avg_satisfaction
+    page_size: 10
+  }
+}
+
+query project_health_by_status {
+  sql: "select status as label, count(*) as records, sum(budget_allocated) as total_budget
+        from pgapp_data.nexus_erp_projects group by status order by 1"
+}
+entity "project_health" from query project_health_by_status {
+  field label: text
+  field records: integer
+  field total_budget: integer
+}
+page "ProjectHealthReport" {
+  text "Project count and allocated budget grouped by status."
+  report "Projects by status" of project_health {
+    columns: label, records, total_budget
+    page_size: 10
+  }
+}

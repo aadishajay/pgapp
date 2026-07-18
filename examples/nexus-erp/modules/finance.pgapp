@@ -1,0 +1,244 @@
+# Finance module: entities + list/detail/quick-edit pages.
+
+entity "ledger_accounts" {
+  field id: id
+  field account_name: text required
+  field status: text default Active
+  field current_balance: integer default 0
+  field is_reconciled: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query ledger_accounts_names {
+  sql: "select account_name as value from pgapp_data.nexus_erp_ledger_accounts order by 1"
+}
+
+entity "expenses" {
+  field id: id
+  field expense_reference: text required
+  field status: text default Submitted
+  field expense_amount: integer default 0
+  field is_billable: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query expenses_names {
+  sql: "select expense_reference as value from pgapp_data.nexus_erp_expenses order by 1"
+}
+
+entity "budgets" {
+  field id: id
+  field budget_name: text required
+  field status: text default Draft
+  field budget_amount: integer default 0
+  field is_locked: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query budgets_names {
+  sql: "select budget_name as value from pgapp_data.nexus_erp_budgets order by 1"
+}
+
+entity "ar_invoices" {
+  field id: id
+  field invoice_number: text required
+  field status: text default Open
+  field outstanding_amount: integer default 0
+  field is_disputed: boolean default false
+  field linked_account: text
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query ar_invoices_names {
+  sql: "select invoice_number as value from pgapp_data.nexus_erp_ar_invoices order by 1"
+}
+
+entity "ap_bills" {
+  field id: id
+  field bill_number: text required
+  field status: text default Received
+  field bill_amount: integer default 0
+  field is_recurring: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query ap_bills_names {
+  sql: "select bill_number as value from pgapp_data.nexus_erp_ap_bills order by 1"
+}
+
+page "LedgerAccounts" {
+  text "Finance / Ledger accounts — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Ledger accounts" of ledger_accounts {
+    columns: account_name, status, current_balance, is_reconciled, created_at
+    link: account_name -> page LedgerAccountsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit ledger accounts" of ledger_accounts {
+    fields: account_name, status, current_balance, is_reconciled, notes
+    item status as radio ("Active", "Frozen", "Closed")
+    item notes as readonly
+  }
+
+  link "Quick edit ledger accounts" -> page LedgerAccountsQuickEdit
+}
+
+query ledger_accounts_peer_status {
+  sql: "select id, account_name, status, current_balance from pgapp_data.nexus_erp_ledger_accounts
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "LedgerAccountsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Ledger accounts report's linked column."
+  region "Other ledger accounts with the same status" from query ledger_accounts_peer_status
+  link "Back to ledger accounts" -> page LedgerAccounts
+}
+
+page "LedgerAccountsQuickEdit" {
+  editable_table "Ledger accounts quick edit" of ledger_accounts {
+    columns: account_name, status, is_reconciled
+  }
+}
+
+page "Expenses" {
+  text "Finance / Expenses — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Expenses" of expenses {
+    columns: expense_reference, status, expense_amount, is_billable, created_at
+    link: expense_reference -> page ExpensesDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit expenses" of expenses {
+    fields: expense_reference, status, expense_amount, is_billable, notes
+    item status as radio ("Submitted", "Approved", "Reimbursed", "Rejected")
+    item notes as readonly
+  }
+
+  link "Quick edit expenses" -> page ExpensesQuickEdit
+}
+
+query expenses_peer_status {
+  sql: "select id, expense_reference, status, expense_amount from pgapp_data.nexus_erp_expenses
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "ExpensesDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Expenses report's linked column."
+  region "Other expenses with the same status" from query expenses_peer_status
+  link "Back to expenses" -> page Expenses
+}
+
+page "ExpensesQuickEdit" {
+  editable_table "Expenses quick edit" of expenses {
+    columns: expense_reference, status, is_billable
+  }
+}
+
+page "Budgets" {
+  text "Finance / Budgets — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Budgets" of budgets {
+    columns: budget_name, status, budget_amount, is_locked, created_at
+    link: budget_name -> page BudgetsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit budgets" of budgets {
+    fields: budget_name, status, budget_amount, is_locked, notes
+    item status as radio ("Draft", "Approved", "Exceeded")
+    item notes as readonly
+  }
+
+  link "Quick edit budgets" -> page BudgetsQuickEdit
+}
+
+query budgets_peer_status {
+  sql: "select id, budget_name, status, budget_amount from pgapp_data.nexus_erp_budgets
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "BudgetsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Budgets report's linked column."
+  region "Other budgets with the same status" from query budgets_peer_status
+  link "Back to budgets" -> page Budgets
+}
+
+page "BudgetsQuickEdit" {
+  editable_table "Budgets quick edit" of budgets {
+    columns: budget_name, status, is_locked
+  }
+}
+
+page "ArInvoices" {
+  text "Finance / AR invoices — 4 statuses tracked. Click a row to see peers with the same status."
+  report "AR invoices" of ar_invoices {
+    columns: invoice_number, status, outstanding_amount, is_disputed, created_at
+    link: invoice_number -> page ArInvoicesDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit ar invoices" of ar_invoices {
+    fields: invoice_number, status, outstanding_amount, is_disputed, linked_account, notes
+    item status as radio ("Open", "PartiallyPaid", "Paid", "WrittenOff")
+    item linked_account as popup from query ledger_accounts_names
+    item notes as readonly
+  }
+
+  link "Quick edit ar invoices" -> page ArInvoicesQuickEdit
+}
+
+query ar_invoices_peer_status {
+  sql: "select id, invoice_number, status, outstanding_amount from pgapp_data.nexus_erp_ar_invoices
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "ArInvoicesDetail" {
+  text "The status below arrived as a URL parameter forwarded by the AR invoices report's linked column."
+  region "Other ar invoices with the same status" from query ar_invoices_peer_status
+  link "Back to ar invoices" -> page ArInvoices
+}
+
+page "ArInvoicesQuickEdit" {
+  editable_table "AR invoices quick edit" of ar_invoices {
+    columns: invoice_number, status, is_disputed
+  }
+}
+
+page "ApBills" {
+  text "Finance / AP bills — 3 statuses tracked. Click a row to see peers with the same status."
+  report "AP bills" of ap_bills {
+    columns: bill_number, status, bill_amount, is_recurring, created_at
+    link: bill_number -> page ApBillsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit ap bills" of ap_bills {
+    fields: bill_number, status, bill_amount, is_recurring, notes
+    item status as radio ("Received", "Approved", "Paid")
+    item notes as readonly
+  }
+
+  link "Quick edit ap bills" -> page ApBillsQuickEdit
+}
+
+query ap_bills_peer_status {
+  sql: "select id, bill_number, status, bill_amount from pgapp_data.nexus_erp_ap_bills
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "ApBillsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the AP bills report's linked column."
+  region "Other ap bills with the same status" from query ap_bills_peer_status
+  link "Back to ap bills" -> page ApBills
+}
+
+page "ApBillsQuickEdit" {
+  editable_table "AP bills quick edit" of ap_bills {
+    columns: bill_number, status, is_recurring
+  }
+}
+

@@ -228,6 +228,21 @@ app by name (Terraform-shaped, no `include`, no import graph):
 it with `cargo run -- examples/helpdesk-modular`; it syncs to the same
 metadata as the single-file version.
 
+`examples/nexus-erp/` pushes the same mechanism to scale: a 200-page,
+60-entity app modeling a medium company's core systems (CRM, sales,
+inventory, purchasing, HR, finance, projects, support, marketing,
+operations, facilities, compliance) across 15 files under one
+`app.pgapp` — every entity gets a list+form, detail, and quick-edit
+page, plus 12 module dashboards, cross-module reports, and admin
+pages. Seed it with `examples/nexus-erp/seed.sql` after the first
+sync (run `cargo run -- examples/nexus-erp`, or the installed `pgapp`
+binary, first so the tables exist). It's also the fixture used to
+confirm the server holds up under load: 30 parallel threads sweeping
+all 200 pages sustained ~900 req/s with zero errors (p50 ~27ms, p99
+~94ms on a single shared connection pool), and 30 threads doing
+concurrent writes across 4 entities landed every row with zero
+conflicts.
+
 ## Components
 
 A page's body is `Vec<ComponentDef>` (`src/model.rs`) — there's no

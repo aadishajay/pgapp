@@ -1,0 +1,244 @@
+# Sales module: entities + list/detail/quick-edit pages.
+
+entity "quotes" {
+  field id: id
+  field quote_number: text required
+  field status: text default Draft
+  field quote_total: integer default 0
+  field is_expired: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query quotes_names {
+  sql: "select quote_number as value from pgapp_data.nexus_erp_quotes order by 1"
+}
+
+entity "sales_orders" {
+  field id: id
+  field order_number: text required
+  field status: text default Pending
+  field order_total: integer default 0
+  field is_rush: boolean default false
+  field linked_quote: text
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query sales_orders_names {
+  sql: "select order_number as value from pgapp_data.nexus_erp_sales_orders order by 1"
+}
+
+entity "invoices" {
+  field id: id
+  field invoice_number: text required
+  field status: text default Unpaid
+  field amount_due: integer default 0
+  field is_recurring: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query invoices_names {
+  sql: "select invoice_number as value from pgapp_data.nexus_erp_invoices order by 1"
+}
+
+entity "payments" {
+  field id: id
+  field payment_reference: text required
+  field status: text default Pending
+  field payment_amount: integer default 0
+  field is_partial: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query payments_names {
+  sql: "select payment_reference as value from pgapp_data.nexus_erp_payments order by 1"
+}
+
+entity "price_lists" {
+  field id: id
+  field price_list_name: text required
+  field status: text default Draft
+  field discount_percent: integer default 0
+  field is_default: boolean default false
+  field notes: text
+  field created_at: timestamp default now
+}
+
+query price_lists_names {
+  sql: "select price_list_name as value from pgapp_data.nexus_erp_price_lists order by 1"
+}
+
+page "Quotes" {
+  text "Sales / Quotes — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Quotes" of quotes {
+    columns: quote_number, status, quote_total, is_expired, created_at
+    link: quote_number -> page QuotesDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit quotes" of quotes {
+    fields: quote_number, status, quote_total, is_expired, notes
+    item status as radio ("Draft", "Sent", "Accepted", "Rejected")
+    item notes as readonly
+  }
+
+  link "Quick edit quotes" -> page QuotesQuickEdit
+}
+
+query quotes_peer_status {
+  sql: "select id, quote_number, status, quote_total from pgapp_data.nexus_erp_quotes
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "QuotesDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Quotes report's linked column."
+  region "Other quotes with the same status" from query quotes_peer_status
+  link "Back to quotes" -> page Quotes
+}
+
+page "QuotesQuickEdit" {
+  editable_table "Quotes quick edit" of quotes {
+    columns: quote_number, status, is_expired
+  }
+}
+
+page "SalesOrders" {
+  text "Sales / Sales orders — 4 statuses tracked. Click a row to see peers with the same status."
+  report "Sales orders" of sales_orders {
+    columns: order_number, status, order_total, is_rush, created_at
+    link: order_number -> page SalesOrdersDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit sales orders" of sales_orders {
+    fields: order_number, status, order_total, is_rush, linked_quote, notes
+    item status as radio ("Pending", "Confirmed", "Shipped", "Delivered")
+    item linked_quote as popup from query quotes_names
+    item notes as readonly
+  }
+
+  link "Quick edit sales orders" -> page SalesOrdersQuickEdit
+}
+
+query sales_orders_peer_status {
+  sql: "select id, order_number, status, order_total from pgapp_data.nexus_erp_sales_orders
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "SalesOrdersDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Sales orders report's linked column."
+  region "Other sales orders with the same status" from query sales_orders_peer_status
+  link "Back to sales orders" -> page SalesOrders
+}
+
+page "SalesOrdersQuickEdit" {
+  editable_table "Sales orders quick edit" of sales_orders {
+    columns: order_number, status, is_rush
+  }
+}
+
+page "Invoices" {
+  text "Sales / Invoices — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Invoices" of invoices {
+    columns: invoice_number, status, amount_due, is_recurring, created_at
+    link: invoice_number -> page InvoicesDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit invoices" of invoices {
+    fields: invoice_number, status, amount_due, is_recurring, notes
+    item status as radio ("Unpaid", "Paid", "Overdue")
+    item notes as readonly
+  }
+
+  link "Quick edit invoices" -> page InvoicesQuickEdit
+}
+
+query invoices_peer_status {
+  sql: "select id, invoice_number, status, amount_due from pgapp_data.nexus_erp_invoices
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "InvoicesDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Invoices report's linked column."
+  region "Other invoices with the same status" from query invoices_peer_status
+  link "Back to invoices" -> page Invoices
+}
+
+page "InvoicesQuickEdit" {
+  editable_table "Invoices quick edit" of invoices {
+    columns: invoice_number, status, is_recurring
+  }
+}
+
+page "Payments" {
+  text "Sales / Payments — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Payments" of payments {
+    columns: payment_reference, status, payment_amount, is_partial, created_at
+    link: payment_reference -> page PaymentsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit payments" of payments {
+    fields: payment_reference, status, payment_amount, is_partial, notes
+    item status as radio ("Pending", "Cleared", "Failed")
+    item notes as readonly
+  }
+
+  link "Quick edit payments" -> page PaymentsQuickEdit
+}
+
+query payments_peer_status {
+  sql: "select id, payment_reference, status, payment_amount from pgapp_data.nexus_erp_payments
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "PaymentsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Payments report's linked column."
+  region "Other payments with the same status" from query payments_peer_status
+  link "Back to payments" -> page Payments
+}
+
+page "PaymentsQuickEdit" {
+  editable_table "Payments quick edit" of payments {
+    columns: payment_reference, status, is_partial
+  }
+}
+
+page "PriceLists" {
+  text "Sales / Price lists — 3 statuses tracked. Click a row to see peers with the same status."
+  report "Price lists" of price_lists {
+    columns: price_list_name, status, discount_percent, is_default, created_at
+    link: price_list_name -> page PriceListsDetail (status: status)
+    page_size: 10
+  }
+
+  form "Create / edit price lists" of price_lists {
+    fields: price_list_name, status, discount_percent, is_default, notes
+    item status as radio ("Draft", "Active", "Archived")
+    item notes as readonly
+  }
+
+  link "Quick edit price lists" -> page PriceListsQuickEdit
+}
+
+query price_lists_peer_status {
+  sql: "select id, price_list_name, status, discount_percent from pgapp_data.nexus_erp_price_lists
+        where status = :status and id != :id order by id desc limit 8"
+}
+
+page "PriceListsDetail" {
+  text "The status below arrived as a URL parameter forwarded by the Price lists report's linked column."
+  region "Other price lists with the same status" from query price_lists_peer_status
+  link "Back to price lists" -> page PriceLists
+}
+
+page "PriceListsQuickEdit" {
+  editable_table "Price lists quick edit" of price_lists {
+    columns: price_list_name, status, is_default
+  }
+}
+
