@@ -136,6 +136,18 @@ body {
   font-size: 0.9rem;
 }
 
+.pgapp-nav-collapse { display: flex; align-items: center; gap: 1.25rem; flex: 1; }
+.pgapp-nav-toggle {
+  display: none;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1.25rem;
+  line-height: 1;
+  padding: 0.15rem 0.4rem;
+  color: var(--m3-on-surface);
+}
+
 .pgapp-navbar { display: flex; gap: 0.15rem; list-style: none; margin: 0; padding: 0; }
 .pgapp-navbar-item { position: relative; }
 .pgapp-navbar .pgapp-link,
@@ -192,6 +204,7 @@ body {
   border-radius: var(--m3-radius-lg);
 }
 .pgapp-header .pgapp-text { color: var(--m3-on-primary-container); font-weight: 500; }
+.pgapp-brand { color: var(--m3-on-primary-container); font-size: 1.15rem; font-weight: 700; margin-right: 1.1rem; }
 .pgapp-footer { margin-top: 2.25rem; padding-top: 1rem; border-top: 1px solid var(--m3-outline-variant); }
 .pgapp-header .pgapp-items, .pgapp-footer .pgapp-items { margin-bottom: 0; }
 
@@ -460,6 +473,17 @@ a.pgapp-link:hover .pgapp-icon { color: var(--m3-primary); }
   body { padding: 0 0.85rem; margin: 1.25rem auto; }
   .pgapp-nav { flex-wrap: wrap; row-gap: 0.5rem; }
   .pgapp-navbar { flex-wrap: wrap; row-gap: 0.35rem; }
+  .pgapp-nav-toggle { display: inline-flex; align-items: center; justify-content: center; }
+  .pgapp-nav-collapse {
+    display: none;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    flex-basis: 100%;
+    margin-top: 0.5rem;
+  }
+  .pgapp-nav.pgapp-nav-open .pgapp-nav-collapse { display: flex; }
+  .pgapp-nav-collapse .pgapp-nav-user { margin-left: 0; }
   .pgapp-report-toolbar .pgapp-input[type="search"] { min-width: 0; flex: 1 1 100%; }
   .pgapp-form-floating {
     top: 1rem;

@@ -443,14 +443,17 @@ fn layout(
     user: Option<(&str, bool)>,
     body: &str,
 ) -> String {
-    let header = if chrome.header.is_empty() {
-        String::new()
-    } else {
-        format!(
-            r#"<header class="pgapp-header">{}</header>"#,
-            chrome_items_html(app, chrome.header, chrome.regions)
-        )
-    };
+    // The app's own name/brand always lives in the header, not the nav
+    // bar — the nav is for navigating *within* the app; saying what the
+    // app *is* isn't one of its items. Any custom `header { }` chrome
+    // from the markup renders right after the brand, inside the same
+    // <header>.
+    let header = format!(
+        r#"<header class="pgapp-header"><a class="pgapp-link pgapp-brand" href="/{app_esc}">{brand}</a>{custom_header}</header>"#,
+        app_esc = escape(app),
+        brand = escape(app_name),
+        custom_header = chrome_items_html(app, chrome.header, chrome.regions),
+    );
     let footer = if chrome.footer.is_empty() {
         String::new()
     } else {
@@ -475,7 +478,10 @@ fn layout(
 </head>
 <body>
 {header}
-<nav class="pgapp-nav"><a class="pgapp-link" href="/{app_esc}">{brand}</a>{navbar}{nav_user}</nav>
+<nav class="pgapp-nav">
+<button type="button" class="pgapp-nav-toggle" aria-expanded="false" aria-controls="pgapp-nav-collapse" aria-label="Toggle navigation">&#9776;</button>
+<div class="pgapp-nav-collapse" id="pgapp-nav-collapse">{navbar}{nav_user}</div>
+</nav>
 <h1 class="pgapp-title">{title}</h1>
 {body}
 {footer}
@@ -483,7 +489,6 @@ fn layout(
 </html>"#,
         app_esc = escape(app),
         title = escape(title),
-        brand = escape(app_name),
         icons_stylesheet = icons.stylesheet_tag(),
         chart_lib_script = chart_lib
             .js_path
@@ -493,6 +498,7 @@ fn layout(
         assets = asset_tags(app),
         navbar = nav_html(app, chrome.nav),
         nav_user = nav_user_html(app, user),
+        header = header,
         body = body,
     )
 }

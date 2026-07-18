@@ -211,6 +211,27 @@ window.pgapp = (function () {
     });
   }
 
+  // Mobile nav: a hamburger toggle collapses/expands the nav links +
+  // signed-in-user corner into a dropdown. Collapsed by default below
+  // the theme's mobile breakpoint; desktop CSS ignores the open/closed
+  // class entirely, so this never touches the wide layout.
+  function bindMobileNavToggle() {
+    var toggle = document.querySelector(".pgapp-nav-toggle");
+    var nav = toggle && toggle.closest(".pgapp-nav");
+    if (!toggle || !nav) return;
+    toggle.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      var open = !nav.classList.contains("pgapp-nav-open");
+      nav.classList.toggle("pgapp-nav-open", open);
+      toggle.setAttribute("aria-expanded", open ? "true" : "false");
+    });
+    document.addEventListener("click", function (ev) {
+      if (nav.contains(ev.target)) return;
+      nav.classList.remove("pgapp-nav-open");
+      toggle.setAttribute("aria-expanded", "false");
+    });
+  }
+
   // A small promise-based dialog used for both alert() and confirm()
   // below — styled via the .pgapp-dialog-* theme classes instead of the
   // browser's native (unstyleable, blocking) alert/confirm popups.
@@ -300,10 +321,12 @@ window.pgapp = (function () {
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", bindDynamicActions);
     document.addEventListener("DOMContentLoaded", bindNavToggles);
+    document.addEventListener("DOMContentLoaded", bindMobileNavToggle);
     document.addEventListener("DOMContentLoaded", bindConfirmForms);
   } else {
     bindDynamicActions();
     bindNavToggles();
+    bindMobileNavToggle();
     bindConfirmForms();
   }
 
