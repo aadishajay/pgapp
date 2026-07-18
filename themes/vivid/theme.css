@@ -254,7 +254,8 @@ body {
   box-shadow: var(--v-shadow);
 }
 .pgapp-popup-dialog::backdrop { background: rgb(30 27 46 / 0.45); }
-.pgapp-popup-list { list-style: none; margin: 0 0 0.6rem; padding: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+.pgapp-popup-search { width: 100%; margin-bottom: 0.6rem; }
+.pgapp-popup-list { list-style: none; margin: 0 0 0.6rem; padding: 0; display: flex; flex-direction: column; gap: 0.15rem; max-height: 16rem; overflow-y: auto; }
 .pgapp-popup-list button {
   width: 100%;
   text-align: left;
@@ -268,6 +269,7 @@ body {
   cursor: pointer;
 }
 .pgapp-popup-list button:hover { background: rgb(124 58 237 / 0.12); color: var(--v-violet); }
+.pgapp-popup-empty { padding: 0.55rem 0.7rem; font-size: 0.9rem; color: var(--v-muted); font-style: italic; }
 
 .pgapp-slider { display: flex; align-items: center; gap: 0.8rem; }
 .pgapp-slider-input { flex: 1; accent-color: var(--v-fuchsia); }

@@ -147,6 +147,43 @@ window.pgapp = (function () {
     });
   }
 
+  // ---- popup LOV search ----
+  //
+  // A popup LOV's dialog (see item_types/popup.rs) carries a search
+  // input above its <ul class="pgapp-popup-list">; openPopup resets it
+  // fresh every time the dialog opens (so a stale filter from last time
+  // never lingers), and filterPopup hides/shows <li>s by substring match
+  // against their own rendered text — no server round trip, since every
+  // choice is already in the DOM.
+
+  function filterPopup(dialogId, query) {
+    var dialog = document.getElementById(dialogId);
+    if (!dialog) return;
+    var q = query.trim().toLowerCase();
+    var items = dialog.querySelectorAll(".pgapp-popup-list li:not(.pgapp-popup-empty)");
+    var visible = 0;
+    for (var i = 0; i < items.length; i++) {
+      var li = items[i];
+      var match = q === "" || (li.textContent || "").toLowerCase().indexOf(q) !== -1;
+      li.style.display = match ? "" : "none";
+      if (match) visible++;
+    }
+    var empty = dialog.querySelector(".pgapp-popup-empty");
+    if (empty) empty.style.display = visible === 0 ? "" : "none";
+  }
+
+  function openPopup(dialogId, searchId) {
+    var dialog = document.getElementById(dialogId);
+    if (!dialog) return;
+    var search = document.getElementById(searchId);
+    if (search) {
+      search.value = "";
+      filterPopup(dialogId, "");
+    }
+    dialog.showModal();
+    if (search) search.focus();
+  }
+
   // Nested nav: a click-to-toggle affordance on the caret button, since
   // CSS-only :hover has no equivalent on touch devices and a submenu is
   // otherwise unreachable there.
@@ -274,6 +311,8 @@ window.pgapp = (function () {
     getItem: getItem,
     setItem: setItem,
     refreshRegion: refreshRegion,
+    openPopup: openPopup,
+    filterPopup: filterPopup,
     alert: pgappAlert,
     confirm: pgappConfirm,
   };

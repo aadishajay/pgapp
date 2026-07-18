@@ -491,7 +491,7 @@ src/item_types/
   readonly.rs             visible, not editable, round-trips via hidden input
   checkbox.rs             default for boolean; read_value overridden
   radio.rs                radio group over args.choices
-  popup.rs                "Pop Up LOV": <dialog> + pgapp.setItem(...)
+  popup.rs                "Pop Up LOV": <dialog> + search filter + pgapp.setItem(...)
   slider.rs               <input type=range>, reads min/max/step from config
 ```
 
@@ -512,6 +512,14 @@ Two config keys are reserved by convention, generic across every kind
 list) and `query` (a named query's rows instead) — a component only
 needs to read `args.choices` to get either, without caring which one it
 was.
+
+`popup` (a "Pop Up LOV") renders every choice into the dialog up front,
+so its search box (`pgapp.filterPopup` in `/runtime.js`) filters
+client-side by substring match against each row's own text — no
+server round trip, no debouncing needed. `pgapp.openPopup` resets the
+search box and re-shows every row each time the dialog opens, so a
+filter from a previous look never lingers; an empty result shows a
+"No matches" row (`.pgapp-popup-empty`) instead of a blank list.
 
 ## Charts
 
@@ -867,7 +875,7 @@ of a fixed set of classes — `pgapp-nav`, `pgapp-link`, `pgapp-title`,
 `pgapp-items`, `pgapp-text`, `pgapp-header`, `pgapp-footer`,
 `pgapp-checkbox`, `pgapp-readonly`, `pgapp-radio-group` (+
 `pgapp-radio-option`), `pgapp-popup` (+ `pgapp-popup-dialog` /
-`pgapp-popup-list`), `pgapp-region` (+ `pgapp-region-title`),
+`pgapp-popup-search` / `pgapp-popup-list` / `pgapp-popup-empty`), `pgapp-region` (+ `pgapp-region-title`),
 `pgapp-report`, `pgapp-form-panel`, `pgapp-editable-table` (+
 `pgapp-editable-row-wrap` / `pgapp-editable-row`), `pgapp-row-actions`,
 `pgapp-pagination`, `pgapp-icon`, `pgapp-chart` (+ `pgapp-chart-svg`) —
