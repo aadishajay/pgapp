@@ -8,6 +8,7 @@
 
 pub mod actions;
 pub mod chart_lib;
+pub mod control;
 pub mod html;
 pub mod icons;
 pub mod item_types;

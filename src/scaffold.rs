@@ -311,7 +311,7 @@ Examples:
 /// leading/trailing underscore — used only for the generated
 /// file/directory name. The app's *display* name (quoted in the
 /// markup itself) is written exactly as given; this never touches it.
-fn slugify(name: &str) -> String {
+pub(crate) fn slugify(name: &str) -> String {
     let mut slug = String::new();
     let mut last_was_sep = true; // avoid a leading underscore
     for c in name.chars() {

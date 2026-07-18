@@ -3,11 +3,17 @@
 //! regions, paginated query rows) lives in `server::query_engine`,
 //! which this module just calls into.
 //!
+//! Every route is scoped under `/:app` — an app's URL slug, resolved
+//! against [`AppState::apps`] once per request. A single shared
+//! `PgPool` backs every app in the process (see `src/control.rs`);
+//! what's per-app is only the in-memory [`AppEntry`] (the reloadable
+//! markup-derived snapshot) and the rows that snapshot's queries touch.
+//!
 //! A page is an ordered list of components, rendered top to bottom by
-//! `show` (`GET /:page`). `Form` and `EditableTable` are the only
+//! `show` (`GET /:app/:page`). `Form` and `EditableTable` are the only
 //! *writable* component kinds; both are addressed by their index on the
-//! page (`/:page/c/:idx/...`) since a page may have more than one. A
-//! `Report`'s row actions (Edit/Delete) only appear when the same page
+//! page (`/:app/:page/c/:idx/...`) since a page may have more than one.
+//! A `Report`'s row actions (Edit/Delete) only appear when the same page
 //! also has a `Form` bound to the same entity — `sibling_form_idx`
 //! finds it by scanning the page's own components, no extra metadata
 //! needed.
@@ -40,9 +46,9 @@ use crate::render;
 use crate::theme::Theme;
 use query_engine::{bind_context, resolve_field_choices, resolve_regions, run_named_query_page, run_named_query_rows};
 
-/// Everything that comes from the markup file and `pgapp_meta` — as
-/// opposed to `pool`/`item_types`/`actions`, which are either a live
-/// connection or compiled-in Rust and can't be "reloaded" without
+/// Everything that comes from one app's markup file and `pgapp_meta` —
+/// as opposed to `pool`/`item_types`/`actions`, which are shared across
+/// every app in the process and can't be "reloaded" per-app without
 /// rebuilding the binary. Bundled into one struct so a reload swaps
 /// all of it atomically: a request never sees a new `RuntimeApp`
 /// paired with a stale `Theme`.
@@ -54,15 +60,16 @@ pub struct AppData {
     pub chart_lib: ChartLib,
 }
 
-pub struct AppState {
-    pub pool: PgPool,
+/// One app being served: where its markup lives on disk, and the
+/// current reloadable snapshot of what's synced from it. Keyed by URL
+/// slug in [`AppState::apps`] — see `src/control.rs` for where that
+/// registry itself lives (`pgapp_control.apps`).
+pub struct AppEntry {
     pub markup_path: String,
     pub data: RwLock<Arc<AppData>>,
-    pub item_types: item_types::Registry,
-    pub actions: actions::Registry,
 }
 
-impl AppState {
+impl AppEntry {
     /// A cheap snapshot of the current markup-derived state — an Arc
     /// clone, not a copy. Handlers take one of these at the top and use
     /// it for the rest of the request, so a concurrent reload can never
@@ -77,13 +84,14 @@ impl AppState {
     /// icons/chart_lib. No process restart: in-flight requests keep
     /// whatever snapshot they already took via `data()`, and the very
     /// next request sees the update. If anything here fails (bad
-    /// markup, a validation error), the swap never happens and the
-    /// server keeps serving the last-good snapshot.
-    pub async fn reload(&self) -> anyhow::Result<()> {
+    /// markup, a validation error), the swap never happens and this
+    /// app keeps serving its last-good snapshot — other apps in the
+    /// same process are entirely unaffected.
+    pub async fn reload(&self, pool: &PgPool, item_types: &item_types::Registry, actions: &actions::Registry) -> anyhow::Result<()> {
         let app_def = crate::source::load(&self.markup_path)?;
-        meta::sync_app(&self.pool, &app_def, &self.item_types, &self.actions).await?;
-        let app = meta::load_app(&self.pool, &app_def.name).await?;
-        let runtime_js = meta::load_runtime_js(&self.pool, &app_def.name).await?;
+        meta::sync_app(pool, &app_def, item_types, actions).await?;
+        let app = meta::load_app(pool, &app_def.name).await?;
+        let runtime_js = meta::load_runtime_js(pool, &app_def.name).await?;
         let theme = crate::theme::load(app.theme.as_deref().unwrap_or("shadcn"))?;
         let icons = crate::icons::load(app.icons.as_deref().unwrap_or("builtin"))?;
         let chart_lib = crate::chart_lib::load(app.chart_lib.as_deref().unwrap_or("inline"))?;
@@ -92,33 +100,49 @@ impl AppState {
     }
 }
 
+pub struct AppState {
+    pub pool: PgPool,
+    pub apps: HashMap<String, AppEntry>,
+    pub item_types: item_types::Registry,
+    pub actions: actions::Registry,
+}
+
+impl AppState {
+    pub fn app_or_404<'a>(&'a self, slug: &str) -> Result<&'a AppEntry, AppError> {
+        self.apps
+            .get(slug)
+            .ok_or_else(|| (StatusCode::NOT_FOUND, format!("no such app '{slug}'")))
+    }
+}
+
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/", get(index))
-        .route("/theme.css", get(theme_css))
-        .route("/runtime.js", get(runtime_js))
-        .route("/chart-lib.js", get(chart_lib_js))
-        .route("/assets/*path", get(asset))
-        .route("/api/:entity", get(api_list))
-        .route("/login", get(auth::login_form).post(auth::login))
-        .route("/setup", post(auth::setup))
-        .route("/logout", post(auth::logout))
-        .route("/users", get(auth::users_page).post(auth::users_create))
-        .route("/users/:id/delete", post(auth::users_delete))
-        .route("/admin/reload", get(admin_reload_page).post(admin_reload))
-        .route("/:page", get(show))
-        .route("/:page/region/:query", get(region_fragment))
-        .route("/:page/c/:idx/create", post(create))
-        .route("/:page/c/:idx/update/:id", post(update))
-        .route("/:page/c/:idx/delete/:id", post(delete))
-        .route("/:page/c/:idx/run", post(run_action))
-        .route("/:page/c/:idx/views", post(save_view))
-        .route("/:page/c/:idx/views/:vid/delete", post(delete_view))
+        .route("/", get(landing))
+        .route("/:app", get(index))
+        .route("/:app/theme.css", get(theme_css))
+        .route("/:app/runtime.js", get(runtime_js))
+        .route("/:app/chart-lib.js", get(chart_lib_js))
+        .route("/:app/assets/*path", get(asset))
+        .route("/:app/api/:entity", get(api_list))
+        .route("/:app/login", get(auth::login_form).post(auth::login))
+        .route("/:app/setup", post(auth::setup))
+        .route("/:app/logout", post(auth::logout))
+        .route("/:app/users", get(auth::users_page).post(auth::users_create))
+        .route("/:app/users/:id/delete", post(auth::users_delete))
+        .route("/:app/admin/reload", get(admin_reload_page).post(admin_reload))
+        .route("/:app/:page", get(show))
+        .route("/:app/:page/region/:query", get(region_fragment))
+        .route("/:app/:page/c/:idx/create", post(create))
+        .route("/:app/:page/c/:idx/update/:id", post(update))
+        .route("/:app/:page/c/:idx/delete/:id", post(delete))
+        .route("/:app/:page/c/:idx/run", post(run_action))
+        .route("/:app/:page/c/:idx/views", post(save_view))
+        .route("/:app/:page/c/:idx/views/:vid/delete", post(delete_view))
         .layer(middleware::from_fn_with_state(state.clone(), auth::require_login))
         .with_state(state)
 }
 
-/// Gate for `/admin/reload`: same "everyone's an admin" fallback as
+/// Gate for `/:app/admin/reload`: same "everyone's an admin" fallback as
 /// the rest of the app when there's no `auth { }` block at all (see
 /// `report_extras`'s `can_delete`), since reload isn't part of the
 /// user model — it should work in the common no-auth demo apps too.
@@ -464,22 +488,38 @@ fn build_value_exprs(
     Ok((columns, exprs, binds))
 }
 
-/// `/` is just a redirect to the app's first page — there's no
+/// `GET /` — a single-app server redirects straight into that one
+/// app; a multi-app server shows a plain list of what's registered.
+async fn landing(State(state): State<Arc<AppState>>) -> Response {
+    if state.apps.len() == 1 {
+        let slug = state.apps.keys().next().expect("checked len() == 1 above");
+        return Redirect::to(&format!("/{}", url_encode(slug))).into_response();
+    }
+    let mut slugs: Vec<String> = state.apps.keys().cloned().collect();
+    slugs.sort();
+    Html(render::workspace_landing(&slugs)).into_response()
+}
+
+/// `/:app` is just a redirect to that app's first page — there's no
 /// separate "homepage" content to render, so nothing here needs
-/// `auth_ctx`; `show` (the `/:page` handler) re-checks login/role
+/// `auth_ctx`; `show` (the `/:app/:page` handler) re-checks login/role
 /// requirements on the page it lands on.
-async fn index(State(state): State<Arc<AppState>>) -> Result<Redirect, AppError> {
-    let data = state.data();
+async fn index(State(state): State<Arc<AppState>>, Path(app): Path<String>) -> Result<Redirect, AppError> {
+    let entry = state.app_or_404(&app)?;
+    let data = entry.data();
     let first = data
         .app
         .pages
         .first()
         .ok_or_else(|| (StatusCode::NOT_FOUND, "this app has no pages".to_string()))?;
-    Ok(Redirect::to(&format!("/{}", url_encode(&first.name))))
+    Ok(Redirect::to(&format!("/{}/{}", url_encode(&app), url_encode(&first.name))))
 }
 
-async fn theme_css(State(state): State<Arc<AppState>>) -> Response {
-    match tokio::fs::read(&state.data().theme.css_path).await {
+async fn theme_css(State(state): State<Arc<AppState>>, Path(app): Path<String>) -> Response {
+    let Ok(entry) = state.app_or_404(&app) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match tokio::fs::read(&entry.data().theme.css_path).await {
         Ok(bytes) => ([(header::CONTENT_TYPE, "text/css")], bytes).into_response(),
         Err(_) => StatusCode::NOT_FOUND.into_response(),
     }
@@ -488,10 +528,13 @@ async fn theme_css(State(state): State<Arc<AppState>>) -> Response {
 /// The pgapp runtime JS library — stored in `pgapp_meta`, not a static
 /// file (see `AppData::runtime_js` / `main.rs`), so it's part of the
 /// same in-database metadata as everything else.
-async fn runtime_js(State(state): State<Arc<AppState>>) -> Response {
+async fn runtime_js(State(state): State<Arc<AppState>>, Path(app): Path<String>) -> Response {
+    let Ok(entry) = state.app_or_404(&app) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
     (
         [(header::CONTENT_TYPE, "application/javascript")],
-        state.data().runtime_js.clone(),
+        entry.data().runtime_js.clone(),
     )
         .into_response()
 }
@@ -499,8 +542,11 @@ async fn runtime_js(State(state): State<Arc<AppState>>) -> Response {
 /// The active pluggable chart library's JS, if one is configured
 /// (`PGAPP_CHART_LIB` other than the built-in "inline" backend, which
 /// needs no JS at all — see `src/chart_lib.rs`).
-async fn chart_lib_js(State(state): State<Arc<AppState>>) -> Response {
-    match &state.data().chart_lib.js_path {
+async fn chart_lib_js(State(state): State<Arc<AppState>>, Path(app): Path<String>) -> Response {
+    let Ok(entry) = state.app_or_404(&app) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match &entry.data().chart_lib.js_path {
         Some(path) => match tokio::fs::read(path).await {
             Ok(bytes) => ([(header::CONTENT_TYPE, "application/javascript")], bytes).into_response(),
             Err(_) => StatusCode::NOT_FOUND.into_response(),
@@ -509,7 +555,11 @@ async fn chart_lib_js(State(state): State<Arc<AppState>>) -> Response {
     }
 }
 
-async fn asset(Path(path): Path<String>) -> Response {
+/// Static app-level asset override (`assets/app.css`/`assets/app.js`),
+/// served from one shared directory regardless of which app asked —
+/// there's no per-app asset directory (yet); only the URL is app-scoped,
+/// to keep every path consistently rooted at `/:app`.
+async fn asset(Path((_app, path)): Path<(String, String)>) -> Response {
     let safe = path.rsplit('/').next().unwrap_or("");
     if safe != "app.css" && safe != "app.js" {
         return StatusCode::NOT_FOUND.into_response();
@@ -532,6 +582,7 @@ async fn asset(Path(path): Path<String>) -> Response {
 /// needs along the way.
 #[allow(clippy::too_many_arguments)]
 async fn render_component(
+    app: &str,
     state: &AppState,
     data: &AppData,
     page_name: &str,
@@ -544,7 +595,7 @@ async fn render_component(
 ) -> anyhow::Result<String> {
     match component {
         RuntimeComponent::Text { text, html } => Ok(render::text_html(text, html)),
-        RuntimeComponent::Link { label, target_page, html } => Ok(render::link_html(label, target_page, html)),
+        RuntimeComponent::Link { label, target_page, html } => Ok(render::link_html(app, label, target_page, html)),
         RuntimeComponent::Region { label, query: qname, columns, html } => {
             Ok(render::region_html(label, qname, regions, columns, html))
         }
@@ -554,7 +605,7 @@ async fn render_component(
         RuntimeComponent::DynamicAction { .. } => Ok(String::new()),
 
         RuntimeComponent::Action { label, name, html, .. } => {
-            Ok(render::action_html(page_name, idx, label, name, html))
+            Ok(render::action_html(app, page_name, idx, label, name, html))
         }
 
         RuntimeComponent::Chart { title, query: qname, chart_type, x, y, html } => {
@@ -595,11 +646,11 @@ async fn render_component(
                     let rp = fetch_report_rows(&state.pool, entity, &filters, columns, *page_size, after, before).await?;
                     let prev_href = rp.has_prev.then(|| {
                         let id = rp.rows.first().and_then(|r| r.get("id")).and_then(|v| v.clone()).unwrap_or_default();
-                        format!("/{page_name}?{p_before}={}{filter_qs}", url_encode(&id))
+                        format!("/{app}/{page_name}?{p_before}={}{filter_qs}", url_encode(&id))
                     });
                     let next_href = rp.has_next.then(|| {
                         let id = rp.rows.last().and_then(|r| r.get("id")).and_then(|v| v.clone()).unwrap_or_default();
-                        format!("/{page_name}?{p_after}={}{filter_qs}", url_encode(&id))
+                        format!("/{app}/{page_name}?{p_after}={}{filter_qs}", url_encode(&id))
                     });
                     (rp.rows, prev_href, next_href)
                 }
@@ -618,15 +669,16 @@ async fn render_component(
                     let (json_rows, has_next) =
                         run_named_query_page(&state.pool, rq, &ctx, &where_clause, &binds, *page_size, page_num).await?;
                     let rows: Vec<_> = json_rows.into_iter().map(query_engine::json_row_to_map).collect();
-                    let prev_href = (page_num > 1).then(|| format!("/{page_name}?{p_page}={}{filter_qs}", page_num - 1));
-                    let next_href = has_next.then(|| format!("/{page_name}?{p_page}={}{filter_qs}", page_num + 1));
+                    let prev_href = (page_num > 1).then(|| format!("/{app}/{page_name}?{p_page}={}{filter_qs}", page_num - 1));
+                    let next_href = has_next.then(|| format!("/{app}/{page_name}?{p_page}={}{filter_qs}", page_num + 1));
                     (rows, prev_href, next_href)
                 }
             };
 
-            let extras = report_extras(state, data, page_name, idx, &filters, auth_ctx).await?;
+            let extras = report_extras(app, state, data, page_name, idx, &filters, auth_ctx).await?;
 
             Ok(render::report_html(
+                app,
                 page_name,
                 idx,
                 title,
@@ -651,8 +703,8 @@ async fn render_component(
             let report_idx = companion_report_idx(page, &entity.name);
             let floating = report_idx.is_some();
             let close_href = match report_idx {
-                Some(ridx) => format!("/{page_name}#pgapp-c{ridx}"),
-                None => format!("/{page_name}"),
+                Some(ridx) => format!("/{app}/{page_name}#pgapp-c{ridx}"),
+                None => format!("/{app}/{page_name}"),
             };
             let edit_param = format!("edit_{idx}");
             let new_param = format!("new_{idx}");
@@ -667,7 +719,7 @@ async fn render_component(
                     let ctx = bind_context(query, Some(&row));
                     let choices = resolve_field_choices(&state.pool, &data.app, page, item_types, &ctx).await?;
                     Ok(render::form_html(
-                        page_name, idx, title, fields, entity, &row, Some(id), &choices, item_types, &state.item_types,
+                        app, page_name, idx, title, fields, entity, &row, Some(id), &choices, item_types, &state.item_types,
                         floating, &close_href, field_html, html,
                     ))
                 }
@@ -676,7 +728,7 @@ async fn render_component(
                     let choices = resolve_field_choices(&state.pool, &data.app, page, item_types, &ctx).await?;
                     let empty = BTreeMap::new();
                     Ok(render::form_html(
-                        page_name, idx, title, fields, entity, &empty, None, &choices, item_types, &state.item_types,
+                        app, page_name, idx, title, fields, entity, &empty, None, &choices, item_types, &state.item_types,
                         floating, &close_href, field_html, html,
                     ))
                 }
@@ -688,6 +740,7 @@ async fn render_component(
             let choices = resolve_field_choices(&state.pool, &data.app, page, item_types, &ctx).await?;
             let rows = fetch_rows(&state.pool, entity).await?;
             Ok(render::editable_table_html(
+                app,
                 page_name,
                 idx,
                 title,
@@ -709,6 +762,7 @@ async fn render_component(
 /// (their own plus public ones) and packages the toolbar state for
 /// rendering.
 async fn report_extras(
+    app: &str,
     state: &AppState,
     data: &AppData,
     page_name: &str,
@@ -735,7 +789,7 @@ async fn report_extras(
     let views = rows
         .into_iter()
         .map(|(id, name, params, owner)| {
-            let mut href = format!("/{page_name}?");
+            let mut href = format!("/{app}/{page_name}?");
             for (key, param) in [("q", "q"), ("col", "col"), ("val", "val")] {
                 if let Some(v) = params.get(key).and_then(|v| v.as_str()) {
                     href.push_str(&format!("r{idx}_{param}={}&", url_encode(v)));
@@ -761,10 +815,11 @@ async fn report_extras(
 async fn show(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
-    Path(page_name): Path<String>,
+    Path((app, page_name)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
-    let data = state.data();
+    let entry = state.app_or_404(&app)?;
+    let data = entry.data();
     let page = page_or_404(&data.app, &page_name)?;
     auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let ctx = bind_context(&query, None);
@@ -774,7 +829,7 @@ async fn show(
 
     let mut body = String::new();
     for (idx, component) in page.components.iter().enumerate() {
-        let html = render_component(&state, &data, &page_name, page, idx, component, &query, &regions, &auth_ctx)
+        let html = render_component(&app, &state, &data, &page_name, page, idx, component, &query, &regions, &auth_ctx)
             .await
             .map_err(err_response)?;
         // A stable per-component anchor: mutating actions (save/delete,
@@ -801,6 +856,7 @@ async fn show(
 
     let nav = visible_nav(&data.app, &data.app.nav, &data, &auth_ctx);
     Ok(Html(render::page_layout(
+        &app,
         &data.app.name,
         &page.name,
         &body,
@@ -820,10 +876,11 @@ async fn show(
 async fn region_fragment(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
-    Path((page_name, query_name)): Path<(String, String)>,
+    Path((app, page_name, query_name)): Path<(String, String, String)>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
-    let data = state.data();
+    let entry = state.app_or_404(&app)?;
+    let data = entry.data();
     let page = page_or_404(&data.app, &page_name)?;
     auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let rq = page.resolve_query(&data.app, &query_name).ok_or_else(|| {
@@ -851,11 +908,12 @@ async fn region_fragment(
 async fn run_action(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
-    Path((page_name, idx)): Path<(String, usize)>,
+    Path((app, page_name, idx)): Path<(String, String, usize)>,
     Query(query): Query<HashMap<String, String>>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let data = state.data();
+    let entry = state.app_or_404(&app)?;
+    let data = entry.data();
     let page = page_or_404(&data.app, &page_name)?;
     auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
@@ -889,8 +947,8 @@ async fn run_action(
 
     let anchor = redirect_anchor(page, idx);
     match outcome {
-        Ok(msg) => Ok(Redirect::to(&format!("/{page_name}?notice={}#pgapp-c{anchor}", url_encode(&msg))).into_response()),
-        Err(e) => Ok(Redirect::to(&format!("/{page_name}?error={}#pgapp-c{anchor}", url_encode(&e.to_string()))).into_response()),
+        Ok(msg) => Ok(Redirect::to(&format!("/{app}/{page_name}?notice={}#pgapp-c{anchor}", url_encode(&msg))).into_response()),
+        Err(e) => Ok(Redirect::to(&format!("/{app}/{page_name}?error={}#pgapp-c{anchor}", url_encode(&e.to_string()))).into_response()),
     }
 }
 
@@ -899,10 +957,11 @@ async fn run_action(
 async fn save_view(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
-    Path((page_name, idx)): Path<(String, usize)>,
+    Path((app, page_name, idx)): Path<(String, String, usize)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let data = state.data();
+    let entry = state.app_or_404(&app)?;
+    let data = entry.data();
     let page = page_or_404(&data.app, &page_name)?;
     auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
@@ -913,7 +972,7 @@ async fn save_view(
     let name = values.get("name").map(|s| s.trim()).unwrap_or_default();
     if name.is_empty() {
         return Ok(Redirect::to(&format!(
-            "/{page_name}?error={}#pgapp-c{idx}",
+            "/{app}/{page_name}?error={}#pgapp-c{idx}",
             url_encode("A saved view needs a name.")
         ))
         .into_response());
@@ -944,15 +1003,16 @@ async fn save_view(
     .await
     .map_err(|e| err_response(e.into()))?;
 
-    Ok(Redirect::to(&format!("/{page_name}?notice={}#pgapp-c{idx}", url_encode(&format!("View '{name}' saved.")))).into_response())
+    Ok(Redirect::to(&format!("/{app}/{page_name}?notice={}#pgapp-c{idx}", url_encode(&format!("View '{name}' saved.")))).into_response())
 }
 
 async fn delete_view(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
-    Path((page_name, idx, view_id)): Path<(String, usize, i32)>,
+    Path((app, page_name, idx, view_id)): Path<(String, String, usize, i32)>,
 ) -> Result<Response, AppError> {
-    let data = state.data();
+    let entry = state.app_or_404(&app)?;
+    let data = entry.data();
     let page = page_or_404(&data.app, &page_name)?;
     auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
 
@@ -964,7 +1024,7 @@ async fn delete_view(
             .await
             .map_err(|e| err_response(e.into()))?;
     let Some(owner) = owner else {
-        return Ok(Redirect::to(&format!("/{page_name}#pgapp-c{idx}")).into_response());
+        return Ok(Redirect::to(&format!("/{app}/{page_name}#pgapp-c{idx}")).into_response());
     };
 
     let allowed = !data.app.auth_enabled
@@ -979,16 +1039,17 @@ async fn delete_view(
         .execute(&state.pool)
         .await
         .map_err(|e| err_response(e.into()))?;
-    Ok(Redirect::to(&format!("/{page_name}#pgapp-c{idx}")).into_response())
+    Ok(Redirect::to(&format!("/{app}/{page_name}#pgapp-c{idx}")).into_response())
 }
 
 async fn create(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
-    Path((page_name, idx)): Path<(String, usize)>,
+    Path((app, page_name, idx)): Path<(String, String, usize)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let data = state.data();
+    let entry = state.app_or_404(&app)?;
+    let data = entry.data();
     let page = page_or_404(&data.app, &page_name)?;
     auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
@@ -1010,12 +1071,12 @@ async fn create(
                 .execute(&state.pool)
                 .await
                 .map_err(|e| (StatusCode::BAD_REQUEST, format!("failed to create row: {e}")))?;
-            Ok(Redirect::to(&format!("/{page_name}#pgapp-c{}", redirect_anchor(page, idx))).into_response())
+            Ok(Redirect::to(&format!("/{app}/{page_name}#pgapp-c{}", redirect_anchor(page, idx))).into_response())
         }
         // Reopen the popup in create mode (via new_{idx}) so the error is
         // visible instead of silently closing.
         Err(e) => Ok(Redirect::to(&format!(
-            "/{page_name}?error={}&new_{idx}=1#pgapp-c{idx}",
+            "/{app}/{page_name}?error={}&new_{idx}=1#pgapp-c{idx}",
             url_encode(&e.to_string())
         ))
         .into_response()),
@@ -1025,10 +1086,11 @@ async fn create(
 async fn update(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
-    Path((page_name, idx, id)): Path<(String, usize, String)>,
+    Path((app, page_name, idx, id)): Path<(String, String, usize, String)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let data = state.data();
+    let entry = state.app_or_404(&app)?;
+    let data = entry.data();
     let page = page_or_404(&data.app, &page_name)?;
     auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
@@ -1056,7 +1118,7 @@ async fn update(
                 .execute(&state.pool)
                 .await
                 .map_err(|e| (StatusCode::BAD_REQUEST, format!("failed to update row: {e}")))?;
-            Ok(Redirect::to(&format!("/{page_name}#pgapp-c{}", redirect_anchor(page, idx))).into_response())
+            Ok(Redirect::to(&format!("/{app}/{page_name}#pgapp-c{}", redirect_anchor(page, idx))).into_response())
         }
         Err(e) => {
             // A Form component re-enters edit mode on error (so the
@@ -1068,7 +1130,7 @@ async fn update(
                 RuntimeComponent::Form { .. } => format!("&edit_{idx}={}", url_encode(&id)),
                 _ => String::new(),
             };
-            Ok(Redirect::to(&format!("/{page_name}?error={}{extra}#pgapp-c{idx}", url_encode(&e.to_string()))).into_response())
+            Ok(Redirect::to(&format!("/{app}/{page_name}?error={}{extra}#pgapp-c{idx}", url_encode(&e.to_string()))).into_response())
         }
     }
 }
@@ -1076,9 +1138,10 @@ async fn update(
 async fn delete(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
-    Path((page_name, idx, id)): Path<(String, usize, String)>,
+    Path((app, page_name, idx, id)): Path<(String, String, usize, String)>,
 ) -> Result<Response, AppError> {
-    let data = state.data();
+    let entry = state.app_or_404(&app)?;
+    let data = entry.data();
     let page = page_or_404(&data.app, &page_name)?;
     auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
@@ -1090,7 +1153,7 @@ async fn delete(
         .execute(&state.pool)
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("failed to delete row: {e}")))?;
-    Ok(Redirect::to(&format!("/{page_name}#pgapp-c{}", redirect_anchor(page, idx))).into_response())
+    Ok(Redirect::to(&format!("/{app}/{page_name}#pgapp-c{}", redirect_anchor(page, idx))).into_response())
 }
 
 /// Minimal JSON API, keyed by entity rather than page — a stand-in for
@@ -1099,9 +1162,10 @@ async fn delete(
 /// Query-backed entities serve their query's rows.
 async fn api_list(
     State(state): State<Arc<AppState>>,
-    Path(entity_name): Path<String>,
+    Path((app, entity_name)): Path<(String, String)>,
 ) -> Result<Response, AppError> {
-    let data = state.data();
+    let entry = state.app_or_404(&app)?;
+    let data = entry.data();
     let entity = data
         .app
         .pages
@@ -1131,21 +1195,23 @@ async fn api_list(
     Ok(axum::Json(json!(rows)).into_response())
 }
 
-/// GET /admin/reload — shows the current markup (editable inline when
-/// it's a single file) plus a button to re-sync it into `pgapp_meta`
-/// without restarting the process. See `AppState::reload`.
+/// GET /:app/admin/reload — shows the current markup (editable inline
+/// when it's a single file) plus a button to re-sync it into
+/// `pgapp_meta` without restarting the process. See `AppEntry::reload`.
 async fn admin_reload_page(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
+    Path(app): Path<String>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
-    let data = state.data();
+    let entry = state.app_or_404(&app)?;
+    let data = entry.data();
     require_reload_access(&data, &auth_ctx)?;
 
-    let markup_text = if std::path::Path::new(&state.markup_path).is_dir() {
+    let markup_text = if std::path::Path::new(&entry.markup_path).is_dir() {
         None
     } else {
-        tokio::fs::read_to_string(&state.markup_path).await.ok()
+        tokio::fs::read_to_string(&entry.markup_path).await.ok()
     };
 
     let ctx = HashMap::new();
@@ -1153,8 +1219,9 @@ async fn admin_reload_page(
 
     let nav = visible_nav(&data.app, &data.app.nav, &data, &auth_ctx);
     Ok(Html(render::reload_page(
+        &app,
         &data.app.name,
-        &state.markup_path,
+        &entry.markup_path,
         markup_text.as_deref(),
         query.get("error").map(|s| s.as_str()),
         query.get("notice").map(|s| s.as_str()),
@@ -1165,43 +1232,46 @@ async fn admin_reload_page(
     )))
 }
 
-/// POST /admin/reload — optionally writes edited markup back to disk
-/// (`do=save`, single-file apps only), then always re-runs the full
-/// parse/sync/load pipeline and atomically swaps in the result.
+/// POST /:app/admin/reload — optionally writes edited markup back to
+/// disk (`do=save`, single-file apps only), then always re-runs the
+/// full parse/sync/load pipeline and atomically swaps in the result —
+/// only for this one app; every other app in the process is untouched.
 async fn admin_reload(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
+    Path(app): Path<String>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    let entry = state.app_or_404(&app)?;
     {
-        let data = state.data();
+        let data = entry.data();
         require_reload_access(&data, &auth_ctx)?;
     }
 
     if values.get("do").map(|s| s.as_str()) == Some("save") {
-        if std::path::Path::new(&state.markup_path).is_dir() {
+        if std::path::Path::new(&entry.markup_path).is_dir() {
             return Ok(Redirect::to(&format!(
-                "/admin/reload?error={}",
+                "/{app}/admin/reload?error={}",
                 url_encode("This app's markup is a directory of files — edit them on disk, then use \"Reload from disk\".")
             ))
             .into_response());
         }
         let markup = values.get("markup").cloned().unwrap_or_default();
-        if let Err(e) = tokio::fs::write(&state.markup_path, markup).await {
+        if let Err(e) = tokio::fs::write(&entry.markup_path, markup).await {
             return Ok(Redirect::to(&format!(
-                "/admin/reload?error={}",
+                "/{app}/admin/reload?error={}",
                 url_encode(&format!("failed to write markup file: {e}"))
             ))
             .into_response());
         }
     }
 
-    match state.reload().await {
+    match entry.reload(&state.pool, &state.item_types, &state.actions).await {
         Ok(()) => Ok(Redirect::to(&format!(
-            "/admin/reload?notice={}",
+            "/{app}/admin/reload?notice={}",
             url_encode("Metadata reloaded — no restart needed.")
         ))
         .into_response()),
-        Err(e) => Ok(Redirect::to(&format!("/admin/reload?error={}", url_encode(&e.to_string()))).into_response()),
+        Err(e) => Ok(Redirect::to(&format!("/{app}/admin/reload?error={}", url_encode(&e.to_string()))).into_response()),
     }
 }

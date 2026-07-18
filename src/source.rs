@@ -36,6 +36,64 @@ pub fn load(path: &str) -> Result<AppDef> {
     }
 }
 
+/// Loads every app to be served from one workspace path, for
+/// `main.rs`'s multi-app startup.
+///
+/// - A single file, or a directory with any `.pgapp` file directly
+///   inside it, is exactly one app — identical to [`load`], just with
+///   a URL slug attached (derived from the app's declared name).
+/// - A directory containing *only* subdirectories (no loose `.pgapp`
+///   files of its own) is a workspace of several apps: each
+///   subdirectory is loaded independently and becomes its own app,
+///   sharing nothing but the process/connection pool.
+///
+/// Returns `(slug, markup_path, app)` triples — `markup_path` is what
+/// gets registered in `pgapp_control.apps` and later reloaded from, so
+/// for a workspace it's each subdirectory's own path, not the parent.
+pub fn load_workspace(path: &str) -> Result<Vec<(String, String, AppDef)>> {
+    let meta = std::fs::metadata(path).with_context(|| format!("cannot read markup path '{path}'"))?;
+    if !meta.is_dir() {
+        let app = load(path)?;
+        let slug = crate::scaffold::slugify(&app.name);
+        return Ok(vec![(slug, path.to_string(), app)]);
+    }
+
+    let mut has_loose_file = false;
+    let mut subdirs: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(path).with_context(|| format!("failed to read directory '{path}'"))? {
+        let entry_path = entry?.path();
+        if entry_path.is_dir() {
+            subdirs.push(entry_path);
+        } else if entry_path.extension().is_some_and(|ext| ext == "pgapp") {
+            has_loose_file = true;
+        }
+    }
+
+    if has_loose_file || subdirs.is_empty() {
+        let app = load(path)?;
+        let slug = crate::scaffold::slugify(&app.name);
+        return Ok(vec![(slug, path.to_string(), app)]);
+    }
+
+    subdirs.sort();
+    let mut apps = Vec::new();
+    let mut seen: HashMap<String, PathBuf> = HashMap::new();
+    for dir in subdirs {
+        let dir_str = dir.to_str().with_context(|| format!("'{}' is not valid UTF-8", dir.display()))?.to_string();
+        let app = load(&dir_str).with_context(|| format!("failed to load app under '{}'", dir.display()))?;
+        let slug = crate::scaffold::slugify(&app.name);
+        if let Some(first) = seen.insert(slug.clone(), dir.clone()) {
+            bail!(
+                "apps under '{}' and '{}' both produce the slug '{slug}' — give them different names",
+                first.display(),
+                dir.display()
+            );
+        }
+        apps.push((slug, dir_str, app));
+    }
+    Ok(apps)
+}
+
 fn collect_pgapp_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     for entry in std::fs::read_dir(dir).with_context(|| format!("failed to read directory '{}'", dir.display()))? {
         let path = entry?.path();
@@ -226,6 +284,65 @@ mod tests {
         let err = format!("{:#}", load(dir.to_str().unwrap()).unwrap_err());
         assert!(err.contains("bad.pgapp"), "got: {err}");
         assert!(err.contains("line 2"), "got: {err}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_workspace_treats_a_single_file_as_one_app() {
+        let dir = write_dir("ws-file", &[("app.pgapp", APP)]);
+        let path = dir.join("app.pgapp");
+        let apps = load_workspace(path.to_str().unwrap()).unwrap();
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].0, "demo");
+        assert_eq!(apps[0].2.name, "Demo");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_workspace_treats_a_directory_with_loose_files_as_one_app() {
+        let dir = write_dir(
+            "ws-loose",
+            &[("app.pgapp", APP), ("things.pgapp", r#"entity "things" { field id: id }"#)],
+        );
+        let apps = load_workspace(dir.to_str().unwrap()).unwrap();
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].0, "demo");
+        assert_eq!(apps[0].1, dir.to_str().unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_workspace_treats_subdirectories_as_separate_apps() {
+        let dir = write_dir(
+            "ws-multi",
+            &[
+                ("alpha/app.pgapp", r#"app "Alpha" { nav { item "Home" -> page Home } }"#),
+                ("alpha/pages.pgapp", r#"page "Home" { text "hi" }"#),
+                ("beta/app.pgapp", r#"app "Beta" { nav { item "Home" -> page Home } }"#),
+                ("beta/pages.pgapp", r#"page "Home" { text "hi" }"#),
+            ],
+        );
+        let mut apps = load_workspace(dir.to_str().unwrap()).unwrap();
+        apps.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(apps.len(), 2);
+        assert_eq!(apps[0].0, "alpha");
+        assert_eq!(apps[0].2.name, "Alpha");
+        assert_eq!(apps[1].0, "beta");
+        assert_eq!(apps[1].2.name, "Beta");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn load_workspace_rejects_a_slug_collision_between_subdirectories() {
+        let dir = write_dir(
+            "ws-collide",
+            &[
+                ("a/app.pgapp", r#"app "Demo App" { }"#),
+                ("b/app.pgapp", r#"app "Demo  App" { }"#),
+            ],
+        );
+        let err = load_workspace(dir.to_str().unwrap()).unwrap_err().to_string();
+        assert!(err.contains("both produce the slug"), "got: {err}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

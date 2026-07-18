@@ -4,13 +4,17 @@
 //!
 //! Markup here only ever uses the fixed `.pgapp-*` class names — the
 //! "Theme contract" documented in the README. All actual look-and-feel
-//! comes from `/theme.css` (the active theme, see src/theme.rs) plus any
-//! app-level override in assets/app.css. A form field's actual input is
+//! comes from `/{app}/theme.css` (the active theme, see src/theme.rs) plus
+//! any app-level override in assets/app.css. A form field's actual input is
 //! never built here — `input_for_field` just hands off to whatever
 //! component is registered for that field's item type (see
 //! `src/item_types.rs`), so adding a new one never touches this file.
 //! Component *data fetching* (rows, pagination, resolved choices) is
 //! `server.rs`'s job; this module only ever formats what it's handed.
+//!
+//! Every route in this app is scoped under `/{app}` (the app's URL
+//! slug — see `src/server.rs`), so every function here that builds a
+//! path takes `app` and prefixes it on every href/action/src it emits.
 
 use crate::chart_lib::ChartLib;
 use crate::html::{escape, url_encode};
@@ -22,38 +26,39 @@ use std::collections::{BTreeMap, HashMap};
 
 /// Extra `<link>`/`<script>` tags for user-supplied assets, if present —
 /// the app-level override layer, on top of the active theme.
-pub fn asset_tags() -> String {
+pub fn asset_tags(app: &str) -> String {
     let mut tags = String::new();
     if std::path::Path::new("assets/app.css").exists() {
-        tags.push_str("<link rel=\"stylesheet\" href=\"/assets/app.css\">\n");
+        tags.push_str(&format!("<link rel=\"stylesheet\" href=\"/{app}/assets/app.css\">\n"));
     }
     if std::path::Path::new("assets/app.js").exists() {
-        tags.push_str("<script src=\"/assets/app.js\" defer></script>\n");
+        tags.push_str(&format!("<script src=\"/{app}/assets/app.js\" defer></script>\n"));
     }
     tags
 }
 
 /// Renders the app's (possibly multi-level) nav bar as nested `<ul>`s;
 /// submenus are shown on hover/focus via the theme's CSS, not JS.
-fn nav_html(nodes: &[NavNode]) -> String {
+fn nav_html(app: &str, nodes: &[NavNode]) -> String {
     if nodes.is_empty() {
         return String::new();
     }
     let mut html = String::from(r#"<ul class="pgapp-navbar">"#);
     for node in nodes {
-        html.push_str(&nav_node_html(node));
+        html.push_str(&nav_node_html(app, node));
     }
     html.push_str("</ul>");
     html
 }
 
-fn nav_node_html(node: &NavNode) -> String {
+fn nav_node_html(app: &str, node: &NavNode) -> String {
     let has_children = !node.children.is_empty();
     let mut html = String::from(r#"<li class="pgapp-navbar-item">"#);
     html.push_str(r#"<span class="pgapp-navbar-row">"#);
     match &node.target_page {
         Some(target) => html.push_str(&format!(
-            r#"<a class="pgapp-link" href="/{target}">{label}</a>"#,
+            r#"<a class="pgapp-link" href="/{app}/{target}">{label}</a>"#,
+            app = escape(app),
             target = escape(target),
             label = escape(&node.label),
         )),
@@ -75,7 +80,7 @@ fn nav_node_html(node: &NavNode) -> String {
     if has_children {
         html.push_str(r#"<ul class="pgapp-navbar-submenu">"#);
         for child in &node.children {
-            html.push_str(&nav_node_html(child));
+            html.push_str(&nav_node_html(app, child));
         }
         html.push_str("</ul>");
     }
@@ -116,11 +121,12 @@ pub fn text_html(text: &str, html: &HtmlAttrs) -> String {
     )
 }
 
-pub fn link_html(label: &str, target_page: &str, html: &HtmlAttrs) -> String {
+pub fn link_html(app: &str, label: &str, target_page: &str, html: &HtmlAttrs) -> String {
     format!(
-        r#"<p><a class="{class}" href="/{target}"{extra}>{label}</a></p>"#,
+        r#"<p><a class="{class}" href="/{app}/{target}"{extra}>{label}</a></p>"#,
         class = merged_class("pgapp-link", html),
         extra = extra_attrs(html),
+        app = escape(app),
         target = escape(target_page),
         label = escape(label),
     )
@@ -174,7 +180,7 @@ pub fn region_html(label: &str, query: &str, regions: &RegionRows, columns: &[St
 
 /// Renders a header/footer chrome list — restricted at sync time to
 /// Text/Link/Region, so those are the only variants handled here.
-fn chrome_items_html(items: &[RuntimeComponent], regions: &RegionRows) -> String {
+fn chrome_items_html(app: &str, items: &[RuntimeComponent], regions: &RegionRows) -> String {
     if items.is_empty() {
         return String::new();
     }
@@ -183,7 +189,7 @@ fn chrome_items_html(items: &[RuntimeComponent], regions: &RegionRows) -> String
         match item {
             RuntimeComponent::Text { text, html: attrs } => html.push_str(&text_html(text, attrs)),
             RuntimeComponent::Link { label, target_page, html: attrs } => {
-                html.push_str(&link_html(label, target_page, attrs))
+                html.push_str(&link_html(app, label, target_page, attrs))
             }
             RuntimeComponent::Region { label, query, columns, html: attrs } => {
                 html.push_str(&region_html(label, query, regions, columns, attrs))
@@ -352,7 +358,7 @@ fn inline_svg_chart(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTr
 }
 
 /// A JSON-in-`<script>` placeholder for a pluggable chart library (see
-/// `src/chart_lib.rs`): the library's JS (served at `/chart-lib.js`)
+/// `src/chart_lib.rs`): the library's JS (served at `/{app}/chart-lib.js`)
 /// reads this data and renders into the surrounding `.pgapp-chart` div
 /// however it likes.
 fn pluggable_chart_placeholder(
@@ -405,24 +411,30 @@ pub fn chart_html(
 /// admins, the username, and a sign-out button. `user` is
 /// (username, is_admin), or None when nobody is signed in (or the app
 /// has no auth at all) — in which case nothing renders.
-fn nav_user_html(user: Option<(&str, bool)>) -> String {
+fn nav_user_html(app: &str, user: Option<(&str, bool)>) -> String {
     match user {
         None => String::new(),
         Some((username, is_admin)) => {
             let admin_links = if is_admin {
-                r#"<a class="pgapp-link" href="/users">Users</a><a class="pgapp-link" href="/admin/reload">Reload</a>"#.to_string()
+                format!(
+                    r#"<a class="pgapp-link" href="/{app}/users">Users</a><a class="pgapp-link" href="/{app}/admin/reload">Reload</a>"#,
+                    app = escape(app),
+                )
             } else {
                 String::new()
             };
             format!(
-                r#"<span class="pgapp-nav-user">{admin_links}<span class="pgapp-nav-username">{username}</span><form class="pgapp-inline-form" method="post" action="/logout"><button class="pgapp-btn pgapp-btn-secondary" type="submit">Sign out</button></form></span>"#,
+                r#"<span class="pgapp-nav-user">{admin_links}<span class="pgapp-nav-username">{username}</span><form class="pgapp-inline-form" method="post" action="/{app}/logout"><button class="pgapp-btn pgapp-btn-secondary" type="submit">Sign out</button></form></span>"#,
+                app = escape(app),
                 username = escape(username),
             )
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn layout(
+    app: &str,
     app_name: &str,
     title: &str,
     chrome: Chrome,
@@ -436,7 +448,7 @@ fn layout(
     } else {
         format!(
             r#"<header class="pgapp-header">{}</header>"#,
-            chrome_items_html(chrome.header, chrome.regions)
+            chrome_items_html(app, chrome.header, chrome.regions)
         )
     };
     let footer = if chrome.footer.is_empty() {
@@ -444,7 +456,7 @@ fn layout(
     } else {
         format!(
             r#"<footer class="pgapp-footer">{}</footer>"#,
-            chrome_items_html(chrome.footer, chrome.regions)
+            chrome_items_html(app, chrome.footer, chrome.regions)
         )
     };
 
@@ -455,39 +467,40 @@ fn layout(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
-<link rel="stylesheet" href="/theme.css">
+<link rel="stylesheet" href="/{app_esc}/theme.css">
 {icons_stylesheet}
-<script src="/runtime.js" defer></script>
+<script src="/{app_esc}/runtime.js" defer></script>
 {chart_lib_script}
 {assets}
 </head>
 <body>
 {header}
-<nav class="pgapp-nav"><a class="pgapp-link" href="/">{brand}</a>{navbar}{nav_user}</nav>
+<nav class="pgapp-nav"><a class="pgapp-link" href="/{app_esc}">{brand}</a>{navbar}{nav_user}</nav>
 <h1 class="pgapp-title">{title}</h1>
 {body}
 {footer}
 </body>
 </html>"#,
+        app_esc = escape(app),
         title = escape(title),
         brand = escape(app_name),
         icons_stylesheet = icons.stylesheet_tag(),
         chart_lib_script = chart_lib
             .js_path
             .as_ref()
-            .map(|_| r#"<script src="/chart-lib.js" defer></script>"#)
-            .unwrap_or(""),
-        assets = asset_tags(),
-        navbar = nav_html(chrome.nav),
-        nav_user = nav_user_html(user),
+            .map(|_| format!(r#"<script src="/{}/chart-lib.js" defer></script>"#, escape(app)))
+            .unwrap_or_default(),
+        assets = asset_tags(app),
+        navbar = nav_html(app, chrome.nav),
+        nav_user = nav_user_html(app, user),
         body = body,
     )
 }
 
 /// A minimal, chrome-free page shell for auth screens: the login page
 /// renders before there's a session, so it can't show nav/regions —
-/// but it still links /theme.css, so it wears the app's theme.
-fn bare_layout(title: &str, body: &str) -> String {
+/// but it still links /{app}/theme.css, so it wears the app's theme.
+fn bare_layout(app: &str, title: &str, body: &str) -> String {
     format!(
         r#"<!doctype html>
 <html>
@@ -495,20 +508,21 @@ fn bare_layout(title: &str, body: &str) -> String {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{title}</title>
-<link rel="stylesheet" href="/theme.css">
+<link rel="stylesheet" href="/{app}/theme.css">
 </head>
 <body>
 <h1 class="pgapp-title">{title}</h1>
 {body}
 </body>
 </html>"#,
+        app = escape(app),
         title = escape(title),
     )
 }
 
-/// The /login screen. In `setup` mode (the app has no users yet) it
+/// The /{app}/login screen. In `setup` mode (the app has no users yet) it
 /// becomes the one-time "create the admin account" form instead.
-pub fn login_page(app_name: &str, error: Option<&str>, setup: bool) -> String {
+pub fn login_page(app: &str, app_name: &str, error: Option<&str>, setup: bool) -> String {
     let mut body = String::new();
     if let Some(err) = error {
         body.push_str(&format!(
@@ -521,11 +535,11 @@ pub fn login_page(app_name: &str, error: Option<&str>, setup: bool) -> String {
         (
             "Create the admin account",
             "This app has no users yet. The account you create now becomes the administrator; after that, new users are added from the Users page.",
-            "/setup",
+            format!("/{}/setup", escape(app)),
             "Create admin account",
         )
     } else {
-        ("Sign in", "", "/login", "Sign in")
+        ("Sign in", "", format!("/{}/login", escape(app)), "Sign in")
     };
 
     body.push_str(&format!(
@@ -542,14 +556,15 @@ pub fn login_page(app_name: &str, error: Option<&str>, setup: bool) -> String {
 </form></div>"#
     ));
 
-    bare_layout(app_name, &body)
+    bare_layout(app, app_name, &body)
 }
 
-/// The built-in /users admin page: every account, an add-user form,
+/// The built-in /{app}/users admin page: every account, an add-user form,
 /// and per-row delete (except your own account — see
 /// `server::auth::users_delete`).
 #[allow(clippy::too_many_arguments)]
 pub fn users_page(
+    app: &str,
     app_name: &str,
     users: &[(i32, String, String)],
     current_user_id: i32,
@@ -573,8 +588,9 @@ pub fn users_page(
             r#"<span class="pgapp-text">(you)</span>"#.to_string()
         } else {
             format!(
-                r#"<form class="pgapp-inline-form" method="post" action="/users/{id}/delete" data-pgapp-confirm="Delete this account?"><button class="pgapp-btn pgapp-btn-destructive" type="submit" title="Delete">{}</button></form>"#,
+                r#"<form class="pgapp-inline-form" method="post" action="/{app}/users/{id}/delete" data-pgapp-confirm="Delete this account?"><button class="pgapp-btn pgapp-btn-destructive" type="submit" title="Delete">{}</button></form>"#,
                 icons.render("delete"),
+                app = escape(app),
             )
         };
         body.push_str(&format!(
@@ -585,27 +601,29 @@ pub fn users_page(
     }
     body.push_str("</tbody></table></div></div>");
 
-    body.push_str(
+    body.push_str(&format!(
         r#"<div class="pgapp-form-panel"><h2 class="pgapp-subtitle">Add user</h2>
-<form class="pgapp-form" method="post" action="/users">
+<form class="pgapp-form" method="post" action="/{app}/users">
 <div class="pgapp-field"><label class="pgapp-label">username</label><input class="pgapp-input" type="text" name="username" required></div>
 <div class="pgapp-field"><label class="pgapp-label">password (min 8 chars)</label><input class="pgapp-input" type="password" name="password" required></div>
 <div class="pgapp-field"><label class="pgapp-label">role</label><input class="pgapp-input" type="text" name="role" placeholder="user, admin, or any role your pages require"></div>
 <button class="pgapp-btn pgapp-btn-primary" type="submit">Create user</button>
 </form></div>"#,
-    );
+        app = escape(app),
+    ));
 
-    layout(app_name, "Users", chrome, icons, chart_lib, user, &body)
+    layout(app, app_name, "Users", chrome, icons, chart_lib, user, &body)
 }
 
-/// The built-in /admin/reload page: re-parses the markup file and
+/// The built-in /{app}/admin/reload page: re-parses the markup file and
 /// re-syncs it into `pgapp_meta`/`pgapp_data` without restarting the
-/// process (see `server::AppState::reload`). A single `.pgapp` file
+/// process (see `server::AppEntry::reload`). A single `.pgapp` file
 /// can be edited in place here; a directory-based app (multiple
 /// files merged, see `src/source.rs`) can only be re-read from disk,
 /// since there's no one file to hand back to the browser.
 #[allow(clippy::too_many_arguments)]
 pub fn reload_page(
+    app: &str,
     app_name: &str,
     markup_path: &str,
     markup_text: Option<&str>,
@@ -636,26 +654,28 @@ pub fn reload_page(
     match markup_text {
         Some(text) => {
             body.push_str(&format!(
-                r#"<form class="pgapp-form" method="post" action="/admin/reload">
+                r#"<form class="pgapp-form" method="post" action="/{app}/admin/reload">
 <div class="pgapp-field"><textarea class="pgapp-input" name="markup" rows="20" spellcheck="false" style="font-family:monospace;white-space:pre;">{}</textarea></div>
 <button class="pgapp-btn pgapp-btn-primary" type="submit" name="do" value="save">Save &amp; reload</button>
 <button class="pgapp-btn pgapp-btn-secondary" type="submit" name="do" value="reload">Reload from disk (discard edits above)</button>
 </form>"#,
-                escape(text)
+                escape(text),
+                app = escape(app),
             ));
         }
         None => {
-            body.push_str(
+            body.push_str(&format!(
                 r#"<p class="pgapp-text">This app's markup is a directory of files — edit them on disk, then reload.</p>
-<form class="pgapp-form" method="post" action="/admin/reload">
+<form class="pgapp-form" method="post" action="/{app}/admin/reload">
 <button class="pgapp-btn pgapp-btn-primary" type="submit" name="do" value="reload">Reload from disk</button>
 </form>"#,
-            );
+                app = escape(app),
+            ));
         }
     }
     body.push_str("</div>");
 
-    layout(app_name, "Reload metadata", chrome, icons, chart_lib, user, &body)
+    layout(app, app_name, "Reload metadata", chrome, icons, chart_lib, user, &body)
 }
 
 /// Renders one field's input by looking up its registered item type
@@ -707,11 +727,12 @@ fn input_for_field(
 
 /// A server-side action component: a button posting to the action's
 /// run route. The outcome comes back as a notice/error banner.
-pub fn action_html(page_name: &str, idx: usize, label: &str, module: &str, html: &HtmlAttrs) -> String {
+pub fn action_html(app: &str, page_name: &str, idx: usize, label: &str, module: &str, html: &HtmlAttrs) -> String {
     format!(
-        r#"<form class="{class}" method="post" action="/{page}/c/{idx}/run" title="runs the '{module}' module"{extra}><button class="pgapp-btn pgapp-btn-primary" type="submit">{label}</button></form>"#,
+        r#"<form class="{class}" method="post" action="/{app}/{page}/c/{idx}/run" title="runs the '{module}' module"{extra}><button class="pgapp-btn pgapp-btn-primary" type="submit">{label}</button></form>"#,
         class = merged_class("pgapp-action", html),
         extra = extra_attrs(html),
+        app = escape(app),
         page = escape(page_name),
         idx = idx,
         module = escape(module),
@@ -751,6 +772,7 @@ pub struct ReportExtras {
 /// `next_href` are `None` at either end of the result set.
 #[allow(clippy::too_many_arguments)]
 pub fn report_html(
+    app: &str,
     page_name: &str,
     idx: usize,
     title: &str,
@@ -772,7 +794,8 @@ pub fn report_html(
     );
     if let Some(form_idx) = sibling_form_idx {
         body.push_str(&format!(
-            r#"<a class="pgapp-link pgapp-btn pgapp-btn-primary" href="/{page}?new_{form_idx}=1#pgapp-c{idx}">+ New</a>"#,
+            r#"<a class="pgapp-link pgapp-btn pgapp-btn-primary" href="/{app}/{page}?new_{form_idx}=1#pgapp-c{idx}">+ New</a>"#,
+            app = escape(app),
             page = escape(page_name),
         ));
     }
@@ -784,9 +807,10 @@ pub fn report_html(
     // (only the query is replaced), so Apply/Clear land back on this
     // report instead of resetting scroll to the page top.
     body.push_str(&format!(
-        r#"<form class="pgapp-report-toolbar" method="get" action="/{page}#pgapp-c{idx}">
+        r#"<form class="pgapp-report-toolbar" method="get" action="/{app}/{page}#pgapp-c{idx}">
 <input class="pgapp-input" type="search" name="r{idx}_q" value="{q}" placeholder="Search all columns">
 <select class="pgapp-select" name="r{idx}_col"><option value="">column&hellip;</option>"#,
+        app = escape(app),
         page = escape(page_name),
         idx = idx,
         q = escape(&extras.q),
@@ -802,10 +826,11 @@ pub fn report_html(
         r#"</select>
 <input class="pgapp-input" type="text" name="r{idx}_val" value="{val}" placeholder="contains&hellip;">
 <button class="pgapp-btn pgapp-btn-secondary" type="submit">Apply</button>
-<a class="pgapp-link" href="/{page}#pgapp-c{idx}">Clear</a>
+<a class="pgapp-link" href="/{app}/{page}#pgapp-c{idx}">Clear</a>
 </form>"#,
         idx = idx,
         val = escape(&extras.fval),
+        app = escape(app),
         page = escape(page_name),
     ));
 
@@ -820,7 +845,8 @@ pub fn report_html(
         ));
         if view.can_delete {
             body.push_str(&format!(
-                r#"<form class="pgapp-inline-form" method="post" action="/{page}/c/{idx}/views/{id}/delete"><button class="pgapp-btn-viewdel" type="submit" title="Delete view">&times;</button></form>"#,
+                r#"<form class="pgapp-inline-form" method="post" action="/{app}/{page}/c/{idx}/views/{id}/delete"><button class="pgapp-btn-viewdel" type="submit" title="Delete view">&times;</button></form>"#,
+                app = escape(app),
                 page = escape(page_name),
                 idx = idx,
                 id = view.id,
@@ -829,7 +855,7 @@ pub fn report_html(
         body.push_str("</span>");
     }
     body.push_str(&format!(
-        r#"<form class="pgapp-view-save" method="post" action="/{page}/c/{idx}/views">
+        r#"<form class="pgapp-view-save" method="post" action="/{app}/{page}/c/{idx}/views">
 <input type="hidden" name="r{idx}_q" value="{q}">
 <input type="hidden" name="r{idx}_col" value="{col}">
 <input type="hidden" name="r{idx}_val" value="{val}">
@@ -837,6 +863,7 @@ pub fn report_html(
 <label class="pgapp-view-public"><input type="checkbox" name="is_public"> public</label>
 <button class="pgapp-btn pgapp-btn-secondary" type="submit">Save</button>
 </form></div>"#,
+        app = escape(app),
         page = escape(page_name),
         idx = idx,
         q = escape(&extras.q),
@@ -860,7 +887,7 @@ pub fn report_html(
             let val = row.get(col).and_then(|v| v.as_deref()).unwrap_or("");
             let cell = match link_column {
                 Some(lc) if lc.field == *col => {
-                    let mut href = format!("/{}?id={}", escape(&lc.target_page), url_encode(id));
+                    let mut href = format!("/{}/{}?id={}", escape(app), escape(&lc.target_page), url_encode(id));
                     for (field, param) in &lc.extra_params {
                         let pval = row.get(field).and_then(|v| v.as_deref()).unwrap_or("");
                         href.push_str(&format!("&{}={}", escape(param), url_encode(pval)));
@@ -874,11 +901,12 @@ pub fn report_html(
         if let Some(form_idx) = sibling_form_idx {
             body.push_str(&format!(
                 r#"<td class="pgapp-row-actions">
-<a class="pgapp-link" href="/{page}?edit_{form_idx}={id}#pgapp-c{idx}" title="Edit">{edit_icon}</a>
-<form class="pgapp-inline-form" method="post" action="/{page}/c/{form_idx}/delete/{id}" data-pgapp-confirm="Delete this row?">
+<a class="pgapp-link" href="/{app}/{page}?edit_{form_idx}={id}#pgapp-c{idx}" title="Edit">{edit_icon}</a>
+<form class="pgapp-inline-form" method="post" action="/{app}/{page}/c/{form_idx}/delete/{id}" data-pgapp-confirm="Delete this row?">
 <button class="pgapp-btn pgapp-btn-destructive" type="submit" title="Delete">{delete_icon}</button>
 </form>
 </td>"#,
+                app = escape(app),
                 page = escape(page_name),
                 form_idx = form_idx,
                 id = escape(id),
@@ -921,6 +949,7 @@ pub fn report_html(
 /// back to `close_href` instead of a plain page-top navigation.
 #[allow(clippy::too_many_arguments)]
 pub fn form_html(
+    app: &str,
     page_name: &str,
     idx: usize,
     title: &str,
@@ -955,8 +984,8 @@ pub fn form_html(
     body.push_str(&format!(r#"<h2 class="pgapp-subtitle">{}</h2>"#, escape(title)));
 
     let action = match edit_id {
-        Some(id) => format!("/{}/c/{idx}/update/{}", escape(page_name), escape(id)),
-        None => format!("/{}/c/{idx}/create", escape(page_name)),
+        Some(id) => format!("/{}/{}/c/{idx}/update/{}", escape(app), escape(page_name), escape(id)),
+        None => format!("/{}/{}/c/{idx}/create", escape(app), escape(page_name)),
     };
     body.push_str(&format!(r#"<form class="pgapp-form" method="post" action="{action}">"#));
     for field_name in fields {
@@ -970,8 +999,9 @@ pub fn form_html(
 
     if let Some(id) = edit_id {
         body.push_str(&format!(
-            r#"<form class="pgapp-inline-form" method="post" action="/{page}/c/{idx}/delete/{id}" data-pgapp-confirm="Delete this row?">
+            r#"<form class="pgapp-inline-form" method="post" action="/{app}/{page}/c/{idx}/delete/{id}" data-pgapp-confirm="Delete this row?">
 <button class="pgapp-btn pgapp-btn-destructive" type="submit">Delete</button></form>"#,
+            app = escape(app),
             page = escape(page_name),
             idx = idx,
             id = escape(id),
@@ -992,6 +1022,7 @@ pub fn form_html(
 /// as one.
 #[allow(clippy::too_many_arguments)]
 pub fn editable_table_html(
+    app: &str,
     page_name: &str,
     idx: usize,
     title: &str,
@@ -1016,7 +1047,8 @@ pub fn editable_table_html(
         let id = row.get("id").and_then(|v| v.as_deref()).unwrap_or("");
         body.push_str(r#"<div class="pgapp-editable-row-wrap">"#);
         body.push_str(&format!(
-            r#"<form class="pgapp-editable-row" method="post" action="/{page}/c/{idx}/update/{id}">"#,
+            r#"<form class="pgapp-editable-row" method="post" action="/{app}/{page}/c/{idx}/update/{id}">"#,
+            app = escape(app),
             page = escape(page_name),
             idx = idx,
             id = escape(id),
@@ -1027,10 +1059,11 @@ pub fn editable_table_html(
         }
         body.push_str(&format!(
             r#"<button class="pgapp-btn pgapp-btn-primary" type="submit" title="Save">{save_icon}</button></form>
-<form class="pgapp-inline-form" method="post" action="/{page}/c/{idx}/delete/{id}" data-pgapp-confirm="Delete this row?">
+<form class="pgapp-inline-form" method="post" action="/{app}/{page}/c/{idx}/delete/{id}" data-pgapp-confirm="Delete this row?">
 <button class="pgapp-btn pgapp-btn-destructive" type="submit" title="Delete">{delete_icon}</button></form>"#,
             save_icon = icons.render("edit"),
             delete_icon = icons.render("delete"),
+            app = escape(app),
             page = escape(page_name),
             idx = idx,
             id = escape(id),
@@ -1039,7 +1072,8 @@ pub fn editable_table_html(
     }
 
     body.push_str(&format!(
-        r#"<h3 class="pgapp-region-title">Add new</h3><div class="pgapp-editable-row-wrap"><form class="pgapp-form pgapp-editable-row" method="post" action="/{page}/c/{idx}/create">"#,
+        r#"<h3 class="pgapp-region-title">Add new</h3><div class="pgapp-editable-row-wrap"><form class="pgapp-form pgapp-editable-row" method="post" action="/{app}/{page}/c/{idx}/create">"#,
+        app = escape(app),
         page = escape(page_name),
         idx = idx,
     ));
@@ -1058,6 +1092,7 @@ pub fn editable_table_html(
 /// `server.rs`).
 #[allow(clippy::too_many_arguments)]
 pub fn page_layout(
+    app: &str,
     app_name: &str,
     title: &str,
     body: &str,
@@ -1082,5 +1117,33 @@ pub fn page_layout(
         ));
     }
     full.push_str(body);
-    layout(app_name, title, chrome, icons, chart_lib, user, &full)
+    layout(app, app_name, title, chrome, icons, chart_lib, user, &full)
+}
+
+/// The landing page at bare `/` when a server serves more than one
+/// app — a plain list of links into each app's own `/{slug}`. A
+/// single-app server never renders this: `/` redirects straight to
+/// the one app instead (see `server::landing`).
+pub fn workspace_landing(apps: &[String]) -> String {
+    let mut items = String::new();
+    for slug in apps {
+        items.push_str(&format!(
+            r#"<li><a class="pgapp-link" href="/{slug}">{slug}</a></li>"#,
+            slug = escape(slug),
+        ));
+    }
+    format!(
+        r#"<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pgapp</title>
+</head>
+<body>
+<h1 class="pgapp-title">Apps on this server</h1>
+<ul class="pgapp-navbar">{items}</ul>
+</body>
+</html>"#
+    )
 }

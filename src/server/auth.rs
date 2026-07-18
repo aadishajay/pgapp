@@ -3,11 +3,15 @@
 //! - **AuthN**: username/password against `pgapp_meta.users` (argon2
 //!   hashes, never plaintext), server-side sessions in
 //!   `pgapp_meta.sessions` with only a random token in an HttpOnly
-//!   cookie — a session is revoked by deleting its row. The first
-//!   visit to /login on an app with no users offers a one-time "create
+//!   cookie — a session is revoked by deleting its row. The cookie is
+//!   scoped to `Path=/{app}` (see `create_session`), so a browser only
+//!   ever sends one app's token to that app's own routes, even when
+//!   several apps share the same process/pool. The first visit to
+//!   `/{app}/login` on an app with no users offers a one-time "create
 //!   the admin account" form; after that, only admins can add users
-//!   (via the built-in /users page). Users are deliberately *not*
-//!   declarable in markup: passwords don't belong in a source file.
+//!   (via the built-in `/{app}/users` page). Users are deliberately
+//!   *not* declarable in markup: passwords don't belong in a source
+//!   file.
 //! - **AuthZ**: a user has one `role` (free-form string). A page's
 //!   `requires: <role>` markup restricts it to that role; 'admin'
 //!   passes every check. Pages without `requires:` need any signed-in
@@ -15,8 +19,10 @@
 //!   public.
 //!
 //! Everything hangs off [`require_login`], an axum middleware that
-//! resolves the session cookie into an [`AuthCtx`] request extension
-//! and redirects unauthenticated page requests to /login.
+//! resolves the app slug from the raw request path (it runs before any
+//! route's own `Path` extraction), looks up that app's session cookie
+//! into an [`AuthCtx`] request extension, and redirects unauthenticated
+//! page requests to that app's own `/login`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -104,8 +110,12 @@ fn cookie_token(headers: &HeaderMap) -> Option<String> {
 }
 
 /// Creates a session row and returns the Set-Cookie header value. Two
-/// v4 UUIDs give the token ~244 bits of randomness.
-async fn create_session(pool: &PgPool, app_id: i32, user_id: i32) -> anyhow::Result<String> {
+/// v4 UUIDs give the token ~244 bits of randomness. `Path=/{app_slug}`
+/// keeps the cookie from ever being sent to a *different* app sharing
+/// this process — `load_session`'s own `app_id` filter would reject it
+/// anyway, but scoping the cookie itself means the browser doesn't
+/// even offer it cross-app.
+async fn create_session(pool: &PgPool, app_id: i32, user_id: i32, app_slug: &str) -> anyhow::Result<String> {
     // Opportunistic cleanup: expired sessions are dead weight either way.
     sqlx::query("delete from pgapp_meta.sessions where expires_at < now()")
         .execute(pool)
@@ -124,7 +134,7 @@ async fn create_session(pool: &PgPool, app_id: i32, user_id: i32) -> anyhow::Res
     .await?;
 
     Ok(format!(
-        "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={SESSION_SECONDS}"
+        "{SESSION_COOKIE}={token}; Path=/{app_slug}; HttpOnly; SameSite=Lax; Max-Age={SESSION_SECONDS}"
     ))
 }
 
@@ -151,25 +161,45 @@ async fn user_count(pool: &PgPool, app_id: i32) -> anyhow::Result<i64> {
 
 // ---- middleware ----
 
-/// Paths that must stay reachable without a session, or the login page
-/// couldn't render (its stylesheet!) and nobody could ever sign in.
-fn is_public(path: &str) -> bool {
-    matches!(path, "/login" | "/setup" | "/theme.css" | "/runtime.js" | "/chart-lib.js")
-        || path.starts_with("/assets/")
+/// Sub-paths (everything after `/{app}`) that must stay reachable
+/// without a session, or the login page couldn't render (its
+/// stylesheet!) and nobody could ever sign in. The empty string is
+/// `/{app}` itself — `index` doesn't check auth; it just redirects to
+/// the app's first page, which `show` re-checks.
+fn is_public(rest: &str) -> bool {
+    matches!(rest, "" | "/login" | "/setup" | "/theme.css" | "/runtime.js" | "/chart-lib.js")
+        || rest.starts_with("/assets/")
 }
 
 pub async fn require_login(State(state): State<Arc<AppState>>, mut req: Request, next: Next) -> Response {
-    let mut ctx = AuthCtx(None);
-    let data = state.data();
+    let path = req.uri().path().to_string();
+    if path == "/" {
+        // The workspace landing page: public regardless of any app's
+        // own auth setting, and not scoped to any one app.
+        req.extensions_mut().insert(AuthCtx(None));
+        return next.run(req).await;
+    }
 
+    let trimmed = path.trim_start_matches('/');
+    let (app_slug, rest) = match trimmed.split_once('/') {
+        Some((a, r)) => (a, format!("/{r}")),
+        None => (trimmed, String::new()),
+    };
+
+    let Some(entry) = state.apps.get(app_slug) else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let data = entry.data();
+
+    let mut ctx = AuthCtx(None);
     if data.app.auth_enabled {
         if let Some(token) = cookie_token(req.headers()) {
             if let Ok(user) = load_session(&state.pool, data.app.id, &token).await {
                 ctx = AuthCtx(user);
             }
         }
-        if ctx.0.is_none() && !is_public(req.uri().path()) {
-            return Redirect::to("/login").into_response();
+        if ctx.0.is_none() && !is_public(&rest) {
+            return Redirect::to(&format!("/{app_slug}/login")).into_response();
         }
     }
 
@@ -206,20 +236,23 @@ fn require_admin(auth: &AuthCtx) -> Result<&CurrentUser, AppError> {
 
 // ---- handlers ----
 
-pub async fn login_form(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
-    let data = state.data();
+pub async fn login_form(State(state): State<Arc<AppState>>, Path(app): Path<String>) -> Result<Html<String>, AppError> {
+    let entry = state.app_or_404(&app)?;
+    let data = entry.data();
     if !data.app.auth_enabled {
         return Err((StatusCode::NOT_FOUND, "this app does not use authentication".to_string()));
     }
     let setup = user_count(&state.pool, data.app.id).await.map_err(err_response)? == 0;
-    Ok(Html(render::login_page(&data.app.name, None, setup)))
+    Ok(Html(render::login_page(&app, &data.app.name, None, setup)))
 }
 
 pub async fn login(
     State(state): State<Arc<AppState>>,
+    Path(app): Path<String>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let data = state.data();
+    let entry = state.app_or_404(&app)?;
+    let data = entry.data();
     if !data.app.auth_enabled {
         return Err((StatusCode::NOT_FOUND, "this app does not use authentication".to_string()));
     }
@@ -238,16 +271,16 @@ pub async fn login(
     // Same failure path whether the user is unknown or the password is
     // wrong — don't leak which usernames exist.
     let Some((user_id, stored_hash)) = row else {
-        return Ok(Html(render::login_page(&data.app.name, Some("Invalid username or password."), false)).into_response());
+        return Ok(Html(render::login_page(&app, &data.app.name, Some("Invalid username or password."), false)).into_response());
     };
     if !verify_password(password, &stored_hash) {
-        return Ok(Html(render::login_page(&data.app.name, Some("Invalid username or password."), false)).into_response());
+        return Ok(Html(render::login_page(&app, &data.app.name, Some("Invalid username or password."), false)).into_response());
     }
 
-    let cookie = create_session(&state.pool, data.app.id, user_id)
+    let cookie = create_session(&state.pool, data.app.id, user_id, &app)
         .await
         .map_err(err_response)?;
-    Ok((StatusCode::SEE_OTHER, [(header::SET_COOKIE, cookie), (header::LOCATION, "/".to_string())]).into_response())
+    Ok((StatusCode::SEE_OTHER, [(header::SET_COOKIE, cookie), (header::LOCATION, format!("/{app}"))]).into_response())
 }
 
 /// One-time first-run bootstrap: creates the admin account, but only
@@ -255,9 +288,11 @@ pub async fn login(
 /// refuses, so it can't be used to sneak in a second admin.
 pub async fn setup(
     State(state): State<Arc<AppState>>,
+    Path(app): Path<String>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let data = state.data();
+    let entry = state.app_or_404(&app)?;
+    let data = entry.data();
     if !data.app.auth_enabled {
         return Err((StatusCode::NOT_FOUND, "this app does not use authentication".to_string()));
     }
@@ -269,6 +304,7 @@ pub async fn setup(
     let password = values.get("password").map(|s| s.as_str()).unwrap_or_default();
     if username.is_empty() || password.len() < MIN_PASSWORD_LEN {
         return Ok(Html(render::login_page(
+            &app,
             &data.app.name,
             Some("Username is required and the password needs at least 8 characters."),
             true,
@@ -288,13 +324,14 @@ pub async fn setup(
     .await
     .map_err(|e| err_response(e.into()))?;
 
-    let cookie = create_session(&state.pool, data.app.id, user_id)
+    let cookie = create_session(&state.pool, data.app.id, user_id, &app)
         .await
         .map_err(err_response)?;
-    Ok((StatusCode::SEE_OTHER, [(header::SET_COOKIE, cookie), (header::LOCATION, "/".to_string())]).into_response())
+    Ok((StatusCode::SEE_OTHER, [(header::SET_COOKIE, cookie), (header::LOCATION, format!("/{app}"))]).into_response())
 }
 
-pub async fn logout(State(state): State<Arc<AppState>>, req: Request) -> Result<Response, AppError> {
+pub async fn logout(State(state): State<Arc<AppState>>, Path(app): Path<String>, req: Request) -> Result<Response, AppError> {
+    state.app_or_404(&app)?;
     if let Some(token) = cookie_token(req.headers()) {
         sqlx::query("delete from pgapp_meta.sessions where token = $1")
             .bind(&token)
@@ -302,19 +339,21 @@ pub async fn logout(State(state): State<Arc<AppState>>, req: Request) -> Result<
             .await
             .map_err(|e| err_response(e.into()))?;
     }
-    let clear = format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
-    Ok((StatusCode::SEE_OTHER, [(header::SET_COOKIE, clear), (header::LOCATION, "/login".to_string())]).into_response())
+    let clear = format!("{SESSION_COOKIE}=; Path=/{app}; HttpOnly; SameSite=Lax; Max-Age=0");
+    Ok((StatusCode::SEE_OTHER, [(header::SET_COOKIE, clear), (header::LOCATION, format!("/{app}/login"))]).into_response())
 }
 
-// ---- the built-in /users admin page ----
+// ---- the built-in /:app/users admin page ----
 
 pub async fn users_page(
     State(state): State<Arc<AppState>>,
+    Path(app): Path<String>,
     axum::Extension(auth): axum::Extension<AuthCtx>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
     let current = require_admin(&auth)?;
-    let data = state.data();
+    let entry = state.app_or_404(&app)?;
+    let data = entry.data();
 
     let users: Vec<(i32, String, String)> = sqlx::query_as(
         "select id, username, role from pgapp_meta.users where app_id = $1 order by username",
@@ -331,6 +370,7 @@ pub async fn users_page(
 
     let nav = visible_nav(&data.app, &data.app.nav, &data, &auth);
     Ok(Html(render::users_page(
+        &app,
         &data.app.name,
         &users,
         current.id,
@@ -344,10 +384,12 @@ pub async fn users_page(
 
 pub async fn users_create(
     State(state): State<Arc<AppState>>,
+    Path(app): Path<String>,
     axum::Extension(auth): axum::Extension<AuthCtx>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     require_admin(&auth)?;
+    let entry = state.app_or_404(&app)?;
 
     let username = values.get("username").map(|s| s.trim()).unwrap_or_default();
     let password = values.get("password").map(|s| s.as_str()).unwrap_or_default();
@@ -356,14 +398,14 @@ pub async fn users_create(
 
     if username.is_empty() || password.len() < MIN_PASSWORD_LEN {
         let msg = "Username is required and the password needs at least 8 characters.";
-        return Ok(Redirect::to(&format!("/users?error={}", url_encode(msg))).into_response());
+        return Ok(Redirect::to(&format!("/{app}/users?error={}", url_encode(msg))).into_response());
     }
 
     let hash = hash_password(password).map_err(err_response)?;
     let result = sqlx::query(
         "insert into pgapp_meta.users (app_id, username, password_hash, role) values ($1, $2, $3, $4)",
     )
-    .bind(state.data().app.id)
+    .bind(entry.data().app.id)
     .bind(username)
     .bind(&hash)
     .bind(role)
@@ -371,30 +413,31 @@ pub async fn users_create(
     .await;
 
     match result {
-        Ok(_) => Ok(Redirect::to("/users").into_response()),
+        Ok(_) => Ok(Redirect::to(&format!("/{app}/users")).into_response()),
         Err(_) => {
             let msg = format!("Could not create '{username}' — that username is already taken.");
-            Ok(Redirect::to(&format!("/users?error={}", url_encode(&msg))).into_response())
+            Ok(Redirect::to(&format!("/{app}/users?error={}", url_encode(&msg))).into_response())
         }
     }
 }
 
 pub async fn users_delete(
     State(state): State<Arc<AppState>>,
+    Path((app, user_id)): Path<(String, i32)>,
     axum::Extension(auth): axum::Extension<AuthCtx>,
-    Path(user_id): Path<i32>,
 ) -> Result<Response, AppError> {
     let current = require_admin(&auth)?;
+    let entry = state.app_or_404(&app)?;
     if current.id == user_id {
         let msg = "You cannot delete the account you are signed in with.";
-        return Ok(Redirect::to(&format!("/users?error={}", url_encode(msg))).into_response());
+        return Ok(Redirect::to(&format!("/{app}/users?error={}", url_encode(msg))).into_response());
     }
 
     sqlx::query("delete from pgapp_meta.users where id = $1 and app_id = $2")
         .bind(user_id)
-        .bind(state.data().app.id)
+        .bind(entry.data().app.id)
         .execute(&state.pool)
         .await
         .map_err(|e| err_response(e.into()))?;
-    Ok(Redirect::to("/users").into_response())
+    Ok(Redirect::to(&format!("/{app}/users")).into_response())
 }

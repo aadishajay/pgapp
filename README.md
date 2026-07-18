@@ -23,8 +23,9 @@ the exact next command:
 cargo run -- <generated-file>.pgapp
 ```
 
-Open `http://127.0.0.1:8080`. No manual `createdb`, no separate
-migration step, nothing to hand-edit first.
+It prints the app's URL — `http://127.0.0.1:8080/<slug>` — and opening
+the bare `http://127.0.0.1:8080` redirects there too. No manual
+`createdb`, no separate migration step, nothing to hand-edit first.
 
 For scripts/CI, skip the prompts entirely: `cargo run -- new <AppName>`
 (see "Scaffolding a new app" below). To try the richer bundled demo
@@ -32,14 +33,18 @@ instead of a blank scaffold: `cargo run -- examples/helpdesk.pgapp`
 (needs `examples/helpdesk_functions.sql` run first — see its header
 comment).
 
+Running against the same database again with a *different* `.pgapp`
+path adds a second app alongside the first — see "Multi-app
+workspaces" below.
+
 ## Idea
 
 - **In-database metadata**: apps, entities, fields, pages, and
   components are rows in Postgres (`pgapp_meta.*`); the server always
   serves off the database, never off whatever was last parsed.
 - **A textual markup language** (`.pgapp` files, APEX-flavored) authors
-  an app; it's synced into metadata at startup and again on
-  `/admin/reload` — no restart needed to pick up a change.
+  an app; it's synced into metadata at startup and again on that
+  app's `/admin/reload` — no restart needed to pick up a change.
 - **Composable pages**: a page is just an ordered list of independent
   components (`Report`, `Form`, `EditableTable`, `Chart`, `Text`,
   `Link`, `Region`, `Action`) — any combination, any number, one page.
@@ -57,15 +62,15 @@ comment).
   views (private or public), all in metadata.
 - **Auth**: an `auth { }` block puts the app behind argon2-hashed
   logins and server-side sessions; `requires: <role>` gates pages.
-- **A DB-stored JS runtime**: `/runtime.js` is a metadata row, not a
-  static file — editable without touching the binary.
+- **A DB-stored JS runtime**: `/:app/runtime.js` is a metadata row, not
+  a static file — editable without touching the binary.
 - **Rust instead of PostgREST**: one Axum binary owns routing and
   builds parameterized SQL from metadata directly.
 
 This is deliberately the *smallest end-to-end loop*, not the whole
-framework: single-tenant, one process per app, a handful of field
+framework: one Postgres schema (single workspace), a handful of field
 types. It exists to prove the architecture before building the bigger
-pieces (drag-and-drop builder UI, multi-step flows, multi-app routing).
+pieces (drag-and-drop builder UI, multi-step flows).
 
 ## Markup
 
@@ -339,7 +344,7 @@ on change of agent {
 
 Ops: `show`/`hide <item>`, `toggle <item> when "<js expr>"`, `set
 <item> to "<js expr>"` (may call `pgapp.getItem`), `refresh <query>`
-(re-fetches one region via `GET /:page/region/:query`, sending current
+(re-fetches one region via `GET /:app/:page/region/:query`, sending current
 item values as query params). Dispatched by the DB-stored runtime.js;
 `setItem` fires `change` events so actions chain (depth-guarded).
 
@@ -432,7 +437,8 @@ target page's queries to read back as `:param`.
 **Binds are typed automatically from the schema**, APEX-style but not
 hand-declared: write `:project_id`, not `:project_id::integer`.
 `meta::compile_named_query` asks Postgres's own `Describe` what type
-each bind needs to be (fresh every load — startup or `/admin/reload`),
+each bind needs to be (fresh every load — startup or `/admin/reload`
+ on that app),
 so schema drift (`alter column ... type bigint`) is picked up
 automatically or rejected loudly at sync time, never silently wrong at
 runtime. An explicit `:name::type` cast still works (a redundant no-op
@@ -451,11 +457,11 @@ checking beyond what Postgres itself enforces.
 
 Opt in with an `auth { }` block:
 
-- Every page requires a signed-in user; only `/login` and static
+- Every page requires a signed-in user; only `/:app/login` and static
   assets stay public.
-- First run bootstraps the admin (`POST /setup`, one-time); after that,
-  admins manage accounts on the built-in `/users` page. Users are never
-  declared in markup.
+- First run bootstraps the admin (`POST /:app/setup`, one-time); after
+  that, admins manage accounts on the built-in `/:app/users` page.
+  Users are never declared in markup.
 - Passwords are argon2id hashes in `pgapp_meta.users`; sessions are
   server-side rows in `pgapp_meta.sessions` (an HttpOnly, `SameSite=Lax`
   cookie holds only a random token — revoking a session means deleting
@@ -469,7 +475,7 @@ with an admin-only Agents page.
 
 ## Runtime JS
 
-`GET /runtime.js` is a row in `pgapp_meta.app_runtime_js`, seeded from
+`GET /:app/runtime.js` is a row in `pgapp_meta.app_runtime_js`, seeded from
 `src/runtime.js` on first sync and left alone after — editable in the
 database without touching the binary. Defines
 `window.pgapp.getItem(name)`/`.setItem(name, value)`, working the same
@@ -483,21 +489,23 @@ filter.
 Since it's a DB row, editing it directly takes effect on the next
 request — no restart. To pick up a newer *built-in* default after
 changing `src/runtime.js`, delete the app's `pgapp_meta.app_runtime_js`
-row and hit `/admin/reload` (sync only seeds that row once).
+row and hit that app's `/admin/reload` (sync only seeds that row once).
 
 ## Hot reload
 
-`GET`/`POST /admin/reload` re-syncs the markup file into `pgapp_meta`
-and reloads the running app in place — no restart. `AppState` splits
-fields that can't change without a rebuild (`pool`, `item_types`,
-`actions`) from everything markup-derived (`app`, `theme`,
-`runtime_js`, `icons`, `chart_lib`), the latter behind
-`RwLock<Arc<AppData>>`; each request snapshots it once at the top, so a
-concurrent reload can't mix a new `RuntimeApp` with a stale `Theme`. A
-failed reload (bad markup) never swaps in — the old snapshot keeps
-serving, and the error shows on the reload page. The page itself offers
-an editable textarea (single-file apps) or "reload from disk"
-(directory apps), gated to the `admin` role when auth is enabled.
+`GET`/`POST /:app/admin/reload` re-syncs that app's markup file into
+`pgapp_meta` and reloads it in place — no restart, and no effect on any
+other app sharing the process. `AppState` holds what's shared and can't
+change without a rebuild (`pool`, `item_types`, `actions`, the
+`apps: HashMap<slug, AppEntry>` registry itself); each `AppEntry` splits
+off everything markup-derived (`app`, `theme`, `runtime_js`, `icons`,
+`chart_lib`) behind its own `RwLock<Arc<AppData>>`. Each request
+snapshots that one app's data once at the top, so a concurrent reload
+can't mix a new `RuntimeApp` with a stale `Theme`. A failed reload (bad
+markup) never swaps in — the old snapshot keeps serving, and the error
+shows on the reload page. The page itself offers an editable textarea
+(single-file apps) or "reload from disk" (directory apps), gated to the
+`admin` role when auth is enabled.
 
 Not covered: new item types/actions, or the routing table itself, are
 still Rust code — those need `cargo build` + restart. Markup changes
@@ -561,7 +569,8 @@ src/
   bin/cargo-pgapp.rs  the `cargo-pgapp` binary (`cargo pgapp` -> scaffold::run)
   scaffold.rs         `pgapp new`/`pgapp create` (see "Scaffolding a new app")
   markup.rs           lexer + parser: .pgapp text -> model::AppDef (or a Fragment)
-  source.rs           loads a file or merges a directory of .pgapp files into one AppDef
+  source.rs           loads a file/dir into one AppDef, or a dir-of-dirs into a workspace of several
+  control.rs          pgapp_control.apps: the durable app registry (see "Multi-app workspaces")
   model.rs            parsed-markup types (AppDef, PageDef, ComponentDef, FieldItem, ...)
   html.rs             shared escape/js_escape/url_encode helpers
   theme.rs            theme.css/theme.json loading (see "Theming")
@@ -577,7 +586,7 @@ src/
     types.rs          the runtime model (RuntimeApp, RuntimePage, RuntimeComponent, Chrome, ...)
     sync.rs           AppDef -> pgapp_meta.* (+ physical data tables)
     load.rs           pgapp_meta.* -> RuntimeApp, compile_named_query
-  server.rs           module root: AppState, routes, HTTP handlers, pagination
+  server.rs           module root: AppState/AppEntry, /:app routes, HTTP handlers, pagination
   server/
     query_engine.rs   named-query execution (+ paginated), bind context, LOV/region resolution
   render.rs           HTML generation; delegates field widgets to item_types, charts to chart_lib
@@ -623,30 +632,71 @@ To add another design system: `themes/<name>/theme.css` + `theme:
 
 ## Routes
 
-On startup it prints the URL and component kinds for each page, e.g.
-`http://127.0.0.1:8080/Tasks  [report, form, text, region]`.
+Every route lives under `/:app` — an app's URL slug (see "Multi-app
+workspaces"). On startup it prints each app's full URL and its
+pages' component kinds, e.g.
+`http://127.0.0.1:8080/todo/Tasks  [report, form, text, region]`.
 
-- `GET  /`                              — redirects to the app's first page
-- `GET  /:page`                         — renders every component on the page, in order
-- `POST /:page/c/:idx/create`           — create a row (`Form`/`EditableTable` only, by component index)
-- `POST /:page/c/:idx/update/:id`       — update a row
-- `POST /:page/c/:idx/delete/:id`       — delete a row
-- `GET  /api/:entity`                   — JSON list for that entity
-- `GET  /:page/region/:query`           — one region re-rendered as a fragment (dynamic-action refresh)
-- `POST /:page/c/:idx/run`              — run an `action` component's server-side module
-- `POST /:page/c/:idx/views` (+ delete) — save / delete a report's saved view
-- `GET  /login` / `POST /login`         — sign-in page (or first-run admin setup) — apps with `auth { }` only
-- `POST /setup`                         — one-time admin bootstrap; refuses once any user exists
-- `POST /logout`                        — deletes the server-side session
-- `GET  /users` (+ create/delete POSTs) — built-in user management, admin role only
-- `GET  /admin/reload` (+ POST)         — re-syncs the markup file into `pgapp_meta` and reloads the running app, no restart
-- `GET  /runtime.js`                    — the DB-stored `pgapp` JS runtime
-- `GET  /chart-lib.js`                  — the active pluggable chart library's JS (404 when `chart_lib` is the built-in `inline`)
+- `GET  /`                                   — one app: redirects there; several: a plain list of them
+- `GET  /:app`                               — redirects to the app's first page
+- `GET  /:app/:page`                         — renders every component on the page, in order
+- `POST /:app/:page/c/:idx/create`           — create a row (`Form`/`EditableTable` only, by component index)
+- `POST /:app/:page/c/:idx/update/:id`       — update a row
+- `POST /:app/:page/c/:idx/delete/:id`       — delete a row
+- `GET  /:app/api/:entity`                   — JSON list for that entity
+- `GET  /:app/:page/region/:query`           — one region re-rendered as a fragment (dynamic-action refresh)
+- `POST /:app/:page/c/:idx/run`              — run an `action` component's server-side module
+- `POST /:app/:page/c/:idx/views` (+ delete) — save / delete a report's saved view
+- `GET  /:app/login` / `POST /:app/login`    — sign-in page (or first-run admin setup) — apps with `auth { }` only
+- `POST /:app/setup`                         — one-time admin bootstrap; refuses once any user exists
+- `POST /:app/logout`                        — deletes the server-side session
+- `GET  /:app/users` (+ create/delete POSTs) — built-in user management, admin role only
+- `GET  /:app/admin/reload` (+ POST)         — re-syncs that app's markup file into `pgapp_meta` and reloads it, no restart
+- `GET  /:app/runtime.js`                    — the DB-stored `pgapp` JS runtime
+- `GET  /:app/chart-lib.js`                  — the active pluggable chart library's JS (404 when `chart_lib` is the built-in `inline`)
 
 A `Form` switches into edit mode via `?edit_<n>=<id>` (`<n>` = its
 0-based position on the page); a `Report`'s pagination uses
 `?r<n>_after=`/`?r<n>_before=` (entity-backed) or `?r<n>_page=`
 (query-sourced) the same way.
+
+## Multi-app workspaces
+
+One process, one shared `PgPool`, any number of apps — closer to how
+Oracle APEX actually pools connections (one pool per workspace, shared
+by every application in it) than to a separate server per app. Every
+app keeps its own tables (`pgapp_data.<app>_<entity>`), sessions, and
+users; only the connection pool and Rust process are shared.
+
+**What's registered, not what's on the command line, decides what's
+served.** `pgapp_control.apps` (a schema of its own — pgapp managing
+itself, distinct from `pgapp_meta`'s per-app metadata) is the durable
+list of `(slug, markup_path, enabled)` rows. `cargo run -- <path>`
+registers (or re-points) one slug and then serves *every enabled row*,
+not just that one — so pointing the server at a new app one run adds
+it alongside whatever was already registered, without needing to name
+every app again each time:
+
+```bash
+cargo run -- helpdesk.pgapp   # registers + serves "helpdesk"
+cargo run -- inventory.pgapp  # registers "inventory" too; both now serve
+cargo run -- apps             # slug  enabled/disabled  markup_path, one per line
+cargo run -- remove inventory # disables it — helpdesk keeps serving
+```
+
+A directory can also declare a whole workspace up front: if it
+contains only subdirectories (no loose `.pgapp` files of its own), each
+subdirectory is loaded as an independent app, slugged from its own
+declared name — `cargo run -- workspace/` where `workspace/helpdesk/`
+and `workspace/inventory/` each look like a normal single-app directory
+(see "Scaffolding a new app"). A directory with any loose `.pgapp` file
+directly inside it is still just one app, exactly as before — this
+only kicks in for a directory of nothing but subdirectories.
+
+Sessions are app-scoped even though the cookie name is shared: the
+`Set-Cookie` carries `Path=/<slug>`, so a browser never sends one app's
+token to another's routes, and `pgapp_meta.sessions`/`.users` are
+looked up by `app_id` regardless.
 
 ## Scaffolding a new app
 
@@ -675,7 +725,9 @@ See `pgapp new --help` for every flag.
 
 ## Roadmap (not in this slice)
 
-- Multi-app routing (`/:app/:page`) instead of one app per process
+- Multi-*workspace* isolation (separate schema/pool per workspace, each
+  holding several apps) — today every app in a process shares one
+  schema/pool; see "Multi-app workspaces" for what's already there
 - More field types and real relationships (foreign keys) — named
   queries cover ad hoc joins today, but no schema-level entity-to-entity
   references yet
