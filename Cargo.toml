@@ -2,6 +2,11 @@
 name = "pgapp"
 version = "0.1.0"
 edition = "2021"
+# `cargo-pgapp` (src/bin/cargo-pgapp.rs) is a second, small binary so
+# `cargo pgapp ...` works as a subcommand — but `cargo run -- <path>`
+# should still mean "run the server", not force everyone to type
+# `--bin pgapp` from now on.
+default-run = "pgapp"
 
 [dependencies]
 axum = "0.7"

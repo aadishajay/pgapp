@@ -823,7 +823,11 @@ nothing downstream needs another join to resolve them.
 
 ```
 src/
-  main.rs             wires everything together: registry, theme, icons, chart lib
+  lib.rs              the library crate every binary below depends on — same modules,
+                      one compile
+  main.rs             the `pgapp` server binary: wires registry, theme, icons, chart lib
+  bin/cargo-pgapp.rs  the `cargo-pgapp` binary: `cargo pgapp` forwards to scaffold::run
+  scaffold.rs         `pgapp new`/`pgapp create` (see "Scaffolding a new app")
   markup.rs           lexer + parser: .pgapp text -> model::AppDef (or a Fragment)
   source.rs           loads a file or merges a directory of .pgapp files into one AppDef
   model.rs            the parsed-markup types (AppDef, PageDef, ComponentDef, FieldItem, ...)
@@ -999,6 +1003,38 @@ A `Form` switches into edit mode for one row via `?edit_<n>=<id>` on its
 page's URL (`<n>` = the form's 0-based position on the page); a
 `Report`'s pagination uses `?r<n>_after=`/`?r<n>_before=` (entity-backed)
 or `?r<n>_page=` (query-sourced) the same way — see "Pagination" above.
+
+## Scaffolding a new app
+
+`pgapp new`/`pgapp create` generates a minimal, runnable starter app —
+one entity, one page with the classic Report+Form CRUD pattern, a nav
+link to it — instead of starting from a blank file. Two modes:
+
+```bash
+# Flag-driven: non-interactive, never touches a database, only writes
+# files. Good for scripts/CI.
+cargo run -- new "My Project"                    # -> my_project.pgapp
+cargo run -- new Inventory inventory.pgapp        # explicit path
+cargo run -- new Inventory --dir --theme vivid    # a directory scaffold instead
+
+# Interactive, create-react-app style: prompts for whatever's missing
+# (app name, database URL, theme, single file vs. directory), then
+# connects to that database and syncs the new app immediately — the
+# same ensure_schema/sync_app the server runs on every startup — so
+# it's ready to `cargo run` as soon as the prompts finish.
+cargo run -- create
+```
+
+It's also reachable as a real `cargo` subcommand (`src/bin/cargo-pgapp.rs`,
+sharing all of the above through the `pgapp` library crate — see
+`src/lib.rs`) once that binary is on `PATH`:
+
+```bash
+cargo install --path . --bin cargo-pgapp
+cargo pgapp create              # or: cargo pgapp new "My Project"
+```
+
+See `pgapp new --help` for every flag.
 
 ## Roadmap (not in this slice)
 

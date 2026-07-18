@@ -1,26 +1,18 @@
-mod actions;
-mod chart_lib;
-mod html;
-mod icons;
-mod item_types;
-mod markup;
-mod meta;
-mod model;
-mod render;
-mod server;
-mod source;
-mod theme;
-
 use std::sync::Arc;
 
 use anyhow::Context;
 use sqlx::postgres::PgPoolOptions;
 
+use pgapp::{actions, chart_lib, icons, item_types, meta, scaffold, server, source, theme};
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let markup_path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "examples/todo.pgapp".to_string());
+    let cli_args: Vec<String> = std::env::args().collect();
+    if matches!(cli_args.get(1).map(|s| s.as_str()), Some("new") | Some("create")) {
+        return scaffold::run(&cli_args[2..]).await;
+    }
+
+    let markup_path = cli_args.get(1).cloned().unwrap_or_else(|| "examples/todo.pgapp".to_string());
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
     let database_url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/pgapp".to_string());
@@ -76,15 +68,15 @@ async fn main() -> anyhow::Result<()> {
             .components
             .iter()
             .map(|c| match c {
-                crate::meta::RuntimeComponent::Report { .. } => "report",
-                crate::meta::RuntimeComponent::Form { .. } => "form",
-                crate::meta::RuntimeComponent::EditableTable { .. } => "editable_table",
-                crate::meta::RuntimeComponent::Chart { .. } => "chart",
-                crate::meta::RuntimeComponent::Text { .. } => "text",
-                crate::meta::RuntimeComponent::Link { .. } => "link",
-                crate::meta::RuntimeComponent::Region { .. } => "region",
-                crate::meta::RuntimeComponent::Action { .. } => "action",
-                crate::meta::RuntimeComponent::DynamicAction { .. } => "dynamic_action",
+                meta::RuntimeComponent::Report { .. } => "report",
+                meta::RuntimeComponent::Form { .. } => "form",
+                meta::RuntimeComponent::EditableTable { .. } => "editable_table",
+                meta::RuntimeComponent::Chart { .. } => "chart",
+                meta::RuntimeComponent::Text { .. } => "text",
+                meta::RuntimeComponent::Link { .. } => "link",
+                meta::RuntimeComponent::Region { .. } => "region",
+                meta::RuntimeComponent::Action { .. } => "action",
+                meta::RuntimeComponent::DynamicAction { .. } => "dynamic_action",
             })
             .collect();
         println!("  http://{bind_addr}/{}  [{}]", page.name, kinds.join(", "));
