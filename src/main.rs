@@ -5,7 +5,7 @@ use anyhow::Context;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 
-use pgapp::{actions, chart_lib, control, icons, instance, item_types, meta, scaffold, secrets, server, source, theme};
+use pgapp::{actions, control, instance, item_types, meta, scaffold, secrets, server, source};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -41,40 +41,6 @@ fn print_usage() {
     println!("Start with `pgapp instance init`.");
 }
 
-/// Parses, syncs, and loads one app into a fresh [`server::AppEntry`] —
-/// exactly what every app registered in `pgapp_control.apps` goes
-/// through on every server start (and again, for just this one app, on
-/// its own `/{app}/admin/reload`).
-async fn load_one_app(
-    pool: &PgPool,
-    markup_path: &str,
-    data_schema: &str,
-    control_app_id: i32,
-    workspace_id: Option<i32>,
-    item_types: &item_types::Registry,
-    action_registry: &actions::Registry,
-) -> anyhow::Result<server::AppEntry> {
-    let app_def = source::load(markup_path)?;
-    meta::sync_app(pool, &app_def, item_types, action_registry, data_schema).await?;
-    let mut runtime_app = meta::load_app(pool, &app_def.name).await?;
-    runtime_app.control_app_id = control_app_id;
-    runtime_app.workspace_id = workspace_id;
-    let runtime_js = meta::load_runtime_js(pool, &app_def.name).await?;
-    let theme = theme::load(runtime_app.theme.as_deref().unwrap_or("shadcn"))?;
-    let icons = icons::load(runtime_app.icons.as_deref().unwrap_or("builtin"))?;
-    let chart_lib = chart_lib::load(runtime_app.chart_lib.as_deref().unwrap_or("inline"))?;
-    Ok(server::AppEntry {
-        markup_path: markup_path.to_string(),
-        data: std::sync::RwLock::new(Arc::new(server::AppData {
-            app: runtime_app,
-            theme,
-            runtime_js,
-            icons,
-            chart_lib,
-        })),
-    })
-}
-
 /// The shared tail of `pgapp run`: load every enabled row in
 /// `pgapp_control.apps` across every workspace (each already knows its
 /// own `data_schema`), print the banner, and serve. One bad app is
@@ -89,16 +55,16 @@ async fn serve_registered_apps(pool: PgPool, bind_addr: &str) -> anyhow::Result<
     let action_registry = actions::registry();
 
     let registered = control::list_enabled(&pool).await?;
-    let mut apps: HashMap<String, server::AppEntry> = HashMap::new();
+    let mut apps: HashMap<String, Arc<server::AppEntry>> = HashMap::new();
     for (control_app_id, slug, path, data_schema, workspace_id, workspace_slug) in registered {
         let Some(workspace_slug) = workspace_slug else {
             println!("pgapp: warning: skipping app '{slug}' at '{path}' — its workspace no longer exists");
             continue;
         };
         let key = format!("{workspace_slug}/{slug}");
-        match load_one_app(&pool, &path, &data_schema, control_app_id, workspace_id, &item_types, &action_registry).await {
+        match server::AppEntry::load(&pool, &path, &data_schema, control_app_id, workspace_id, &item_types, &action_registry).await {
             Ok(entry) => {
-                apps.insert(key, entry);
+                apps.insert(key, Arc::new(entry));
             }
             Err(e) => {
                 println!("pgapp: warning: skipping app '{key}' at '{path}' — {e:#}");
@@ -111,7 +77,7 @@ async fn serve_registered_apps(pool: PgPool, bind_addr: &str) -> anyhow::Result<
 
     print_banner(bind_addr, &apps).await;
 
-    let state = Arc::new(server::AppState { pool, apps, item_types, actions: action_registry });
+    let state = Arc::new(server::AppState { pool, apps: std::sync::RwLock::new(apps), item_types, actions: action_registry });
     let router = server::build_router(state);
     // Wraps the whole `Router` from the outside (rather than via its own
     // `.layer()`) so a trailing slash is stripped before route matching
@@ -130,7 +96,7 @@ async fn serve_registered_apps(pool: PgPool, bind_addr: &str) -> anyhow::Result<
     Ok(())
 }
 
-async fn print_banner(bind_addr: &str, apps: &HashMap<String, server::AppEntry>) {
+async fn print_banner(bind_addr: &str, apps: &HashMap<String, Arc<server::AppEntry>>) {
     let mut slugs: Vec<&String> = apps.keys().collect();
     slugs.sort();
 

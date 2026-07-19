@@ -2,24 +2,27 @@
 # main.rs's provision_app_builder), tied to its own reserved
 # pgapp_builder schema rather than a user workspace, at the fixed
 # workspace/app slugs "pgapp"/"builder". Lists every OTHER app
-# registered across every workspace in this instance and lets you
-# drag-and-drop reorder any of their pages. Every entity here is
-# query-backed, reading pgapp_control.*/pgapp_meta.* directly — no core
+# registered across every workspace in this instance and lets you: add/
+# reorder/edit/delete a page's components, add/delete whole pages, jump
+# to a live preview, and scaffold brand-new apps — an Oracle-APEX-App-
+# Builder-flavored editor, without hand-editing markup. Every entity
+# here reading pgapp_control.*/pgapp_meta.* is query-backed — no core
 # framework changes were needed for that read side: a named query can
 # reference any schema this connection can see, and the shared
-# pgapp_admin pool this app runs through already can. It owns no data
-# tables of its own, matching pgapp_builder's role as one of pgapp's
-# own bookkeeping schemas rather than a workspace holding real app data.
+# pgapp_admin pool this app runs through already can. Its one real,
+# physical table (new_app_requests) lives in pgapp_builder too, matching
+# that schema's role as one of pgapp's own bookkeeping schemas rather
+# than a workspace holding real app data.
 #
-# The actual save-on-drop mechanics — updating pgapp_meta.components'
-# ordering *and* rewriting the target app's own .pgapp file so the two
-# never drift apart — live in src/page_reorder.rs and the
-# `/:workspace/:app/admin/pages/:page/reorder` route in server.rs, not
-# here; this app is only the picker + the draggable list. That route
-# also refuses outright if the target is the App Builder itself — belt
-# and suspenders alongside the self-exclusion below, since a URL can
-# always be hand-crafted past whatever a picker itself declines to
-# link to.
+# The actual file-editing mechanics for an existing app's pages/
+# components — reorder/add/delete/edit-label/edit-columns, and add/
+# delete whole pages — live in src/page_reorder.rs and the
+# `/:workspace/:app/admin/pages/...` routes in server.rs, not here; this
+# app is only the picker + the draggable list + a few small forms. Every
+# one of those routes also refuses outright if the target is the App
+# Builder itself — belt and suspenders alongside the self-exclusion
+# below, since a URL can always be hand-crafted past whatever a picker
+# itself declines to link to.
 
 app "App Builder" {
   theme: shadcn
@@ -82,11 +85,13 @@ app "App Builder" {
 
   # Real, physical table (in pgapp_builder, auto-created on sync same
   # as any other entity) — a Form writes a plain pending request row
-  # here; actions/create_app.rs's before_load (on the companion report
-  # below) picks it up on the very next page load and does the actual
-  # scaffold+sync+register work, writing its outcome back into
-  # status/result. See that module's own doc for why errors land in
-  # this row instead of a page-level warning banner.
+  # here; runtime.js's bindNewAppProcessing POSTs to
+  # /pgapp/builder/admin/apps/create-pending on every NewApp page load
+  # (see that route in server.rs), which does the actual
+  # scaffold+sync+register+hot-register work and writes the outcome
+  # back into status/result. See actions/create_app.rs's own doc for
+  # why this isn't a before_load action like every other "process
+  # something automatically" case in pgapp.
   entity "new_app_requests" {
     field id: id
     field app_name: text required
@@ -113,15 +118,18 @@ app "App Builder" {
   }
 
   page "Pages" {
-    text "Pick a page to edit its components."
+    text "Editing:" attrs (id: "pgapp-context-slot")
+    text "Pick a page to edit its components, or add a new one below."
     report "Pages" of pages_list {
       columns: page_name
       link: page_name -> page EditPage (target_workspace: target_workspace, target_app: target_app, page_name: target_page)
       page_size: 50
-    } attrs (class: "pgapp-cards")
+    } attrs (class: "pgapp-cards pgapp-page-cards")
+    text "Add Page" attrs (id: "pgapp-add-page-slot")
   }
 
   page "EditPage" {
+    text "Editing:" attrs (id: "pgapp-context-slot")
     text "Preview" attrs (id: "pgapp-preview-slot")
     text "Drag a row to reorder; use the icon buttons to edit a label, edit columns, or delete. Every change saves immediately, in the database and in the app's own .pgapp file."
     region "Components" from query components_list {
@@ -138,8 +146,7 @@ app "App Builder" {
   # (the create form) behind a "+ New" click. A differently-named,
   # read-only view of the same table sidesteps that pairing with no
   # framework change — the Form stays always-visible, APEX-Create-
-  # Application-wizard style, and the history list is still real,
-  # still gets `before_load`'s processing on every load.
+  # Application-wizard style.
   query new_app_requests_view {
     sql: "select id, app_name, workspace_slug, theme, status, result
             from pgapp_builder.app_builder_new_app_requests
@@ -164,8 +171,7 @@ app "App Builder" {
     }
     report "Recent requests" of new_app_requests_view {
       columns: app_name, workspace_slug, theme, status, result
-      before_load: create_app
       page_size: 10
-    }
+    } attrs (id: "pgapp-new-app-requests")
   }
 }

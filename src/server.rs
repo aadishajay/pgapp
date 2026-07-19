@@ -80,6 +80,37 @@ pub struct AppEntry {
 }
 
 impl AppEntry {
+    /// Loads a `.pgapp` file fresh — parses it, syncs it into
+    /// `pgapp_meta`/its workspace schema, and builds the full in-memory
+    /// snapshot a served app needs. Used both at process startup
+    /// (`main.rs`'s `serve_registered_apps`, for every already-
+    /// registered app) and to hot-register a brand-new one the App
+    /// Builder just scaffolded (`admin_create_app` below) — the same
+    /// loading logic either way, so the two paths can never drift.
+    pub async fn load(
+        pool: &PgPool,
+        markup_path: &str,
+        data_schema: &str,
+        control_app_id: i32,
+        workspace_id: Option<i32>,
+        item_types: &item_types::Registry,
+        actions: &actions::Registry,
+    ) -> anyhow::Result<AppEntry> {
+        let app_def = crate::source::load(markup_path)?;
+        meta::sync_app(pool, &app_def, item_types, actions, data_schema).await?;
+        let mut runtime_app = meta::load_app(pool, &app_def.name).await?;
+        runtime_app.control_app_id = control_app_id;
+        runtime_app.workspace_id = workspace_id;
+        let runtime_js = meta::load_runtime_js(pool, &app_def.name).await?;
+        let theme = crate::theme::load(runtime_app.theme.as_deref().unwrap_or("shadcn"))?;
+        let icons = crate::icons::load(runtime_app.icons.as_deref().unwrap_or("builtin"))?;
+        let chart_lib = crate::chart_lib::load(runtime_app.chart_lib.as_deref().unwrap_or("inline"))?;
+        Ok(AppEntry {
+            markup_path: markup_path.to_string(),
+            data: RwLock::new(Arc::new(AppData { app: runtime_app, theme, runtime_js, icons, chart_lib })),
+        })
+    }
+
     /// A cheap snapshot of the current markup-derived state — an Arc
     /// clone, not a copy. Handlers take one of these at the top and use
     /// it for the rest of the request, so a concurrent reload can never
@@ -124,7 +155,16 @@ impl AppEntry {
 
 pub struct AppState {
     pub pool: PgPool,
-    pub apps: HashMap<String, AppEntry>,
+    /// Behind a lock — unlike everything else here, this map is
+    /// mutated after startup: `admin_create_app` inserts a brand-new
+    /// app the moment the App Builder finishes scaffolding it, so it's
+    /// servable immediately, no restart needed (an *existing* app's own
+    /// hot-reload/reorder/add/edit/delete routes only ever swap that
+    /// one app's own `AppData` — see `AppEntry::reload` — they never
+    /// touch this map itself). Values are `Arc`-wrapped so a lookup can
+    /// clone one out and drop the read lock immediately, rather than
+    /// holding it for an entire request.
+    pub apps: std::sync::RwLock<HashMap<String, Arc<AppEntry>>>,
     pub item_types: item_types::Registry,
     pub actions: actions::Registry,
 }
@@ -133,10 +173,23 @@ impl AppState {
     /// `key` is `"<workspace_slug>/<app_slug>"` — every route handler
     /// builds this from its two leading path segments before looking
     /// an app up (see `build_router`'s `/:workspace/:app/...` routes).
-    pub fn app_or_404<'a>(&'a self, key: &str) -> Result<&'a AppEntry, AppError> {
+    pub fn app_or_404(&self, key: &str) -> Result<Arc<AppEntry>, AppError> {
         self.apps
+            .read()
+            .unwrap()
             .get(key)
+            .cloned()
             .ok_or_else(|| (StatusCode::NOT_FOUND, format!("no such app '{key}'")))
+    }
+
+    /// Adds (or replaces) one app in the live registry — the hot-
+    /// registration half of `admin_create_app`. A plain `insert` either
+    /// way: there's no existing entry to preserve anything from when
+    /// this is a brand-new app, and overwriting is the right move in
+    /// the rare case a slug was already served (stale) and is being
+    /// re-registered.
+    pub fn register_app(&self, key: String, entry: AppEntry) {
+        self.apps.write().unwrap().insert(key, Arc::new(entry));
     }
 }
 
@@ -175,9 +228,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/:workspace/:app/users/:id/delete", post(auth::users_delete))
         .route("/:workspace/:app/admin/reload", get(admin_reload_page).post(admin_reload))
         .route("/:workspace/:app/admin/pages/:page/reorder", post(admin_reorder_page))
+        .route("/:workspace/:app/admin/pages/add", post(admin_add_page))
+        .route("/:workspace/:app/admin/pages/:page/delete", post(admin_delete_page))
         .route("/:workspace/:app/admin/pages/:page/components/add", post(admin_add_component))
         .route("/:workspace/:app/admin/pages/:page/components/:idx/edit", post(admin_edit_component))
         .route("/:workspace/:app/admin/pages/:page/components/:idx/delete", post(admin_delete_component))
+        .route("/pgapp/builder/admin/apps/create-pending", post(admin_create_pending_app))
         .route("/:workspace/:app/:page", get(show))
         .route("/:workspace/:app/:page/region/:query", get(region_fragment))
         .route("/:workspace/:app/:page/c/:idx/create", post(create))
@@ -597,15 +653,15 @@ fn build_value_exprs(
 /// `GET /` — a single-app server redirects straight into that one
 /// app; a multi-app server shows a plain list of what's registered.
 async fn landing(State(state): State<Arc<AppState>>) -> Response {
-    if state.apps.len() == 1 {
-        let key = state.apps.keys().next().expect("checked len() == 1 above");
+    let mut keys: Vec<String> = state.apps.read().unwrap().keys().cloned().collect();
+    if keys.len() == 1 {
+        let key = &keys[0];
         // `key` is "<workspace>/<app>" — encode each segment on its
         // own, never the whole key as one unit (that would turn its
         // internal "/" into "%2F" and break the redirect).
         let (workspace, app) = key.split_once('/').unwrap_or((key.as_str(), ""));
         return Redirect::to(&format!("/{}/{}", url_encode(workspace), url_encode(app))).into_response();
     }
-    let mut keys: Vec<String> = state.apps.keys().cloned().collect();
     keys.sort();
     Html(render::workspace_landing(&keys)).into_response()
 }
@@ -1577,12 +1633,12 @@ async fn reorder_page_impl(
 /// itself (same belt-and-suspenders reasoning as `admin_reorder_page`),
 /// looks up the target app, and checks reload access. Returns the
 /// entry so the caller can read its markup path / call `.reload()`.
-fn admin_edit_guard<'a>(
-    state: &'a AppState,
+fn admin_edit_guard(
+    state: &AppState,
     auth_ctx: &AuthCtx,
     workspace: &str,
     app: &str,
-) -> Result<&'a AppEntry, AppError> {
+) -> Result<Arc<AppEntry>, AppError> {
     if workspace == instance::APP_BUILDER_WORKSPACE_SLUG && app == instance::APP_BUILDER_APP_SLUG {
         return Err((StatusCode::FORBIDDEN, "the App Builder can't edit itself".to_string()));
     }
@@ -1743,6 +1799,141 @@ async fn admin_delete_component(
             Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
             Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("deleted, but reload failed: {e:#}")})).into_response()),
         },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/pages/add — the App Builder's "Add
+/// Page": a new, empty page, appended to the target app's file (see
+/// `page_reorder::add_page`), then hot-reloaded in place. Add
+/// components to it afterward the normal way.
+async fn admin_add_page(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let name = values.get("name").map(|s| s.trim()).unwrap_or("");
+
+    let result: anyhow::Result<()> = async {
+        if name.is_empty() {
+            anyhow::bail!("a page needs a name");
+        }
+        if std::path::Path::new(&entry.markup_path).is_dir() {
+            anyhow::bail!("this app's markup is a directory of files — the App Builder only supports single-file apps right now");
+        }
+        let markup_text = tokio::fs::read_to_string(&entry.markup_path)
+            .await
+            .with_context(|| format!("failed to read '{}'", entry.markup_path))?;
+        let updated = page_reorder::add_page(&markup_text, name)?;
+        tokio::fs::write(&entry.markup_path, updated)
+            .await
+            .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
+            Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+            Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("added, but reload failed: {e:#}")})).into_response()),
+        },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/pages/:page/delete — removes an entire
+/// page (and every component on it) from the target app's file.
+async fn admin_delete_page(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, page)): Path<(String, String, String)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+
+    let result: anyhow::Result<()> = async {
+        if std::path::Path::new(&entry.markup_path).is_dir() {
+            anyhow::bail!("this app's markup is a directory of files — the App Builder only supports single-file apps right now");
+        }
+        let markup_text = tokio::fs::read_to_string(&entry.markup_path)
+            .await
+            .with_context(|| format!("failed to read '{}'", entry.markup_path))?;
+        let updated = page_reorder::delete_page(&markup_text, &page)?;
+        tokio::fs::write(&entry.markup_path, updated)
+            .await
+            .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
+            Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+            Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("deleted, but reload failed: {e:#}")})).into_response()),
+        },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /pgapp/builder/admin/apps/create-pending — the App Builder's
+/// "New App" processing step. Fixed path, not `/:workspace/:app/...`:
+/// unlike every other admin route here, this never acts on some other
+/// app — it's intrinsically singular to the one App Builder an
+/// instance has (see `instance::APP_BUILDER_WORKSPACE_SLUG`'s doc), so
+/// a generic `:workspace/:app` shape would just invite a URL that
+/// claims to act on a *different* app but doesn't. Triggered by
+/// `runtime.js`'s `bindNewAppProcessing` on every load of the NewApp
+/// page — a harmless no-op when nothing is pending. Unlike every
+/// other admin route above, a real success here needs `AppState`
+/// access to hot-register the brand-new app (see
+/// `actions::create_app`'s doc for why that logic isn't a
+/// `ServerAction`), so this is the one route that also calls
+/// `AppState::register_app`.
+async fn admin_create_pending_app(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
+    match actions::create_app::process_oldest_pending(&state.pool).await {
+        Ok(None) => Ok(axum::Json(json!({"ok": true, "processed": false})).into_response()),
+        Ok(Some((id, Ok(created)))) => {
+            let register_result = AppEntry::load(
+                &state.pool,
+                &created.markup_path,
+                &created.data_schema,
+                created.control_app_id,
+                created.workspace_id,
+                &state.item_types,
+                &state.actions,
+            )
+            .await;
+            let (status, message) = match register_result {
+                Ok(entry) => {
+                    state.register_app(created.key.clone(), entry);
+                    ("done", format!("Created and now live at /{}", created.key))
+                }
+                // The app IS registered in pgapp_control at this point
+                // (create_one's job, already done) — just not yet
+                // loaded into this process. The next `pgapp run` picks
+                // it up the normal way; this is the one path where that
+                // fallback still applies.
+                Err(e) => ("done", format!("Created and registered, but couldn't load it live ({e:#}) — restart `pgapp run` to serve it at /{}", created.key)),
+            };
+            sqlx::query(&format!("update {} set status = $1, result = $2 where id = $3", actions::create_app::REQUESTS_TABLE))
+                .bind(status)
+                .bind(&message)
+                .bind(id)
+                .execute(&state.pool)
+                .await
+                .ok();
+            Ok(axum::Json(json!({"ok": true, "processed": true})).into_response())
+        }
+        Ok(Some((id, Err(e)))) => {
+            sqlx::query(&format!("update {} set status = 'error', result = $1 where id = $2", actions::create_app::REQUESTS_TABLE))
+                .bind(format!("{e:#}"))
+                .bind(id)
+                .execute(&state.pool)
+                .await
+                .ok();
+            Ok(axum::Json(json!({"ok": true, "processed": true})).into_response())
+        }
         Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
     }
 }

@@ -63,6 +63,74 @@ fn join_lines(lines: &[&str], source_ended_in_newline: bool) -> String {
     out
 }
 
+/// Every top-level page's 0-based `[start, end)` line range (comment-
+/// adjusted, same reasoning as `component_bounds`), plus the 0-based
+/// line the *app's* closing `}` is on — used by `add_page`/`delete_page`.
+fn page_bounds(source: &str) -> Result<(Vec<(String, usize, usize)>, usize)> {
+    let (starts, closing_line) = markup::app_page_start_lines(source).context("failed to parse app")?;
+    let n = starts.len();
+    let lines: Vec<&str> = source.lines().collect();
+
+    let adjusted_start = |token_line: u32| -> usize {
+        let mut idx = (token_line - 1) as usize;
+        while idx > 0 {
+            let prev = lines[idx - 1].trim_start();
+            if prev.starts_with('#') {
+                idx -= 1;
+            } else {
+                break;
+            }
+        }
+        idx
+    };
+
+    let adjusted: Vec<usize> = starts.iter().map(|(_, l)| adjusted_start(*l)).collect();
+    let end_of_app_body = (closing_line - 1) as usize;
+
+    let bounds: Vec<(String, usize, usize)> = (0..n)
+        .map(|i| {
+            let start = adjusted[i];
+            let end = if i + 1 < n { adjusted[i + 1] } else { end_of_app_body };
+            (starts[i].0.clone(), start, end)
+        })
+        .collect();
+    Ok((bounds, end_of_app_body))
+}
+
+/// Appends a brand-new, empty `page "<name>" { }` block just before the
+/// app's closing `}` — the App Builder's "Add Page". The new page has
+/// no components yet; add them afterward the same way any other page's
+/// components are added.
+pub fn add_page(source: &str, name: &str) -> Result<String> {
+    let (bounds, end_of_app_body) = page_bounds(source)?;
+    if bounds.iter().any(|(n, _, _)| n == name) {
+        anyhow::bail!("a page named '{name}' already exists in this app");
+    }
+    let lines: Vec<&str> = source.lines().collect();
+    let new_page = format!("\n  page \"{}\" {{\n  }}", escape_string(name));
+
+    let mut new_lines: Vec<&str> = Vec::with_capacity(lines.len() + 3);
+    new_lines.extend_from_slice(&lines[..end_of_app_body]);
+    new_lines.extend(new_page.lines());
+    new_lines.extend_from_slice(&lines[end_of_app_body..]);
+    Ok(join_lines(&new_lines, source.ends_with('\n')))
+}
+
+/// Removes an entire page block (and every component on it) by name.
+pub fn delete_page(source: &str, page_name: &str) -> Result<String> {
+    let (bounds, _) = page_bounds(source)?;
+    let (_, start, end) = bounds
+        .into_iter()
+        .find(|(n, _, _)| n == page_name)
+        .ok_or_else(|| anyhow::anyhow!("no page named '{page_name}' in this app"))?;
+    let lines: Vec<&str> = source.lines().collect();
+
+    let mut new_lines: Vec<&str> = Vec::with_capacity(lines.len());
+    new_lines.extend_from_slice(&lines[..start]);
+    new_lines.extend_from_slice(&lines[end..]);
+    Ok(join_lines(&new_lines, source.ends_with('\n')))
+}
+
 /// Reorders `page_name`'s components in `source` so that the component
 /// currently at index `new_order[i]` becomes the `i`th one — e.g. an
 /// original order of `[A, B, C]` reordered by `new_order = [2, 0, 1]`
@@ -436,5 +504,64 @@ mod tests {
 }
 "#;
         assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn adds_a_new_empty_page_before_the_apps_closing_brace() {
+        let out = add_page(SRC, "NewPage").unwrap();
+        let expected = r#"app "Demo" {
+  page "Target" {
+    text "first"
+    # a comment right above second
+    text "second"
+    text "third"
+  }
+
+  page "NewPage" {
+  }
+}
+"#;
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn rejects_adding_a_page_whose_name_already_exists() {
+        assert!(add_page(SRC, "Target").is_err());
+    }
+
+    #[test]
+    fn deletes_a_whole_page_and_its_components() {
+        let src = r#"app "Demo" {
+  page "Other" {
+    text "leave me alone"
+  }
+
+  page "Target" {
+    text "A"
+    text "B"
+  }
+
+  page "Later" {
+    text "also untouched"
+  }
+}
+"#;
+        let out = delete_page(src, "Target").unwrap();
+        let expected = r#"app "Demo" {
+  page "Other" {
+    text "leave me alone"
+  }
+
+  page "Later" {
+    text "also untouched"
+  }
+}
+"#;
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn rejects_deleting_an_unknown_page() {
+        assert!(delete_page(SRC, "Nope").is_err());
     }
 }

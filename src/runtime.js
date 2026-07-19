@@ -306,6 +306,156 @@ window.pgapp = (function () {
     slot.appendChild(a);
   }
 
+  // The App Builder's breadcrumb: a `text ... attrs (id:
+  // "pgapp-context-slot")` placeholder (on both the Pages and EditPage
+  // pages) gets filled with which app/page is actually being edited —
+  // otherwise that's only visible in the URL's own query string, not
+  // anywhere in the page itself. `target_page` is absent on the Pages
+  // page (you haven't picked one yet), present on EditPage.
+  function bindContextHeader() {
+    var slot = document.getElementById("pgapp-context-slot");
+    if (!slot) return;
+    var target = pgappEditTarget();
+    if (!target.workspace || !target.app) return;
+    var text = "Editing " + target.workspace + "/" + target.app;
+    if (target.page) text += " — " + target.page;
+    slot.textContent = text;
+    slot.classList.add("pgapp-context-header");
+  }
+
+  // The App Builder's "Add Page" panel on the Pages page: a `text ...
+  // attrs (id: "pgapp-add-page-slot")` placeholder gets a name input +
+  // button, POSTing to the target app's own `/admin/pages/add`.
+  function bindAddPageForm() {
+    var slot = document.getElementById("pgapp-add-page-slot");
+    if (!slot) return;
+    var target = pgappEditTarget();
+    if (!pgappEditTargetValid2(target)) return;
+
+    slot.textContent = "";
+    slot.classList.add("pgapp-panel-card");
+    var title = document.createElement("div");
+    title.className = "pgapp-panel-card-title";
+    title.textContent = "Add Page";
+    slot.appendChild(title);
+
+    var form = document.createElement("form");
+    form.className = "pgapp-add-component-form";
+    var nameInput = document.createElement("input");
+    nameInput.className = "pgapp-input";
+    nameInput.placeholder = "Page name";
+    var addBtn = document.createElement("button");
+    addBtn.type = "submit";
+    addBtn.className = "pgapp-btn pgapp-btn-primary";
+    addBtn.textContent = "Add";
+    form.appendChild(nameInput);
+    form.appendChild(addBtn);
+    slot.appendChild(form);
+
+    form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      fetch(
+        "/" + encodeURIComponent(target.workspace) + "/" + encodeURIComponent(target.app) + "/admin/pages/add",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "name=" + encodeURIComponent(nameInput.value),
+        }
+      )
+        .then(function (r) {
+          return r.json();
+        })
+        .then(function (data) {
+          if (data.ok) location.reload();
+          else pgappAlert("Couldn't add page: " + data.error);
+        })
+        .catch(function (e) {
+          pgappAlert("pgapp: " + e);
+        });
+    });
+  }
+
+  // The Pages page's target only ever carries workspace/app (no page
+  // yet — you're here to pick one), unlike EditPage's, which also
+  // needs target_page. A small variant of pgappEditTargetValid for
+  // call sites that don't need the page part.
+  function pgappEditTargetValid2(target) {
+    return !!(target.workspace && target.app);
+  }
+
+  // A "Delete" button per page card on the Pages page (`.pgapp-cards`
+  // rows there) — the page's own name is the card's visible link text,
+  // so no hidden id column is needed the way the component list needs
+  // one for its ordinal-based `idx`.
+  function bindPageCardActions() {
+    var rows = document.querySelectorAll(".pgapp-page-cards tbody tr");
+    if (!rows.length) return;
+    var target = pgappEditTarget();
+    if (!pgappEditTargetValid2(target)) return;
+    for (var i = 0; i < rows.length; i++) {
+      (function (row) {
+        var link = row.querySelector("a.pgapp-link");
+        var pageName = link ? link.textContent.trim() : row.textContent.trim();
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
+        btn.title = "Delete page";
+        btn.setAttribute("aria-label", "Delete page");
+        btn.textContent = "✕";
+        btn.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          pgappConfirm('Delete page "' + pageName + '" and all its components? This can\'t be undone.').then(function (ok) {
+            if (!ok) return;
+            fetch(
+              "/" +
+                encodeURIComponent(target.workspace) +
+                "/" +
+                encodeURIComponent(target.app) +
+                "/admin/pages/" +
+                encodeURIComponent(pageName) +
+                "/delete",
+              { method: "POST" }
+            )
+              .then(function (r) {
+                return r.json();
+              })
+              .then(function (data) {
+                if (data.ok) location.reload();
+                else pgappAlert("Couldn't delete page: " + data.error);
+              })
+              .catch(function (e) {
+                pgappAlert("pgapp: " + e);
+              });
+          });
+        });
+        row.appendChild(btn);
+      })(rows[i]);
+    }
+  }
+
+  // The App Builder's "New App" processing: on every load of the
+  // NewApp page (identified by the `pgapp-new-app-requests` id on its
+  // history report — see examples/app_builder.pgapp), asks the server
+  // to process the oldest pending request, if any (a harmless no-op
+  // otherwise — see `admin_create_pending_app` in server.rs). Reloads
+  // on success so the row's updated status/result show immediately;
+  // this is what gives Form's own create-and-redirect (which already
+  // lands back on this same page) its "submit and see it done" feel,
+  // in place of a `before_load` action (which can't reach `AppState`
+  // to hot-register the new app — see actions/create_app.rs's doc).
+  function bindNewAppProcessing() {
+    if (!document.getElementById("pgapp-new-app-requests")) return;
+    fetch("/pgapp/builder/admin/apps/create-pending", { method: "POST" })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        if (data.ok && data.processed) location.reload();
+      })
+      .catch(function () {});
+  }
+
   // The App Builder's "Add Component" panel: another `text ... attrs
   // (id: "pgapp-add-component-slot")` placeholder gets real form
   // controls appended into it (kind/label/source/columns), POSTing to
@@ -726,6 +876,10 @@ window.pgapp = (function () {
     document.addEventListener("DOMContentLoaded", bindPreviewLink);
     document.addEventListener("DOMContentLoaded", bindAddComponentForm);
     document.addEventListener("DOMContentLoaded", bindComponentRowActions);
+    document.addEventListener("DOMContentLoaded", bindContextHeader);
+    document.addEventListener("DOMContentLoaded", bindAddPageForm);
+    document.addEventListener("DOMContentLoaded", bindPageCardActions);
+    document.addEventListener("DOMContentLoaded", bindNewAppProcessing);
   } else {
     bindDynamicActions();
     bindNavToggles();
@@ -735,6 +889,10 @@ window.pgapp = (function () {
     bindPreviewLink();
     bindAddComponentForm();
     bindComponentRowActions();
+    bindContextHeader();
+    bindAddPageForm();
+    bindPageCardActions();
+    bindNewAppProcessing();
   }
 
   return {

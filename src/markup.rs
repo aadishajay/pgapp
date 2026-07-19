@@ -1097,6 +1097,57 @@ pub fn page_component_start_lines(source: &str, page_name: &str) -> Result<(Vec<
     bail!("no page named '{page_name}' in this markup")
 }
 
+/// The 1-based start line of every top-level `page` block (name, line,
+/// in file order), plus the line the *app's own* closing `}` is on —
+/// everything `src/page_reorder.rs` needs to add or remove a whole
+/// page, the same reasoning as `page_component_start_lines` one level
+/// up: a real walk of `parse_app`'s own dispatch, so it can never
+/// disagree with the parser about where a page block starts or ends.
+/// Single-file apps only, same restriction as `page_component_start_lines`.
+pub fn app_page_start_lines(source: &str) -> Result<(Vec<(String, u32)>, u32)> {
+    let mut parser = Parser::new(source)?;
+    parser.expect_keyword("app")?;
+    parser.expect_string()?;
+    parser.expect_symbol('{')?;
+    let mut pages = Vec::new();
+    while !parser.at_symbol('}') {
+        if parser.at_keyword("entity") {
+            parser.parse_entity()?;
+        } else if parser.at_keyword("page") {
+            let line = parser.cur_line();
+            let save = parser.pos;
+            parser.advance()?; // "page"
+            let name = parser.expect_string()?;
+            parser.pos = save;
+            pages.push((name, line));
+            parser.parse_page()?;
+        } else if parser.at_keyword("nav") {
+            parser.parse_nav()?;
+        } else if parser.at_keyword("header") {
+            parser.parse_component_block("header")?;
+        } else if parser.at_keyword("footer") {
+            parser.parse_component_block("footer")?;
+        } else if parser.at_keyword("query") {
+            parser.parse_query()?;
+        } else if parser.at_keyword("theme") || parser.at_keyword("icons") || parser.at_keyword("chart_lib") {
+            parser.parse_app_prop()?;
+        } else if parser.at_keyword("auth") {
+            parser.advance()?;
+            parser.expect_symbol('{')?;
+            parser.expect_symbol('}')?;
+        } else {
+            bail!(
+                "expected 'entity', 'page', 'nav', 'header', 'footer', 'query', 'auth', \
+                 'theme', 'icons', or 'chart_lib', found {:?} (line {})",
+                parser.peek(),
+                parser.cur_line()
+            );
+        }
+    }
+    let closing_line = parser.cur_line();
+    Ok((pages, closing_line))
+}
+
 /// The top-level blocks a non-`app` file in a directory-based app may
 /// contain — see [`parse_fragment`] and `src/source.rs`.
 #[derive(Debug, Default)]
@@ -1307,7 +1358,7 @@ app "Demo" {
         assert_eq!(app.pages.len(), 4);
 
         let edit_page = app.pages.iter().find(|p| p.name == "EditPage").unwrap();
-        assert_eq!(edit_page.components.len(), 4); // text (preview slot), text, region, text (add-component slot)
+        assert_eq!(edit_page.components.len(), 5); // text (context), text (preview), text, region, text (add-component)
         let region = edit_page
             .components
             .iter()

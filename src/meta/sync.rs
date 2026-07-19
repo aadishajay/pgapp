@@ -179,6 +179,20 @@ pub async fn sync_app(
         page_ids.insert(page.name.clone(), page_id);
     }
 
+    // A page removed from the markup (the App Builder's "Delete Page",
+    // or just hand-edited out) needs its `pgapp_meta.pages` row gone
+    // too, not just absent from `page_ids` above — otherwise it lingers
+    // forever, still visible to anything reading `pgapp_meta` directly
+    // (the App Builder's own "Pages" listing is exactly that). Cascades
+    // to `pgapp_meta.components`/`.saved_views`/etc. via their own
+    // `on delete cascade` (see db/schema.sql).
+    let current_page_names: Vec<&str> = app.pages.iter().map(|p| p.name.as_str()).collect();
+    sqlx::query("delete from pgapp_meta.pages where app_id = $1 and not (name = any($2))")
+        .bind(app_id)
+        .bind(&current_page_names)
+        .execute(pool)
+        .await?;
+
     // Phase 3: page-scoped queries and components — components may
     // reference another page (link targets), an entity, or a query by
     // name, all of which now have ids/known names to validate against.

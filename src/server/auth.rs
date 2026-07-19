@@ -210,7 +210,7 @@ pub async fn require_login(State(state): State<Arc<AppState>>, mut req: Request,
     };
     let app_key = format!("{workspace}/{app}");
 
-    let Some(entry) = state.apps.get(app_key.as_str()) else {
+    let Some(entry) = state.apps.read().unwrap().get(app_key.as_str()).cloned() else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let data = entry.data();

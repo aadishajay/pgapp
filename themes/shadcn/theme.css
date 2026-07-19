@@ -811,6 +811,26 @@ a.pgapp-link:has(.pgapp-icon):hover .pgapp-icon {
   align-items: end;
 }
 .pgapp-add-component-form .pgapp-btn { grid-column: 1 / -1; justify-self: start; }
+
+/* Breadcrumb (bindContextHeader) — which app/page is actually being
+   edited, since that's otherwise only visible in the URL's own query
+   string. */
+.pgapp-context-header {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: hsl(var(--muted-foreground));
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 0.5rem;
+}
+
+/* Pages picker cards get a small top-right delete button
+   (bindPageCardActions) instead of a 4th column like the component
+   list's table shape allows — a picker card is a single link, not a
+   multi-column row. */
+.pgapp-page-cards .pgapp-table tr { position: relative; padding-right: 2.5rem; }
+.pgapp-page-cards .pgapp-table tr .pgapp-icon-btn { position: absolute; top: 0.6rem; right: 0.6rem; }
+
 @media (max-width: 640px) {
   .pgapp-cards .pgapp-table tbody { grid-template-columns: 1fr; }
 }
