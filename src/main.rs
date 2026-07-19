@@ -30,8 +30,10 @@ fn print_usage() {
     println!("usage:");
     println!("  pgapp new|create [<AppName>] [path] [--dir] [--theme <name>]   scaffold a .pgapp file");
     println!("  pgapp instance init | destroy <dbname>                        one Postgres database per instance");
-    println!("  pgapp workspace create|destroy|list <dbname>                  a schema an app's tables live in");
-    println!("  pgapp app create|destroy|list <dbname> [--workspace <slug>]   scaffold/register an app in a workspace");
+    println!("  pgapp workspace create <dbname> [--schema <name>] [--slug <slug>]   a schema an app's tables live in");
+    println!("  pgapp workspace destroy|list <dbname>");
+    println!("  pgapp app create <dbname> [--workspace <slug>] [--slug <app-slug>]   scaffold/register an app in a workspace");
+    println!("  pgapp app destroy|list <dbname>");
     println!("  pgapp secret set|list|rm <dbname> <name> (--workspace <slug> | --app <slug>)");
     println!("  pgapp run <file>.pgapp --instance <dbname> [--workspace <slug>]   serve every registered app");
     println!();
@@ -418,8 +420,8 @@ async fn cmd_workspace(args: &[String]) -> anyhow::Result<()> {
             let dbname = args
                 .get(1)
                 .cloned()
-                .ok_or_else(|| anyhow::anyhow!("usage: pgapp workspace create <dbname>"))?;
-            workspace_create(&dbname).await
+                .ok_or_else(|| anyhow::anyhow!("usage: pgapp workspace create <dbname> [--schema <name>] [--slug <slug>]"))?;
+            workspace_create(&dbname, flag(args, "--schema"), flag(args, "--slug"), flag(args, "--password")).await
         }
         Some("destroy") => {
             let dbname = args
@@ -448,12 +450,32 @@ async fn cmd_workspace(args: &[String]) -> anyhow::Result<()> {
     }
 }
 
-async fn workspace_create(dbname: &str) -> anyhow::Result<()> {
+/// `pgapp workspace create <dbname> [--schema <name>] [--slug <slug>]`
+/// — `schema` is the actual Postgres schema (existing or new; if
+/// omitted, prompted for); `slug` is just the short name later
+/// commands use to refer to this workspace (`--workspace <slug>`) —
+/// optional, defaults to the schema name. Whether the schema is
+/// treated as "new" or "existing" is auto-detected (`pg_namespace`),
+/// not asked: if it doesn't exist yet, pgapp creates it (and an owning
+/// role for it); if it does, pgapp only asks to be granted access.
+async fn workspace_create(
+    dbname: &str,
+    schema_arg: Option<String>,
+    slug_arg: Option<String>,
+    password_arg: Option<String>,
+) -> anyhow::Result<()> {
     let inst = instance::load(dbname)?;
     instance::verify_operator(&inst)?;
     let pool = instance::connect_as_admin(&inst).await?;
 
-    let slug = scaffold::prompt_required("Workspace name")?;
+    let schema_name = match schema_arg {
+        Some(s) => s,
+        None => scaffold::prompt_required("Schema name (an existing schema to use, or a new one to create)")?,
+    };
+    if !instance::valid_identifier(&schema_name) {
+        anyhow::bail!("'{schema_name}' must start with a letter/underscore and contain only letters, digits, underscores");
+    }
+    let slug = slug_arg.unwrap_or_else(|| schema_name.clone());
     if !instance::valid_identifier(&slug) {
         anyhow::bail!("'{slug}' must start with a letter/underscore and contain only letters, digits, underscores");
     }
@@ -461,20 +483,16 @@ async fn workspace_create(dbname: &str) -> anyhow::Result<()> {
         anyhow::bail!("workspace '{slug}' already exists");
     }
 
-    let kind = scaffold::prompt("Existing schema, or create a new one? [new/existing]", "new")?;
-    if kind.eq_ignore_ascii_case("existing") {
-        let schema_name = scaffold::prompt_required("Existing schema name")?;
-        // pg_namespace, not information_schema.schemata: the latter only
-        // lists schemas the connecting role already has some privilege
-        // on, which pgapp_admin by definition doesn't yet for a schema
-        // it's about to ask permission to use.
-        let exists: bool = sqlx::query_scalar("select exists(select 1 from pg_catalog.pg_namespace where nspname = $1)")
-            .bind(&schema_name)
-            .fetch_one(&pool)
-            .await?;
-        if !exists {
-            anyhow::bail!("schema '{schema_name}' does not exist");
-        }
+    // pg_namespace, not information_schema.schemata: the latter only
+    // lists schemas the connecting role already has some privilege
+    // on, which pgapp_admin by definition doesn't yet for a schema
+    // it's about to ask permission to use.
+    let exists: bool = sqlx::query_scalar("select exists(select 1 from pg_catalog.pg_namespace where nspname = $1)")
+        .bind(&schema_name)
+        .fetch_one(&pool)
+        .await?;
+
+    if exists {
         let grant = scaffold::prompt_yes_no(
             &format!("Grant {} USAGE+CREATE access to schema '{schema_name}'?", instance::ADMIN_ROLE),
             true,
@@ -499,23 +517,26 @@ async fn workspace_create(dbname: &str) -> anyhow::Result<()> {
         control::register_workspace(&pool, &slug, &schema_name, None).await?;
         println!("Workspace '{slug}' registered against existing schema '{schema_name}'.");
     } else {
-        let password = scaffold::prompt_required(&format!("Password for the new schema-owning role '{slug}'"))?;
-        ensure_role(&pool, &slug, &password).await?;
+        let password = match password_arg {
+            Some(p) => p,
+            None => scaffold::prompt_required(&format!("Password for the new schema-owning role '{schema_name}'"))?,
+        };
+        ensure_role(&pool, &schema_name, &password).await?;
         // CREATE SCHEMA ... AUTHORIZATION <role> requires being able to
         // SET ROLE to it (Postgres won't let you authorize a schema to
         // a role you aren't a member of) — pgapp_admin needs membership
         // in the workspace role it just created before it can do this.
-        sqlx::raw_sql(&format!("grant {slug} to {}", instance::ADMIN_ROLE))
+        sqlx::raw_sql(&format!("grant {schema_name} to {}", instance::ADMIN_ROLE))
             .execute(&pool)
             .await
-            .with_context(|| format!("failed to grant membership in '{slug}' to {}", instance::ADMIN_ROLE))?;
-        sqlx::raw_sql(&format!("create schema if not exists {slug} authorization {slug}"))
+            .with_context(|| format!("failed to grant membership in '{schema_name}' to {}", instance::ADMIN_ROLE))?;
+        sqlx::raw_sql(&format!("create schema if not exists {schema_name} authorization {schema_name}"))
             .execute(&pool)
             .await
-            .with_context(|| format!("failed to create schema '{slug}'"))?;
-        grant_admin_on_schema(&pool, &slug).await?;
-        control::register_workspace(&pool, &slug, &slug, Some(&slug)).await?;
-        println!("Workspace '{slug}' created with its own schema and role.");
+            .with_context(|| format!("failed to create schema '{schema_name}'"))?;
+        grant_admin_on_schema(&pool, &schema_name).await?;
+        control::register_workspace(&pool, &slug, &schema_name, Some(&schema_name)).await?;
+        println!("Workspace '{slug}' created with new schema '{schema_name}' and its own owning role.");
     }
     Ok(())
 }
@@ -624,8 +645,8 @@ async fn cmd_app(args: &[String]) -> anyhow::Result<()> {
             let dbname = args
                 .get(1)
                 .cloned()
-                .ok_or_else(|| anyhow::anyhow!("usage: pgapp app create <dbname> [--workspace <slug>]"))?;
-            app_create(&dbname, flag(args, "--workspace")).await
+                .ok_or_else(|| anyhow::anyhow!("usage: pgapp app create <dbname> [--workspace <slug>] [--slug <app-slug>]"))?;
+            app_create(&dbname, flag(args, "--workspace"), flag(args, "--slug")).await
         }
         Some("destroy") => {
             let dbname = args
@@ -786,7 +807,13 @@ async fn secret_rm(dbname: &str, name: &str, workspace_arg: Option<String>, app_
     Ok(())
 }
 
-async fn app_create(dbname: &str, workspace_arg: Option<String>) -> anyhow::Result<()> {
+/// `pgapp app create <dbname> [--workspace <slug>] [--slug <app-slug>]`
+/// — `workspace` says which workspace's schema the app's tables live
+/// in (prompted with a picker if omitted); `slug` is the app's own URL
+/// identifier (`/<slug>/...`, globally unique across the instance) —
+/// optional, defaults to a slugified version of the app name you enter
+/// below.
+async fn app_create(dbname: &str, workspace_arg: Option<String>, slug_arg: Option<String>) -> anyhow::Result<()> {
     let inst = instance::load(dbname)?;
     instance::verify_operator(&inst)?;
     let pool = instance::connect_as_admin(&inst).await?;
@@ -802,7 +829,15 @@ async fn app_create(dbname: &str, workspace_arg: Option<String>) -> anyhow::Resu
     let name = scaffold::prompt_required("App name")?;
     let theme = scaffold::prompt("Theme (plain/shadcn/vivid/google_m3)", "shadcn")?;
     let as_dir = scaffold::prompt_yes_no("Scaffold as a directory of files instead of one?", false)?;
-    let slug = scaffold::slugify(&name);
+    let slug = match slug_arg {
+        Some(s) => {
+            if !instance::valid_identifier(&s) {
+                anyhow::bail!("'{s}' must start with a letter/underscore and contain only letters, digits, underscores");
+            }
+            s
+        }
+        None => scaffold::slugify(&name),
+    };
     let default_target = if as_dir { slug.clone() } else { format!("{slug}.pgapp") };
     let target = scaffold::prompt("Path to write it to", &default_target)?;
 

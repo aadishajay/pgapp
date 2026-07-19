@@ -24,8 +24,8 @@ registered `.pgapp` file) — there's no lighter-weight mode than this,
 but each step is one command:
 
 ```bash
-pgapp instance init                       # once per Postgres database
-pgapp workspace create <dbname>           # once per schema
+pgapp instance init                                   # once per Postgres database
+pgapp workspace create <dbname> --schema <name>       # once per schema (creates it if missing)
 pgapp app create <dbname> --workspace <slug>
 ```
 
@@ -963,34 +963,44 @@ schemas, other applications' tables) is read, altered, or dropped by
   at all, checked interactively (or via `PGAPP_CLI_ADMIN_PASSWORD` for
   scripts), and has nothing to do with Postgres auth.
 
-**Workspace** = a Postgres schema an app's data tables live in:
+**Workspace** = `(schema, slug)` — `schema` is the actual Postgres
+schema an app's data tables live in; `slug` is just the short name you
+use to refer to it in every later command (`--workspace <slug>`) and
+defaults to the schema name if you don't give one:
 
 ```bash
-pgapp workspace create <dbname>
+pgapp workspace create <dbname> [--schema <name>] [--slug <slug>]
 ```
 
-Asks for a name, then whether to use an existing schema or create one.
-A new schema gets its own owning login role (password prompted,
-`pgapp_admin` is granted membership + USAGE/CREATE); an existing schema
-just asks whether to grant `pgapp_admin` USAGE/CREATE into it (using a
-connection that can actually perform that grant — `pgapp_admin` has no
-privileges of its own on a schema it didn't create). An app registered
-into a workspace gets its entity tables there — transparently to its
-own markup: named queries keep referencing their tables by bare name
-(see [Named queries](#named-queries)), never the schema, so the same
-app runs unmodified regardless of which workspace it's registered into.
+Whether `schema` is treated as new or existing is **auto-detected**
+(`pg_namespace`), not asked: missing → pgapp creates it, with its own
+owning login role (password prompted, or `--password` for scripts —
+`pgapp_admin` is granted membership + USAGE/CREATE); already there →
+pgapp only asks to be granted USAGE/CREATE into it (via a connection
+that can actually perform that grant — `pgapp_admin` has no privileges
+of its own on a schema it didn't create). Passing neither `--schema`
+nor `--slug` falls back to prompting for the schema name only — same
+auto-detection either way. An app registered into a workspace gets its
+entity tables there — transparently to its own markup: named queries
+keep referencing their tables by bare name (see [Named
+queries](#named-queries)), never the schema, so the same app runs
+unmodified regardless of which workspace it's registered into.
 
-**App** = scaffolded and registered into a chosen workspace:
+**App** = `(workspace, app slug)` — `workspace` says which workspace's
+schema the app's tables live in; `app slug` is the app's own URL
+identifier (`/<slug>/...`, unique across the instance) and defaults to
+a slugified version of the app name you enter (`"My Project"` →
+`my_project`) if you don't give one:
 
 ```bash
-pgapp app create <dbname> [--workspace <slug>]
+pgapp app create <dbname> [--workspace <slug>] [--slug <app-slug>]
 ```
 
-Same prompts as `pgapp new`'s interactive flow, plus a workspace
-picker (lists every registered workspace and lets you choose) when
-`--workspace` isn't given. Then serve it — and every other enabled app
-across the whole instance, same "the registry decides what's served"
-rule as multi-app routing:
+Same prompts as `pgapp new`'s interactive flow (name, theme, file vs.
+directory), plus a workspace picker (lists every registered workspace
+and lets you choose) when `--workspace` isn't given. Then serve it —
+and every other enabled app across the whole instance, same "the
+registry decides what's served" rule as multi-app routing:
 
 ```bash
 pgapp run <file>.pgapp --instance <dbname> [--workspace <slug>]
