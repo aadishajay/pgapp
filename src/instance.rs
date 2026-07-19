@@ -41,13 +41,49 @@ pub const ADMIN_ROLE: &str = "pgapp_admin";
 /// workspace: comfortably above a handful of toy connections, without
 /// assuming "bigger is always faster" (a Postgres backend is a full
 /// process, not a lightweight thread, so a few dozen is already
-/// generous for one server). Override with `PGAPP_MAX_CONNECTIONS`.
+/// generous for one server). Override with `PGAPP_MAX_CONNECTIONS` —
+/// but raise Postgres's own capacity (`shared_buffers`, CPU) alongside
+/// it, since a bigger pool alone stops helping once Postgres itself,
+/// not the pool, is the bottleneck (confirmed by load-testing
+/// examples/nexus-erp at 1,000 concurrent requests: pool=80 barely
+/// beat pool=20, because both were waiting on Postgres, not the pool).
 pub fn max_connections() -> u32 {
     std::env::var("PGAPP_MAX_CONNECTIONS")
         .ok()
         .and_then(|s| s.parse().ok())
         .filter(|&n| n > 0)
         .unwrap_or(20)
+}
+
+/// Connection-pool configuration shared by every pool that serves live
+/// HTTP traffic — as opposed to the small, fixed-size pools used for
+/// one-off CLI/bootstrap connections elsewhere (scaffolding, database-
+/// exists checks, control-plane lookups), which never see concurrent
+/// request load and don't need any of this.
+///
+/// Cycling the fixed-size pool "smartly" across concurrent requests is
+/// mostly sqlx's job, not this function's: every query in server.rs is
+/// issued against a borrowed `&PgPool` (`fetch_all`, `execute`, ...),
+/// which acquires a connection just for that one query and returns it
+/// immediately after — never held across a whole request — and sqlx's
+/// internal wait queue for a busy pool is FIFO, so concurrent requests
+/// are served in arrival order rather than one starving another. What
+/// *is* this function's job is the two knobs sqlx doesn't default
+/// usefully on its own:
+/// - `min_connections`: keeps a quarter of the pool already connected
+///   and authenticated, so the first burst after a cold start doesn't
+///   pay a fresh TCP+auth handshake per connection (the likely cause
+///   of the one anomalously slow low-concurrency data point seen when
+///   load-testing straight after a restart).
+/// - `acquire_timeout`: a request that's waited 30s for a connection
+///   fails loudly instead of queuing silently forever — a visible
+///   error under sustained overload beats an invisible hang.
+pub fn pool_options() -> PgPoolOptions {
+    let max = max_connections();
+    PgPoolOptions::new()
+        .max_connections(max)
+        .min_connections((max / 4).max(1))
+        .acquire_timeout(std::time::Duration::from_secs(30))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,8 +213,7 @@ pub async fn connect_as_admin(instance: &InstanceFile) -> Result<PgPool> {
         .database(&instance.dbname)
         .username(&instance.admin_role)
         .password(&password);
-    PgPoolOptions::new()
-        .max_connections(max_connections())
+    pool_options()
         .connect_with(opts)
         .await
         .with_context(|| format!("failed to connect to '{}' as {}", instance.dbname, instance.admin_role))

@@ -38,8 +38,7 @@ async fn main() -> anyhow::Result<()> {
     let markup_path = cli_args.get(1).cloned().unwrap_or_else(|| "examples/todo.pgapp".to_string());
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
 
-    let pool = PgPoolOptions::new()
-        .max_connections(instance::max_connections())
+    let pool = instance::pool_options()
         .connect(&database_url)
         .await
         .with_context(|| format!("failed to connect to database '{database_url}'"))?;
