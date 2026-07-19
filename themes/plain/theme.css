@@ -3,6 +3,21 @@
  * as any other theme (see themes/shadcn/theme.css for a richer example).
  */
 
+:root {
+  /* Chart categorical palette (bar/pie/donut per-category fill, see
+     render.rs's `chart_slice_fill`) — the dataviz skill's validated
+     8-hue reference order (worst adjacent CVD ΔE 9.1, worst adjacent
+     normal-vision ΔE 19.6 in light mode; this theme has no dark mode). */
+  --chart-1: #2a78d6;
+  --chart-2: #008300;
+  --chart-3: #e87ba4;
+  --chart-4: #eda100;
+  --chart-5: #1baf7a;
+  --chart-6: #eb6834;
+  --chart-7: #4a3aa7;
+  --chart-8: #e34948;
+}
+
 body {
   font-family: system-ui, sans-serif;
   max-width: 1200px;

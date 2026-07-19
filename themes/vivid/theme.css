@@ -21,6 +21,24 @@
   --v-radius: 14px;
   --v-shadow: 0 10px 30px rgb(79 70 229 / 0.08), 0 2px 8px rgb(30 27 46 / 0.06);
   --v-grad: linear-gradient(120deg, var(--v-indigo), var(--v-violet) 55%, var(--v-fuchsia));
+
+  /* Chart categorical palette (bar/pie/donut per-category fill, see
+     render.rs's `chart_slice_fill`) — deliberately NOT the --v-indigo/
+     violet/fuchsia/teal/amber/rose accents above: those all sit in a
+     narrow purple-to-rose hue band tuned for gradient/button vibrancy,
+     and fail the dataviz skill's CVD-separation check outright (worst
+     adjacent pair ΔE 1.3 under protan simulation — no reordering fixes
+     a same-hue-family collision). This is the skill's validated 8-hue
+     reference order instead (worst adjacent CVD ΔE 9.1, worst adjacent
+     normal-vision ΔE 19.6). */
+  --chart-1: #2a78d6;
+  --chart-2: #008300;
+  --chart-3: #e87ba4;
+  --chart-4: #eda100;
+  --chart-5: #1baf7a;
+  --chart-6: #eb6834;
+  --chart-7: #4a3aa7;
+  --chart-8: #e34948;
 }
 
 * { box-sizing: border-box; }

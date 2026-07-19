@@ -201,6 +201,25 @@ fn chrome_items_html(app: &str, items: &[RuntimeComponent], regions: &RegionRows
     html
 }
 
+/// Fixed-order categorical palette for per-category marks (bar/pie/donut
+/// slices) — the validated 8-hue reference order from the dataviz
+/// skill's `references/palette.md` (worst adjacent CVD ΔE 9.1 light /
+/// 8.4 dark, worst adjacent normal-vision ΔE 19.6 / 19.3). Each theme
+/// may override a slot by defining the matching `--chart-N` custom
+/// property (see themes/*/theme.css); the hex here is only the
+/// `var(..., fallback)` fallback for a theme that doesn't, so a
+/// third-party theme with no chart palette still renders distinguishable
+/// categories instead of one flat fill.
+const CHART_PALETTE: [&str; 8] =
+    ["#2a78d6", "#008300", "#e87ba4", "#eda100", "#1baf7a", "#eb6834", "#4a3aa7", "#e34948"];
+
+/// The fill for the `i`th category in a multi-category chart (bar/pie/donut) —
+/// cycles through `CHART_PALETTE` past 8 categories rather than repeating a
+/// single accent color for every one of them.
+fn chart_slice_fill(i: usize) -> String {
+    format!("var(--chart-{}, {})", (i % CHART_PALETTE.len()) + 1, CHART_PALETTE[i % CHART_PALETTE.len()])
+}
+
 /// `bar`/`line`/`area`/`scatter` all plot `rows` against a shared x
 /// (category) axis and y (value) baseline — this draws that shared
 /// axis/grid and hands back the plot area's geometry for the per-type
@@ -212,6 +231,10 @@ fn cartesian_chart_svg(title: &str, chart_type: &str, x: &str, y: &str, rows: &[
         .map(|r| r.get(y).and_then(|v| v.as_deref()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0))
         .collect();
     let labels: Vec<String> = rows.iter().map(|r| r.get(x).and_then(|v| v.as_deref()).unwrap_or("").to_string()).collect();
+    // The raw (unparsed) value text for tooltips — keeps whatever
+    // formatting the query returned instead of `values`' re-serialized
+    // f64 (which drops trailing zeros, thousands separators, etc.).
+    let raw_values: Vec<String> = rows.iter().map(|r| r.get(y).and_then(|v| v.as_deref()).unwrap_or("").to_string()).collect();
     let max = values.iter().cloned().fold(1.0_f64, f64::max).max(1.0);
     let n = (values.len().max(1)) as f64;
     let bar_w = (width - pad * 2.0) / n;
@@ -247,20 +270,31 @@ fn cartesian_chart_svg(title: &str, chart_type: &str, x: &str, y: &str, rows: &[
                 let poly = points.iter().map(|(px, py)| format!("{px:.1},{py:.1}")).collect::<Vec<_>>().join(" ");
                 svg.push_str(&format!(r#"<polyline points="{poly}" fill="none" stroke="currentColor" stroke-width="2"/>"#));
             }
-            for (px, py) in &points {
-                svg.push_str(&format!(r#"<circle cx="{px:.1}" cy="{py:.1}" r="3" fill="currentColor"/>"#));
+            for (i, (px, py)) in points.iter().enumerate() {
+                svg.push_str(&format!(
+                    r#"<circle cx="{px:.1}" cy="{py:.1}" r="3" fill="currentColor"><title>{}: {}</title></circle>"#,
+                    escape(&labels[i]),
+                    escape(&raw_values[i])
+                ));
             }
         }
         _ => {
             // "bar" (also the fallback — markup.rs's CHART_TYPES check
-            // already rejects anything else at sync time).
+            // already rejects anything else at sync time). Each bar gets
+            // its own categorical color (see `chart_slice_fill`) since a
+            // bar chart's bars are as much distinct categories as a pie
+            // chart's slices are — a single flat fill leaves nothing but
+            // height to tell them apart.
             for (i, v) in values.iter().enumerate() {
                 let bar_h = (v / max) * (height - pad * 2.0);
                 let bx = pad + bar_w * (i as f64) + 2.0;
                 let by = baseline - bar_h;
                 svg.push_str(&format!(
-                    r#"<rect x="{bx:.1}" y="{by:.1}" width="{:.1}" height="{bar_h:.1}" fill="currentColor"/>"#,
-                    (bar_w - 4.0).max(1.0)
+                    r#"<rect x="{bx:.1}" y="{by:.1}" width="{:.1}" height="{bar_h:.1}" fill="{}"><title>{}: {}</title></rect>"#,
+                    (bar_w - 4.0).max(1.0),
+                    chart_slice_fill(i),
+                    escape(&labels[i]),
+                    escape(&raw_values[i])
                 ));
             }
         }
@@ -294,6 +328,7 @@ fn radial_chart_svg(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTr
         .map(|row| row.get(y).and_then(|v| v.as_deref()).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0).max(0.0))
         .collect();
     let labels: Vec<String> = rows.iter().map(|row| row.get(x).and_then(|v| v.as_deref()).unwrap_or("").to_string()).collect();
+    let raw_values: Vec<String> = rows.iter().map(|row| row.get(y).and_then(|v| v.as_deref()).unwrap_or("").to_string()).collect();
     let total = values.iter().sum::<f64>().max(1e-9);
 
     let mut svg = format!(
@@ -302,11 +337,14 @@ fn radial_chart_svg(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTr
     );
 
     let mut angle = -std::f64::consts::FRAC_PI_2;
-    for v in &values {
+    for (i, v) in values.iter().enumerate() {
         let frac = v / total;
         let end_angle = angle + frac * std::f64::consts::TAU;
+        let fill = chart_slice_fill(i);
+        let pct = frac * 100.0;
+        let title = format!("<title>{}: {} ({pct:.0}%)</title>", escape(&labels[i]), escape(&raw_values[i]));
         if frac >= 0.9999 {
-            svg.push_str(&format!(r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}" fill="currentColor" fill-opacity="0.85"/>"#));
+            svg.push_str(&format!(r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}" fill="{fill}" fill-opacity="0.85">{title}</circle>"#));
         } else if frac > 0.0 {
             let (x0, y0) = (cx + r * angle.cos(), cy + r * angle.sin());
             let (x1, y1) = (cx + r * end_angle.cos(), cy + r * end_angle.sin());
@@ -316,7 +354,7 @@ fn radial_chart_svg(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTr
             // plain white seam — a close enough approximation on every
             // built-in theme's light chart background.
             svg.push_str(&format!(
-                r#"<path d="M {cx:.1},{cy:.1} L {x0:.1},{y0:.1} A {r:.1},{r:.1} 0 {large_arc} 1 {x1:.1},{y1:.1} Z" fill="currentColor" fill-opacity="0.85" stroke="white" stroke-width="1.5"/>"#
+                r#"<path d="M {cx:.1},{cy:.1} L {x0:.1},{y0:.1} A {r:.1},{r:.1} 0 {large_arc} 1 {x1:.1},{y1:.1} Z" fill="{fill}" fill-opacity="0.85" stroke="white" stroke-width="1.5">{title}</path>"#
             ));
         }
         angle = end_angle;
@@ -337,11 +375,16 @@ fn radial_chart_svg(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTr
             break;
         }
         let pct = (v / total) * 100.0;
-        // fill="currentColor" on the <text>: see cartesian_chart_svg's
-        // axis labels for why this can't be left to inherit.
+        // The swatch uses the same per-slice color as the wedge itself
+        // (chart_slice_fill(i)) — it used to be a flat currentColor, which
+        // both matched the (also flat) wedge fill and told you nothing
+        // about which color was which. fill="currentColor" on the <text>
+        // itself: see cartesian_chart_svg's axis labels for why this
+        // can't be left to inherit.
         svg.push_str(&format!(
-            r#"<rect x="{legend_x:.1}" y="{:.1}" width="9" height="9" fill="currentColor" fill-opacity="0.85"/><text x="{:.1}" y="{:.1}" font-size="9" fill="currentColor">{} ({pct:.0}%)</text>"#,
+            r#"<rect x="{legend_x:.1}" y="{:.1}" width="9" height="9" fill="{}" fill-opacity="0.85"/><text x="{:.1}" y="{:.1}" font-size="9" fill="currentColor">{} ({pct:.0}%)</text>"#,
             ly - 8.0,
+            chart_slice_fill(i),
             legend_x + 13.0,
             ly,
             escape(label)

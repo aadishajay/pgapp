@@ -26,6 +26,22 @@
   --input: 240 5.9% 90%;
   --ring: 240 5.9% 10%;
   --radius: 0.5rem;
+
+  /* Chart categorical palette (bar/pie/donut per-category fill, see
+     render.rs's `chart_slice_fill`) — unlike the tokens above these are
+     full colors, not bare HSL triples, since render.rs consumes them
+     directly as `var(--chart-N, <fallback>)`, not wrapped in hsl(...).
+     Order/values are the dataviz skill's validated 8-hue reference
+     palette (worst adjacent CVD ΔE 9.1, worst adjacent normal-vision ΔE
+     19.6) — swap freely, but re-validate any replacement set. */
+  --chart-1: #2a78d6;
+  --chart-2: #008300;
+  --chart-3: #e87ba4;
+  --chart-4: #eda100;
+  --chart-5: #1baf7a;
+  --chart-6: #eb6834;
+  --chart-7: #4a3aa7;
+  --chart-8: #e34948;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -47,6 +63,16 @@
     --border: 240 3.7% 15.9%;
     --input: 240 3.7% 15.9%;
     --ring: 240 4.9% 83.9%;
+
+    /* Same eight hues, stepped for the dark surface (see palette.md). */
+    --chart-1: #3987e5;
+    --chart-2: #008300;
+    --chart-3: #d55181;
+    --chart-4: #c98500;
+    --chart-5: #199e70;
+    --chart-6: #d95926;
+    --chart-7: #9085e9;
+    --chart-8: #e66767;
   }
 }
 

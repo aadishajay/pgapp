@@ -590,6 +590,20 @@ loads `chart-libs/<name>/chart.js`, and the server instead emits a
 Selected with `chart_lib: <name>`. `chart-libs/canvas-bars/` ships as
 a working `<canvas>` example.
 
+**`inline`'s bar/pie/donut marks are colored per category**, cycling
+through eight `--chart-1`…`--chart-8` CSS custom properties (a theme
+sets these the same way it sets any other design token — see
+`themes/shadcn/theme.css`) so a bar chart's bars and a pie/donut's
+slices are actually distinguishable instead of one flat `currentColor`
+fill; `line`/`area`/`scatter` stay a single accent color, since those
+read as one series rather than discrete categories. A theme that
+doesn't define `--chart-N` still renders distinct colors — every
+`var(--chart-N, ...)` carries the same validated 8-hue fallback (see
+`src/render.rs`'s `CHART_PALETTE`) as its default. **Every mark also
+carries a native SVG `<title>`**, so hovering any bar, slice, or
+line/area/scatter point shows its category and value as a plain
+browser tooltip — no JS needed for that either.
+
 ## Icons
 
 A `Report`/`EditableTable` row's Edit/Delete glyphs come from a
