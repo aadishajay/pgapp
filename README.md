@@ -321,7 +321,7 @@ The PL/SQL analog: named Rust modules under `src/actions/`
 invoked via `action "Label" calls <module> (config...)` — a button
 posting to `/:page/c/:idx/run`, gated by the page's `requires:` role.
 `ActionContext` carries the pool, app, page, config, and request params.
-Ships three modules:
+Ships four modules:
 
 - **`run_query`** — executes a named query raw (may be a plain
   `UPDATE`/`DELETE`/`INSERT`); binds are still `:name` markers, never
@@ -332,14 +332,45 @@ Ships three modules:
   the error banner verbatim (`actions::clean_db_error`). The function
   must already exist when the app is (first) synced/reloaded.
 - **`log_values`** — trivial demo, logs the parameter map.
+- **`http_request`** — calls an external REST API; the one action
+  module that leaves Postgres. Any method (`GET`/`POST`/.../anything
+  `reqwest::Method::from_bytes` accepts), a request body with a
+  `content_type`, and `auth: "none" | "basic" | "bearer" |
+  "api_key_header" | "api_key_query"`. Since the config grammar is
+  flat string key/value pairs only (no nested objects), multiple
+  extra headers pack into one `headers: "Name: Value; Name2: Value2"`
+  string, parsed at runtime rather than by markup.rs. `{{item}}` in
+  `url`/`body`/`headers`/`token`/`username`/`password`/`key_value`
+  interpolates that page item's current value — plain string
+  substitution, not SQL-bind casting, since it has nothing to do with
+  Postgres:
 
-Rust and PL/pgSQL aren't a migration path away from each other: anything
-leaving the database (HTTP, email) stays Rust; row-level logic already
-living beside the data is cheaper as a function via `call_function`.
-Both share the exact same `:name` → schema-typed bind compilation as
-every other named query. No `apex_util`-style grab-bag package is
-shipped — `clean_db_error` + `raise exception` covers the one thing
-that genuinely generalizes.
+  ```text
+  action "Notify webhook" calls http_request (
+    method: "POST",
+    url: "https://hooks.example.com/tickets/{{id}}",
+    body: "{\"status\": \"{{status}}\"}",
+    headers: "X-Source: pgapp",
+    auth: "bearer",
+    token: "abc123"
+  )
+  ```
+
+  Not covered: full OAuth2 grant flows (client-credentials, token
+  refresh) — those need a token cache with its own lifetime, a bigger
+  feature than one action module; `bearer` still works with a token
+  you already have in hand. A non-2xx response or a network failure
+  (bad host, timeout — default 10s, override with `timeout_secs`)
+  becomes the page's error banner, same as a PL/pgSQL exception would.
+
+Rust and PL/pgSQL aren't a migration path away from each other: HTTP
+calls belong in Rust (`http_request`) since Postgres has no native
+notion of the outside world; row-level logic already living beside the
+data is cheaper as a function via `call_function`. `run_query`/
+`call_function` share the exact same `:name` → schema-typed bind
+compilation as every other named query. No `apex_util`-style grab-bag
+package is shipped — `clean_db_error` + `raise exception` covers the
+one thing among the SQL-side actions that genuinely generalizes.
 
 ## Dynamic actions
 
@@ -596,7 +627,7 @@ src/
   item_types.rs       the ItemType trait + registry() (see "Item types")
   item_types/         one file per component: text, readonly, checkbox, radio, popup, slider
   actions.rs          the ServerAction trait + registry() (see "Server-side actions")
-  actions/            one file per module: run_query, call_function, log_values
+  actions/            one file per module: run_query, call_function, log_values, http_request
   meta.rs             module root: ensure_schema + re-exports
   meta/
     types.rs          the runtime model (RuntimeApp, RuntimePage, RuntimeComponent, Chrome, ...)

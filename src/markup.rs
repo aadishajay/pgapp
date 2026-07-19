@@ -157,14 +157,29 @@ fn lex(src: &str) -> Result<(Vec<Token>, Vec<u32>)> {
         } else if c == '"' {
             let quote = i;
             i += 1;
-            let start = i;
-            while i < chars.len() && chars[i] != '"' {
-                i += 1;
+            let mut value = String::new();
+            loop {
+                if i >= chars.len() {
+                    bail!("unterminated string literal starting on line {}", line_at[quote]);
+                }
+                match chars[i] {
+                    '"' => break,
+                    // Only `\"` and `\\` are recognized escapes — any other
+                    // backslash (e.g. a Windows path, a regex) is left
+                    // exactly as written, so this is purely additive: no
+                    // existing string literal (none use backslashes today)
+                    // changes meaning.
+                    '\\' if matches!(chars.get(i + 1), Some('"') | Some('\\')) => {
+                        value.push(chars[i + 1]);
+                        i += 2;
+                    }
+                    other => {
+                        value.push(other);
+                        i += 1;
+                    }
+                }
             }
-            if i >= chars.len() {
-                bail!("unterminated string literal starting on line {}", line_at[quote]);
-            }
-            tokens.push(Token::Str(chars[start..i].iter().collect()));
+            tokens.push(Token::Str(value));
             lines.push(line_at[quote]);
             i += 1;
         } else if c == '-' && chars.get(i + 1) == Some(&'>') {
@@ -1328,6 +1343,31 @@ mod tests {
         assert_eq!(da.2.len(), 5);
         assert!(matches!(&da.2[0], DaOp::Set { item, expr } if item == "name" && expr == "'x'"));
         assert!(matches!(&da.2[4], DaOp::Refresh(q) if q == "stats"));
+    }
+
+    #[test]
+    fn string_literals_support_escaped_quotes_and_backslashes() {
+        // \" and \\ are the only two recognized escapes — enough to write
+        // a literal JSON body as a config string, which has nowhere else
+        // to live given the grammar's flat string-valued configs.
+        let src = r#"
+            app "Demo" {
+                page "P" {
+                    action "Ping" calls run_query (query: "q", body: "say \"hi\" and a\\backslash")
+                }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+        let config = app
+            .pages[0]
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Action { config, .. } => Some(config),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(config["body"], "say \"hi\" and a\\backslash");
     }
 
     #[test]
