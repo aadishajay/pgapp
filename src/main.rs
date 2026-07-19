@@ -113,11 +113,20 @@ async fn serve_registered_apps(pool: PgPool, bind_addr: &str) -> anyhow::Result<
 
     let state = Arc::new(server::AppState { pool, apps, item_types, actions: action_registry });
     let router = server::build_router(state);
+    // Wraps the whole `Router` from the outside (rather than via its own
+    // `.layer()`) so a trailing slash is stripped before route matching
+    // runs, not after — matching `/:workspace/:app/` to the same route as
+    // `/:workspace/:app` instead of 404ing.
+    use axum::ServiceExt;
+    use tower::Layer;
+    let app = tower_http::normalize_path::NormalizePathLayer::trim_trailing_slash().layer(router);
 
     let listener = tokio::net::TcpListener::bind(bind_addr)
         .await
         .with_context(|| format!("failed to bind {bind_addr}"))?;
-    axum::serve(listener, router).await?;
+    let make_service =
+        <_ as ServiceExt<axum::extract::Request>>::into_make_service(app);
+    axum::serve(listener, make_service).await?;
     Ok(())
 }
 
