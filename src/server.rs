@@ -669,6 +669,15 @@ async fn asset(Path((_app, path)): Path<(String, String)>) -> Response {
 /// page down): the error is returned as text for the caller to surface
 /// as an inline warning, and the component still renders with whatever
 /// data already exists.
+///
+/// GET-only by construction: this function is only ever called from
+/// `render_component`, which is only ever called from `show` (routed
+/// as `get(show)` — see `build_router`). Keep it that way — do not
+/// call `render_component`/`run_before_load` from `create`/`update`/
+/// `delete`/`run_action`/`save_view` or any other POST handler; a
+/// mutating request already has its own explicit, user-initiated
+/// action and has no business also implicitly firing someone's
+/// `before_load`.
 async fn run_before_load(
     state: &AppState,
     data: &AppData,

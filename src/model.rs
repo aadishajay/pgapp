@@ -98,6 +98,15 @@ pub struct EntityDef {
 /// non-fatal — see `server::render_component`'s Report branch — the
 /// component still renders with whatever data already exists, plus an
 /// inline warning.
+///
+/// Hard invariant, by design: `before_load` only ever fires from the
+/// read-only `GET /:app/:page` render path (`server::show` →
+/// `render_component` — its only caller). It must never be wired into
+/// a POST/mutating handler (create/update/delete, `run_action`, a form
+/// submission's own action, etc.) — those already have an explicit,
+/// user-initiated trigger and don't need (or want) an implicit one
+/// that fires on every innocuous page view, including from link
+/// prefetchers and crawlers that only ever issue GET.
 #[derive(Debug, Clone)]
 pub struct PreAction {
     pub name: String,
