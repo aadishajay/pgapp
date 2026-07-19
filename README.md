@@ -717,42 +717,105 @@ still Rust code — those need `cargo build` + restart. Markup changes
 
 `examples/app_builder.pgapp` is a pgapp app, like any other, that lists
 every app registered across every workspace in the instance and lets
-you drag-and-drop reorder any of their pages' components — an
-Oracle-APEX-App-Builder-flavored way to rearrange a page without
-hand-editing its markup. Every entity in it is query-backed, reading
-`pgapp_control.*`/`pgapp_meta.*` directly (no core changes needed for
-that: a named query can reference any schema the shared `pgapp_admin`
-connection can see) — it owns no data tables of its own, so it's a good
-fit for a small dedicated workspace:
+you drag-and-drop reorder, add, edit, and delete any of their pages'
+components, scaffold brand-new apps, and jump straight to a live
+preview — an Oracle-APEX-App-Builder-flavored way to build without
+hand-editing markup.
 
-```bash
-pgapp workspace create --schema builder   # once — a home for this app (owns no tables of its own)
-pgapp app create --workspace builder --slug app_builder   # or just `pgapp run examples/app_builder.pgapp --workspace builder`
-```
+**Available by default, no setup needed.** Every instance auto-provisions
+it — at `pgapp instance init` for a new instance, and again (idempotently)
+at every `pgapp run` for one that predates this feature — at the fixed
+address `/pgapp/builder`, owned by its own reserved `pgapp_builder`
+schema (`instance::APP_BUILDER_WORKSPACE_SLUG`/`APP_BUILDER_APP_SLUG` in
+`src/instance.rs`), never a user workspace. It owns one real table of
+its own (`new_app_requests`, for the "New App" panel below) plus a
+handful of query-backed entities reading `pgapp_control.*`/
+`pgapp_meta.*` directly (a named query can reference any schema the
+shared `pgapp_admin` connection can see — no core changes needed for
+that read side). It excludes itself from its own "Apps" listing, and
+every mutating admin route on the target side (reorder/add/edit/delete)
+refuses outright (403) if the target is the App Builder itself — belt
+and suspenders alongside the listing's own self-exclusion, since a URL
+can always be hand-crafted past whatever a picker declines to link to.
 
-Click through Apps → Pages → a page to see its components as a plain
-table; dragging a row and dropping it POSTs the new order to
-`/:workspace/:app/admin/pages/:page/reorder` — *that other app's* own
-route, not the App Builder's — which:
+### Editing an existing app's pages
 
-1. Updates `pgapp_meta.components.ordinal` for that page.
-2. Rewrites the target app's own `.pgapp` file to match, via
-   `src/page_reorder.rs`: `markup::page_component_start_lines` (a thin,
-   additive reuse of the real parser's page-body walk — not a
-   parallel hand-rolled grammar) gives each component's real start
-   line, and the file is spliced along those lines rather than
-   regenerated from a parsed model, so every component's own
-   formatting and inline comments survive untouched — only its
-   position moves. A comment directly above a component (no blank
-   line between) travels with it; anything else between two
-   components (a page-scoped `query`, blank lines) stays wherever it
-   physically sits, attached to whichever component preceded it.
-3. Hot-reloads that one app in place, same as `admin/reload`.
+Click through Apps → Pages → a page to reach its editor. Every
+mutation here is a small, targeted admin route on *that other app's*
+own `/:workspace/:app/admin/pages/:page/...` path (not the App
+Builder's), gated the same way `admin/reload` is (the `admin` role,
+when the target app has auth enabled), and ends by hot-reloading that
+one app in place — no restart:
 
-Single-file apps only for now — a directory app's page lives across
-more than one file, and splicing across files isn't implemented yet.
-Gated the same way `admin/reload` is (the `admin` role, when the target
-app has auth enabled).
+- **Reorder**: drag a row and drop it — POSTs the new order to
+  `.../reorder`.
+- **Add**: pick a kind (`text`/`report`/`region`), fill in a title/
+  content, and (for report/region) an entity or query name plus
+  columns — POSTs to `.../components/add`. The new component always
+  lands at the bottom of the page; drag it into place from there.
+- **Edit label** / **Edit columns**: per-row buttons — POSTs to
+  `.../components/:idx/edit`. A component's label is always its first
+  string literal (title for report/region/form, content for text), so
+  this works uniformly across kinds; columns only shows for report/
+  region/editable_table.
+- **Delete**: per-row button (with a confirm dialog) — POSTs to
+  `.../components/:idx/delete`.
+- **Run this page ↗**: opens the page's real, live URL in a new tab —
+  built client-side from this page's own `?target_workspace=`/
+  `?target_app=`/`?target_page=`, same params every cross-app action
+  here reads (see below).
+
+Every one of these keeps `pgapp_meta` and the target app's own
+`.pgapp` file in agreement by construction: the route edits the file
+via `src/page_reorder.rs` (a line-based **text splice**, never a
+parse-and-regenerate — `markup::page_component_start_lines`/its
+per-component boundary helper reuse the real parser's own page-body
+walk, so untouched components keep their exact original formatting and
+inline comments; a comment directly above a component, no blank line
+between, travels with it when reordered or deleted), then calls
+`AppEntry::reload()`, which re-syncs that file straight into
+`pgapp_meta` (the authoritative source from that point on) and reloads
+the in-memory app. Single-file apps only for now — a directory app's
+page lives across more than one file, and splicing across files isn't
+implemented yet.
+
+The drag itself, the "Add Component" panel, and the per-row Edit/
+Delete buttons are all `runtime.js` (`bindDraggableRows`/
+`bindAddComponentForm`/`bindComponentRowActions`) — plain HTML5
+drag-and-drop plus small DOM-built forms injected into `text`
+component placeholders (`attrs (id: "pgapp-add-component-slot")`, and
+`"pgapp-preview-slot"` for the preview link), no framework changes
+needed to host them. Since the row list / add form / preview link all
+describe some *other* app's page, every one of them builds that app's
+own URL from `?target_workspace=`/`?target_app=`/`?target_page=` on the
+**current** (App Builder) page's own URL, not from anything baked into
+the markup — forwarded page-to-page the same way any other cross-page
+parameter is (a report's `link: <field> -> page <Name> (<row column>:
+<param name>)`).
+
+### Creating a brand-new app
+
+The "New App" page scaffolds a fresh single-file app (a starter
+`items` entity + page, the same shape `pgapp new` generates) into an
+existing workspace — name, target workspace (picked from a list,
+excluding the App Builder's own reserved workspace), and theme. Submit
+and the same page reloads already processed: a companion report
+(`src/actions/create_app.rs`, wired as a `before_load` on that report)
+picks up the pending request, scaffolds the file, syncs it into
+`pgapp_meta`, and registers it in `pgapp_control` — no second click
+needed, since a Form's own create-and-redirect already lands back on
+the same page. Errors (bad theme, unknown/disabled workspace, a slug
+collision) land in that same row's `status`/`result` columns rather
+than a page-level warning banner, so they stay visible on every later
+load too, not just the one right after submission.
+
+One caveat worth knowing: `serve_registered_apps` only reads
+`pgapp_control.apps` once, at process startup — a running server has
+no live "watch for new apps" path (unlike an *existing, already-served*
+app's own hot-reload/reorder/add/edit/delete routes, which mutate an
+already-running `AppEntry` in place). So a newly created app is
+registered and ready, but won't actually be served until the next
+`pgapp run`. The row's own result message says so.
 
 The drag itself is `runtime.js`'s `bindDraggableRows` — any element
 carrying the `pgapp-draggable-rows` class (added via the region's own
@@ -838,7 +901,7 @@ src/
   item_types.rs       the ItemType trait + registry() (see "Item types")
   item_types/         one file per component: text, readonly, checkbox, radio, popup, slider
   actions.rs          the ServerAction trait + registry() (see "Server-side actions")
-  actions/            one file per module: run_query, call_function, log_values, http_request
+  actions/            one file per module: run_query, call_function, log_values, http_request, create_app (see "App Builder")
   meta.rs             module root: ensure_schema + re-exports
   meta/
     types.rs          the runtime model (RuntimeApp, RuntimePage, RuntimeComponent, Chrome, ...)
@@ -848,7 +911,7 @@ src/
   server/
     query_engine.rs   named-query execution (+ paginated), bind context, LOV/region resolution
   render.rs           HTML generation; delegates field widgets to item_types, charts to chart_lib
-  page_reorder.rs     splices a page's components into a new order in its own .pgapp file (see "App Builder")
+  page_reorder.rs     splices a page's components (reorder/add/delete/edit-label/edit-columns) in its own .pgapp file (see "App Builder")
 themes/               pluggable design systems (see "Theming")
 icons/                pluggable icon packs: fontawesome/, material/
 chart-libs/           pluggable chart libraries: canvas-bars/
@@ -915,6 +978,9 @@ component kinds, e.g.
 - `GET  /:workspace/:app/users` (+ create/delete POSTs) — built-in user management, admin role only
 - `GET  /:workspace/:app/admin/reload` (+ POST)         — re-syncs that app's markup file into `pgapp_meta` and reloads it, no restart
 - `POST /:workspace/:app/admin/pages/:page/reorder`     — the App Builder's drag-and-drop save (see "App Builder")
+- `POST /:workspace/:app/admin/pages/:page/components/add`         — the App Builder's "Add Component" (see "App Builder")
+- `POST /:workspace/:app/admin/pages/:page/components/:idx/edit`   — the App Builder's "Edit label"/"Edit columns" (see "App Builder")
+- `POST /:workspace/:app/admin/pages/:page/components/:idx/delete` — the App Builder's per-row "Delete" (see "App Builder")
 - `GET  /:workspace/:app/runtime.js`                    — the DB-stored `pgapp` JS runtime
 - `GET  /:workspace/:app/chart-lib.js`                  — the active pluggable chart library's JS (404 when `chart_lib` is the built-in `inline`)
 

@@ -48,6 +48,7 @@ use crate::instance;
 use crate::item_types;
 use crate::meta::{self, Chrome, NavNode, RegionRows, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimePage};
 use crate::model::{FieldItem, HtmlAttrs, PreAction};
+use crate::page_reorder;
 use crate::render;
 use crate::theme::Theme;
 use query_engine::{bind_context, resolve_field_choices, resolve_regions, run_named_query_page, run_named_query_rows};
@@ -174,6 +175,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/:workspace/:app/users/:id/delete", post(auth::users_delete))
         .route("/:workspace/:app/admin/reload", get(admin_reload_page).post(admin_reload))
         .route("/:workspace/:app/admin/pages/:page/reorder", post(admin_reorder_page))
+        .route("/:workspace/:app/admin/pages/:page/components/add", post(admin_add_component))
+        .route("/:workspace/:app/admin/pages/:page/components/:idx/edit", post(admin_edit_component))
+        .route("/:workspace/:app/admin/pages/:page/components/:idx/delete", post(admin_delete_component))
         .route("/:workspace/:app/:page", get(show))
         .route("/:workspace/:app/:page/region/:query", get(region_fragment))
         .route("/:workspace/:app/:page/c/:idx/create", post(create))
@@ -1485,6 +1489,10 @@ async fn admin_reorder_page(
     Path((workspace, app, page)): Path<(String, String, String)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    if workspace == instance::APP_BUILDER_WORKSPACE_SLUG && app == instance::APP_BUILDER_APP_SLUG {
+        return Err((StatusCode::FORBIDDEN, "the App Builder can't edit itself".to_string()));
+    }
+
     let app_key = format!("{workspace}/{app}");
     let entry = state.app_or_404(&app_key)?;
     let data = entry.data();
@@ -1563,4 +1571,178 @@ async fn reorder_page_impl(
             .context("failed to update component ordinal")?;
     }
     Ok(())
+}
+
+/// Shared by the three routes below: refuses to touch the App Builder
+/// itself (same belt-and-suspenders reasoning as `admin_reorder_page`),
+/// looks up the target app, and checks reload access. Returns the
+/// entry so the caller can read its markup path / call `.reload()`.
+fn admin_edit_guard<'a>(
+    state: &'a AppState,
+    auth_ctx: &AuthCtx,
+    workspace: &str,
+    app: &str,
+) -> Result<&'a AppEntry, AppError> {
+    if workspace == instance::APP_BUILDER_WORKSPACE_SLUG && app == instance::APP_BUILDER_APP_SLUG {
+        return Err((StatusCode::FORBIDDEN, "the App Builder can't edit itself".to_string()));
+    }
+    let entry = state.app_or_404(&format!("{workspace}/{app}"))?;
+    require_reload_access(&entry.data(), auth_ctx)?;
+    Ok(entry)
+}
+
+/// Renders exactly one new top-level component's markup text (no
+/// trailing newline needed — `page_reorder::append_component` splits
+/// on `\n` itself), for the fixed, deliberately small set of kinds the
+/// App Builder's "Add Component" panel offers. Anything referencing an
+/// unknown entity/query is caught later, at `entry.reload()`'s
+/// `meta::sync_app` validation — same as any other markup edit — not
+/// re-validated here.
+fn render_new_component(kind: &str, label: &str, source_name: &str, columns: &str) -> anyhow::Result<String> {
+    let label = page_reorder::escape_string(label.trim());
+    let columns = columns.trim();
+    match kind {
+        "text" => Ok(format!("    text \"{label}\"")),
+        "report" => {
+            let source_name = source_name.trim();
+            if source_name.is_empty() {
+                anyhow::bail!("a report needs an entity name");
+            }
+            if columns.is_empty() {
+                anyhow::bail!("a report needs at least one column");
+            }
+            Ok(format!("    report \"{label}\" of {source_name} {{\n      columns: {columns}\n    }}"))
+        }
+        "region" => {
+            let source_name = source_name.trim();
+            if source_name.is_empty() {
+                anyhow::bail!("a region needs a query name");
+            }
+            let cols_line = if columns.is_empty() { String::new() } else { format!(" {{\n      columns: {columns}\n    }}") };
+            Ok(format!("    region \"{label}\" from query {source_name}{cols_line}"))
+        }
+        other => anyhow::bail!("unknown component kind '{other}' (expected text, report, or region)"),
+    }
+}
+
+/// POST /:workspace/:app/admin/pages/:page/components/add — the App
+/// Builder's "Add Component" panel. `kind` is `text`/`report`/`region`;
+/// `label` is the title (report/region) or content (text); `source` is
+/// the entity name (report) or query name (region), ignored for text;
+/// `columns` is a comma-separated list, required for report, optional
+/// for region. Always appends at the end of the page — drag it into
+/// place afterward with the existing reorder feature. JSON in/out, same
+/// as `admin_reorder_page`.
+async fn admin_add_component(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, page)): Path<(String, String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let get = |k: &str| values.get(k).map(|s| s.as_str()).unwrap_or("");
+
+    let result: anyhow::Result<()> = async {
+        if std::path::Path::new(&entry.markup_path).is_dir() {
+            anyhow::bail!("this app's markup is a directory of files — the App Builder only supports single-file apps right now");
+        }
+        let new_component = render_new_component(get("kind"), get("label"), get("source"), get("columns"))?;
+        let markup_text = tokio::fs::read_to_string(&entry.markup_path)
+            .await
+            .with_context(|| format!("failed to read '{}'", entry.markup_path))?;
+        let updated = page_reorder::append_component(&markup_text, &page, &new_component)?;
+        tokio::fs::write(&entry.markup_path, updated)
+            .await
+            .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
+            Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+            Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("added, but reload failed: {e:#}")})).into_response()),
+        },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/pages/:page/components/:idx/edit — edits
+/// component `idx`'s label (its title/content) and/or `columns:` list.
+/// Either field is optional in the post; only the ones present are
+/// changed. Works uniformly across component kinds since a label is
+/// always a component's first string literal (see
+/// `page_reorder::set_component_label`'s doc).
+async fn admin_edit_component(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, page, idx)): Path<(String, String, String, usize)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+
+    let result: anyhow::Result<()> = async {
+        if std::path::Path::new(&entry.markup_path).is_dir() {
+            anyhow::bail!("this app's markup is a directory of files — the App Builder only supports single-file apps right now");
+        }
+        let mut markup_text = tokio::fs::read_to_string(&entry.markup_path)
+            .await
+            .with_context(|| format!("failed to read '{}'", entry.markup_path))?;
+        if let Some(label) = values.get("label") {
+            markup_text = page_reorder::set_component_label(&markup_text, &page, idx, label)?;
+        }
+        if let Some(columns) = values.get("columns") {
+            let cols: Vec<String> = columns.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+            if cols.is_empty() {
+                anyhow::bail!("'columns' can't be empty");
+            }
+            markup_text = page_reorder::set_component_columns(&markup_text, &page, idx, &cols)?;
+        }
+        tokio::fs::write(&entry.markup_path, markup_text)
+            .await
+            .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
+            Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+            Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("edited, but reload failed: {e:#}")})).into_response()),
+        },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/pages/:page/components/:idx/delete —
+/// removes component `idx` outright.
+async fn admin_delete_component(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, page, idx)): Path<(String, String, String, usize)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+
+    let result: anyhow::Result<()> = async {
+        if std::path::Path::new(&entry.markup_path).is_dir() {
+            anyhow::bail!("this app's markup is a directory of files — the App Builder only supports single-file apps right now");
+        }
+        let markup_text = tokio::fs::read_to_string(&entry.markup_path)
+            .await
+            .with_context(|| format!("failed to read '{}'", entry.markup_path))?;
+        let updated = page_reorder::delete_component(&markup_text, &page, idx)?;
+        tokio::fs::write(&entry.markup_path, updated)
+            .await
+            .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
+            Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+            Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("deleted, but reload failed: {e:#}")})).into_response()),
+        },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
 }

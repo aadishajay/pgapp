@@ -38,6 +38,14 @@ use sqlx::PgPool;
 
 pub const ADMIN_ROLE: &str = "pgapp_admin";
 
+/// The App Builder's fixed, reserved workspace/app slugs (see
+/// `main.rs`'s `provision_app_builder` and README's "App Builder"
+/// section) — shared here rather than duplicated in `main.rs` (which
+/// provisions it) and `server.rs` (which refuses to let it edit
+/// itself), so the two can never drift apart.
+pub const APP_BUILDER_WORKSPACE_SLUG: &str = "pgapp";
+pub const APP_BUILDER_APP_SLUG: &str = "builder";
+
 /// Pool size for connections that serve real HTTP traffic — the
 /// `pgapp_admin` connection `pgapp run` reuses to serve an instance.
 /// Default is in the same
@@ -101,7 +109,7 @@ pub struct InstanceFile {
     pub created_at: String,
 }
 
-fn home_dir() -> Result<PathBuf> {
+pub fn home_dir() -> Result<PathBuf> {
     if let Ok(home) = std::env::var("PGAPP_HOME") {
         return Ok(PathBuf::from(home));
     }

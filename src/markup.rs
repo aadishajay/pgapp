@@ -1302,12 +1302,12 @@ app "Demo" {
         let src = include_str!("../examples/app_builder.pgapp");
         let app = parse_app(src).unwrap();
         assert_eq!(app.name, "App Builder");
-        assert_eq!(app.queries.len(), 3);
-        assert_eq!(app.entities.len(), 2);
-        assert_eq!(app.pages.len(), 3);
+        assert_eq!(app.queries.len(), 4);
+        assert_eq!(app.entities.len(), 3);
+        assert_eq!(app.pages.len(), 4);
 
         let edit_page = app.pages.iter().find(|p| p.name == "EditPage").unwrap();
-        assert_eq!(edit_page.components.len(), 2); // text, region
+        assert_eq!(edit_page.components.len(), 4); // text (preview slot), text, region, text (add-component slot)
         let region = edit_page
             .components
             .iter()

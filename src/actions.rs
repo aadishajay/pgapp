@@ -22,6 +22,7 @@ use sqlx::PgPool;
 use crate::meta::{RuntimeApp, RuntimePage};
 
 mod call_function;
+mod create_app;
 mod http_request;
 mod log_values;
 mod run_query;
@@ -83,6 +84,7 @@ pub fn registry() -> Registry {
         Box::new(call_function::CallFunction),
         Box::new(log_values::LogValues),
         Box::new(http_request::HttpRequest),
+        Box::new(create_app::CreateApp),
     ];
     modules.into_iter().map(|m| (m.name(), m)).collect()
 }

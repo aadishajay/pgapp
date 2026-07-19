@@ -1,34 +1,44 @@
-# The App Builder — a pgapp app, like any other, that lists every
-# app/page registered across every workspace in this instance and lets
-# you drag-and-drop reorder any of them. Every entity here is
+# The App Builder — available by default on every pgapp instance (see
+# main.rs's provision_app_builder), tied to its own reserved
+# pgapp_builder schema rather than a user workspace, at the fixed
+# workspace/app slugs "pgapp"/"builder". Lists every OTHER app
+# registered across every workspace in this instance and lets you
+# drag-and-drop reorder any of their pages. Every entity here is
 # query-backed, reading pgapp_control.*/pgapp_meta.* directly — no core
 # framework changes were needed for that read side: a named query can
 # reference any schema this connection can see, and the shared
-# pgapp_admin pool this app runs through already can. This app itself
-# owns no data tables of its own, which is why it lives in its own tiny
-# workspace (see README's "App Builder" section for the exact
-# `pgapp workspace create`/`pgapp app create` commands to stand it up).
+# pgapp_admin pool this app runs through already can. It owns no data
+# tables of its own, matching pgapp_builder's role as one of pgapp's
+# own bookkeeping schemas rather than a workspace holding real app data.
 #
 # The actual save-on-drop mechanics — updating pgapp_meta.components'
 # ordering *and* rewriting the target app's own .pgapp file so the two
 # never drift apart — live in src/page_reorder.rs and the
 # `/:workspace/:app/admin/pages/:page/reorder` route in server.rs, not
-# here; this app is only the picker + the draggable list.
+# here; this app is only the picker + the draggable list. That route
+# also refuses outright if the target is the App Builder itself — belt
+# and suspenders alongside the self-exclusion below, since a URL can
+# always be hand-crafted past whatever a picker itself declines to
+# link to.
 
 app "App Builder" {
   theme: shadcn
 
   nav {
     item "Apps" -> page Apps
+    item "New App" -> page NewApp
   }
 
+  # Excludes itself (workspace slug "pgapp", app slug "builder") — the
+  # App Builder never appears as its own editing target; see the
+  # module doc above for the second, server-side half of this guard.
   query apps_list {
     sql: "select ca.id as id, w.slug as workspace_slug, ca.slug as app_slug,
                  ma.id as meta_app_id, ca.app_name as app_name
             from pgapp_control.apps ca
             join pgapp_control.workspaces w on w.id = ca.workspace_id
             left join pgapp_meta.apps ma on ma.name = ca.app_name
-           where ca.enabled
+           where ca.enabled and not (w.slug = 'pgapp' and ca.slug = 'builder')
            order by w.slug, ca.slug"
   }
 
@@ -61,6 +71,31 @@ app "App Builder" {
     field target_app: text
   }
 
+  # Excludes the App Builder's own reserved workspace — you can't
+  # scaffold a new app into pgapp_builder any more than you can drag-
+  # and-drop-edit the App Builder itself (see actions/create_app.rs's
+  # own belt-and-suspenders check of the same rule).
+  query workspaces_lov {
+    sql: "select slug as value, slug as label from pgapp_control.workspaces
+           where enabled and slug <> 'pgapp' order by slug"
+  }
+
+  # Real, physical table (in pgapp_builder, auto-created on sync same
+  # as any other entity) — a Form writes a plain pending request row
+  # here; actions/create_app.rs's before_load (on the companion report
+  # below) picks it up on the very next page load and does the actual
+  # scaffold+sync+register work, writing its outcome back into
+  # status/result. See that module's own doc for why errors land in
+  # this row instead of a page-level warning banner.
+  entity "new_app_requests" {
+    field id: id
+    field app_name: text required
+    field workspace_slug: text required
+    field theme: text required
+    field status: text default pending
+    field result: text
+  }
+
   # :id is the page's own pgapp_meta.pages.id — forwarded automatically
   # as ?id= by the Pages page's link below (every report link carries
   # the row's own id this way, not just its declared extra params).
@@ -87,9 +122,25 @@ app "App Builder" {
   }
 
   page "EditPage" {
-    text "Drag rows to reorder this page's components, then drop it — saved immediately, in the database and in the app's own .pgapp file."
+    text "Preview:" attrs (id: "pgapp-preview-slot")
+    text "Drag rows to reorder this page's components; each row also has Edit label / Edit columns / Delete. Every change saves immediately, in the database and in the app's own .pgapp file."
     region "Components" from query components_list {
       columns: id, kind, ordinal
     } attrs (class: "pgapp-draggable-rows")
+    text "Add a component (it lands at the bottom — drag it into place afterward):" attrs (id: "pgapp-add-component-slot")
+  }
+
+  page "NewApp" {
+    text "Scaffold and register a brand-new app into an existing workspace — a single-file app with a starter 'items' entity and page, the same shape `pgapp new` generates. Submitting comes right back here already processed: check the row's status/result below."
+    form "New App" of new_app_requests {
+      fields: app_name, workspace_slug, theme
+      item workspace_slug as popup from query workspaces_lov
+      item theme as radio ("plain", "shadcn", "vivid", "google_m3")
+    }
+    report "Requests" of new_app_requests {
+      columns: app_name, workspace_slug, theme, status, result
+      before_load: create_app
+      page_size: 10
+    }
   }
 }

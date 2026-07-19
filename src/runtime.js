@@ -195,12 +195,39 @@ window.pgapp = (function () {
   // query string (?target_workspace=&target_app=&target_page=), since
   // the row list describes some *other* app's page, not the one
   // currently being viewed (the App Builder itself).
-  function saveDraggedOrder(tbody) {
+  // Shared by every "act on some *other* app's page" admin affordance
+  // below (reorder/preview/add/edit/delete component) — all of them
+  // read this page's own ?target_workspace=&target_app=&target_page=,
+  // since the App Builder itself never has its own page to act on
+  // (see the self-edit guard on the server side of each route).
+  function pgappEditTarget() {
     var params = new URLSearchParams(location.search);
-    var workspace = params.get("target_workspace");
-    var app = params.get("target_app");
-    var page = params.get("target_page");
-    if (!workspace || !app || !page) {
+    return {
+      workspace: params.get("target_workspace"),
+      app: params.get("target_app"),
+      page: params.get("target_page"),
+    };
+  }
+
+  function pgappEditTargetValid(target) {
+    return !!(target.workspace && target.app && target.page);
+  }
+
+  function pgappAdminPagesUrl(target, suffix) {
+    return (
+      "/" +
+      encodeURIComponent(target.workspace) +
+      "/" +
+      encodeURIComponent(target.app) +
+      "/admin/pages/" +
+      encodeURIComponent(target.page) +
+      suffix
+    );
+  }
+
+  function saveDraggedOrder(tbody) {
+    var target = pgappEditTarget();
+    if (!pgappEditTargetValid(target)) {
       console.error("pgapp: draggable rows need ?target_workspace=&target_app=&target_page= on this page's own URL");
       return;
     }
@@ -210,8 +237,7 @@ window.pgapp = (function () {
       var firstCell = rows[i].querySelector("td");
       if (firstCell) ids.push(firstCell.textContent.trim());
     }
-    var url =
-      "/" + encodeURIComponent(workspace) + "/" + encodeURIComponent(app) + "/admin/pages/" + encodeURIComponent(page) + "/reorder";
+    var url = pgappAdminPagesUrl(target, "/reorder");
     fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -256,6 +282,195 @@ window.pgapp = (function () {
         });
       })(tbodies[t]);
     }
+  }
+
+  // The App Builder's "Preview this page" link: a `text ... attrs (id:
+  // "pgapp-preview-slot")` placeholder (see examples/app_builder.pgapp's
+  // EditPage) gets a real, working <a> appended into it, built from this
+  // page's own ?target_workspace=&target_app=&target_page= — same
+  // params saveDraggedOrder already reads, just used to link out to the
+  // live app instead of POSTing.
+  function bindPreviewLink() {
+    var slot = document.getElementById("pgapp-preview-slot");
+    if (!slot) return;
+    var target = pgappEditTarget();
+    if (!pgappEditTargetValid(target)) return;
+    var a = document.createElement("a");
+    a.className = "pgapp-link pgapp-btn pgapp-btn-secondary";
+    a.href = "/" + encodeURIComponent(target.workspace) + "/" + encodeURIComponent(target.app) + "/" + encodeURIComponent(target.page);
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = "Run this page ↗";
+    slot.appendChild(document.createTextNode(" "));
+    slot.appendChild(a);
+  }
+
+  // The App Builder's "Add Component" panel: another `text ... attrs
+  // (id: "pgapp-add-component-slot")` placeholder gets real form
+  // controls appended into it (kind/label/source/columns), POSTing to
+  // the target app's own `/admin/pages/:page/components/add` on submit
+  // — see `render_new_component` in server.rs for what each field means
+  // per kind, and why only text/report/region are offered here.
+  function bindAddComponentForm() {
+    var slot = document.getElementById("pgapp-add-component-slot");
+    if (!slot) return;
+    var target = pgappEditTarget();
+    if (!pgappEditTargetValid(target)) return;
+
+    var form = document.createElement("form");
+    form.className = "pgapp-add-component-form";
+
+    var kindSel = document.createElement("select");
+    kindSel.className = "pgapp-select";
+    ["text", "report", "region"].forEach(function (k) {
+      var opt = document.createElement("option");
+      opt.value = k;
+      opt.textContent = k;
+      kindSel.appendChild(opt);
+    });
+
+    var labelInput = document.createElement("input");
+    labelInput.className = "pgapp-input";
+    labelInput.placeholder = "Title (report/region) or content (text)";
+
+    var sourceInput = document.createElement("input");
+    sourceInput.className = "pgapp-input";
+    sourceInput.placeholder = "Entity name (report) or query name (region)";
+
+    var columnsInput = document.createElement("input");
+    columnsInput.className = "pgapp-input";
+    columnsInput.placeholder = "Columns, comma-separated (report/region)";
+
+    var addBtn = document.createElement("button");
+    addBtn.type = "submit";
+    addBtn.className = "pgapp-btn pgapp-btn-primary";
+    addBtn.textContent = "Add Component";
+
+    [kindSel, labelInput, sourceInput, columnsInput, addBtn].forEach(function (el) {
+      form.appendChild(el);
+    });
+    slot.appendChild(form);
+
+    form.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var body =
+        "kind=" +
+        encodeURIComponent(kindSel.value) +
+        "&label=" +
+        encodeURIComponent(labelInput.value) +
+        "&source=" +
+        encodeURIComponent(sourceInput.value) +
+        "&columns=" +
+        encodeURIComponent(columnsInput.value);
+      fetch(pgappAdminPagesUrl(target, "/components/add"), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body,
+      })
+        .then(function (r) {
+          return r.json();
+        })
+        .then(function (data) {
+          if (data.ok) location.reload();
+          else pgappAlert("Couldn't add component: " + data.error);
+        })
+        .catch(function (e) {
+          pgappAlert("pgapp: " + e);
+        });
+    });
+  }
+
+  // Per-row Edit label / Edit columns / Delete buttons on the App
+  // Builder's draggable component list — appended as an extra <td>
+  // alongside the id/kind/ordinal columns already in the markup
+  // (`columns: id, kind, ordinal`, see examples/app_builder.pgapp). The
+  // ordinal column doubles as the `idx` the edit/delete routes expect,
+  // since `meta::sync_app` always re-derives ordinal from file order on
+  // every reload — it's never stale relative to the file.
+  function bindComponentRowActions() {
+    var tbodies = document.querySelectorAll(".pgapp-draggable-rows tbody");
+    for (var t = 0; t < tbodies.length; t++) {
+      var target = pgappEditTarget();
+      if (!pgappEditTargetValid(target)) continue;
+      var rows = tbodies[t].querySelectorAll("tr");
+      for (var i = 0; i < rows.length; i++) {
+        (function (row) {
+          var cells = row.querySelectorAll("td");
+          if (cells.length < 3) return;
+          var kind = cells[1].textContent.trim();
+          var idx = cells[2].textContent.trim();
+          var actionsTd = document.createElement("td");
+
+          var editLabelBtn = document.createElement("button");
+          editLabelBtn.type = "button";
+          editLabelBtn.className = "pgapp-btn pgapp-btn-secondary";
+          editLabelBtn.textContent = "Edit label";
+          editLabelBtn.addEventListener("click", function () {
+            pgappPrompt("New title/content for this component:", "").then(function (label) {
+              if (label === null || label === "") return;
+              postComponentEdit(target, idx, "label=" + encodeURIComponent(label));
+            });
+          });
+          actionsTd.appendChild(editLabelBtn);
+
+          if (kind === "report" || kind === "region" || kind === "editable_table") {
+            var editColsBtn = document.createElement("button");
+            editColsBtn.type = "button";
+            editColsBtn.className = "pgapp-btn pgapp-btn-secondary";
+            editColsBtn.textContent = "Edit columns";
+            editColsBtn.addEventListener("click", function () {
+              pgappPrompt("New columns for this component, comma-separated:", "").then(function (columns) {
+                if (columns === null || columns === "") return;
+                postComponentEdit(target, idx, "columns=" + encodeURIComponent(columns));
+              });
+            });
+            actionsTd.appendChild(editColsBtn);
+          }
+
+          var deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.className = "pgapp-btn pgapp-btn-destructive";
+          deleteBtn.textContent = "Delete";
+          deleteBtn.addEventListener("click", function () {
+            pgappConfirm("Delete this component? This can't be undone.").then(function (ok) {
+              if (!ok) return;
+              fetch(pgappAdminPagesUrl(target, "/components/" + encodeURIComponent(idx) + "/delete"), { method: "POST" })
+                .then(function (r) {
+                  return r.json();
+                })
+                .then(function (data) {
+                  if (data.ok) location.reload();
+                  else pgappAlert("Couldn't delete component: " + data.error);
+                })
+                .catch(function (e) {
+                  pgappAlert("pgapp: " + e);
+                });
+            });
+          });
+          actionsTd.appendChild(deleteBtn);
+
+          row.appendChild(actionsTd);
+        })(rows[i]);
+      }
+    }
+  }
+
+  function postComponentEdit(target, idx, body) {
+    fetch(pgappAdminPagesUrl(target, "/components/" + encodeURIComponent(idx) + "/edit"), {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body,
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        if (data.ok) location.reload();
+        else pgappAlert("Couldn't edit component: " + data.error);
+      })
+      .catch(function (e) {
+        pgappAlert("pgapp: " + e);
+      });
   }
 
   // Nested nav: a click-to-toggle affordance on the caret button, since
@@ -368,6 +583,70 @@ window.pgapp = (function () {
     ]);
   }
 
+  // Same non-blocking, themed idea as showDialog, but with a single
+  // text input — the App Builder's "Edit label"/"Edit columns" buttons
+  // use this in place of window.prompt(). Resolves the input's value on
+  // OK/Enter, or null on Cancel/Escape.
+  function pgappPrompt(message, defaultValue) {
+    return new Promise(function (resolve) {
+      var overlay = document.createElement("div");
+      overlay.className = "pgapp-dialog-overlay";
+      var box = document.createElement("div");
+      box.className = "pgapp-dialog-box";
+      box.setAttribute("role", "alertdialog");
+      box.setAttribute("aria-modal", "true");
+      var p = document.createElement("p");
+      p.className = "pgapp-dialog-message";
+      p.textContent = message;
+      box.appendChild(p);
+      var input = document.createElement("input");
+      input.className = "pgapp-input";
+      input.type = "text";
+      input.value = defaultValue || "";
+      box.appendChild(input);
+      var actions = document.createElement("div");
+      actions.className = "pgapp-dialog-actions";
+      var cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "pgapp-btn pgapp-btn-secondary";
+      cancelBtn.textContent = "Cancel";
+      var okBtn = document.createElement("button");
+      okBtn.type = "button";
+      okBtn.className = "pgapp-btn pgapp-btn-primary";
+      okBtn.textContent = "OK";
+
+      function cleanup() {
+        document.removeEventListener("keydown", onKey);
+        overlay.remove();
+      }
+      function onKey(ev) {
+        if (ev.key === "Escape") {
+          cleanup();
+          resolve(null);
+        } else if (ev.key === "Enter") {
+          cleanup();
+          resolve(input.value);
+        }
+      }
+      cancelBtn.addEventListener("click", function () {
+        cleanup();
+        resolve(null);
+      });
+      okBtn.addEventListener("click", function () {
+        cleanup();
+        resolve(input.value);
+      });
+      actions.appendChild(cancelBtn);
+      actions.appendChild(okBtn);
+      box.appendChild(actions);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      document.addEventListener("keydown", onKey);
+      input.focus();
+      input.select();
+    });
+  }
+
   // Delete/destructive forms carry `data-pgapp-confirm="<message>"`
   // instead of a native onsubmit="return confirm(...)" — this intercepts
   // the submit, shows the themed confirm dialog, and only actually
@@ -398,12 +677,18 @@ window.pgapp = (function () {
     document.addEventListener("DOMContentLoaded", bindMobileNavToggle);
     document.addEventListener("DOMContentLoaded", bindConfirmForms);
     document.addEventListener("DOMContentLoaded", bindDraggableRows);
+    document.addEventListener("DOMContentLoaded", bindPreviewLink);
+    document.addEventListener("DOMContentLoaded", bindAddComponentForm);
+    document.addEventListener("DOMContentLoaded", bindComponentRowActions);
   } else {
     bindDynamicActions();
     bindNavToggles();
     bindMobileNavToggle();
     bindConfirmForms();
     bindDraggableRows();
+    bindPreviewLink();
+    bindAddComponentForm();
+    bindComponentRowActions();
   }
 
   return {

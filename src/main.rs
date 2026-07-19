@@ -298,6 +298,57 @@ async fn cmd_instance(args: &[String]) -> anyhow::Result<()> {
     }
 }
 
+/// The App Builder (see README's "App Builder" section) is available
+/// by default on every instance — not an opt-in example the operator
+/// has to `workspace create`/`app create` for. Its workspace/app slugs
+/// (`instance::APP_BUILDER_WORKSPACE_SLUG`/`APP_BUILDER_APP_SLUG`) are
+/// fixed and reserved (a user `workspace create --schema pgapp` just
+/// hits the ordinary "workspace already exists" error, since this row
+/// is already there), and its schema is `pgapp_builder` — one of
+/// pgapp's own bookkeeping schemas, like `pgapp_meta`/`pgapp_control`,
+/// not a user data workspace; it owns no tables of its own (every
+/// entity in its markup is query-backed).
+const APP_BUILDER_SCHEMA: &str = "pgapp_builder";
+const APP_BUILDER_MARKUP: &str = include_str!("../examples/app_builder.pgapp");
+
+/// Idempotent: creates `pgapp_builder` if missing, registers its fixed
+/// workspace/app rows (an upsert either way), and (re)writes its markup
+/// to `<PGAPP_HOME>/app_builder.pgapp` — an absolute path, not CWD-
+/// relative like a user's own `app create` output, so the App Builder
+/// stays reachable regardless of which directory a later `pgapp run`
+/// happens to be invoked from. Called both from `instance_init` (so
+/// it's there immediately) and from `cmd_run` (so it self-heals onto
+/// any instance that predates this feature, without needing `instance
+/// init` to be re-run). A failure here is reported but never fatal —
+/// the rest of the instance is fully usable without it.
+async fn provision_app_builder(pool: &PgPool) -> anyhow::Result<()> {
+    sqlx::raw_sql(&format!("create schema if not exists {APP_BUILDER_SCHEMA}"))
+        .execute(pool)
+        .await
+        .with_context(|| format!("failed to create '{APP_BUILDER_SCHEMA}' schema"))?;
+    grant_admin_on_schema(pool, APP_BUILDER_SCHEMA).await?;
+
+    let ws_id = control::register_workspace(pool, instance::APP_BUILDER_WORKSPACE_SLUG, APP_BUILDER_SCHEMA, None)
+        .await
+        .context("failed to register the App Builder's workspace")?;
+
+    let markup_path = instance::home_dir()?.join("app_builder.pgapp");
+    std::fs::write(&markup_path, APP_BUILDER_MARKUP)
+        .with_context(|| format!("failed to write '{}'", markup_path.display()))?;
+    let markup_path = markup_path.to_string_lossy().to_string();
+
+    let app_def = source::load(&markup_path).context("the built-in App Builder markup failed to parse")?;
+    let item_types = item_types::registry();
+    let action_registry = actions::registry();
+    meta::sync_app(pool, &app_def, &item_types, &action_registry, APP_BUILDER_SCHEMA)
+        .await
+        .context("failed to sync the App Builder into pgapp_meta")?;
+    control::register_in_workspace(pool, instance::APP_BUILDER_APP_SLUG, &markup_path, &app_def.name, ws_id, APP_BUILDER_SCHEMA)
+        .await
+        .context("failed to register the App Builder app")?;
+    Ok(())
+}
+
 /// `pgapp instance init` — sets up *the* pgapp instance (there's
 /// exactly one, globally, per machine — see `src/instance.rs`):
 /// creates a dedicated `pgapp_admin` Postgres role the server operates
@@ -366,8 +417,36 @@ async fn instance_init() -> anyhow::Result<()> {
     };
     instance::save(&instance_file)?;
 
+    // Provisioned through pgapp_admin, not the superuser `pool` used
+    // above — every later self-heal call (see `cmd_run`) provisions
+    // through pgapp_admin too, and any physical table the App Builder
+    // owns (e.g. `new_app_requests`) needs one consistent owner across
+    // every provisioning call, or a later `alter table add column`
+    // fails with "must be owner of table" the moment table ownership
+    // and connecting role disagree.
+    let admin_pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect_with(
+            PgConnectOptions::new()
+                .host(opts.get_host())
+                .port(opts.get_port())
+                .database(&dbname)
+                .username(instance::ADMIN_ROLE)
+                .password(&admin_password),
+        )
+        .await
+        .context("failed to connect as the newly-created pgapp_admin role")?;
+    match provision_app_builder(&admin_pool).await {
+        Ok(()) => {}
+        Err(e) => println!("warning: could not set up the built-in App Builder: {e:#}"),
+    }
+
     println!();
     println!("pgapp instance '{dbname}' is ready.");
+    println!(
+        "The App Builder (drag-and-drop page editing — see README) is available at /{}/{}",
+        instance::APP_BUILDER_WORKSPACE_SLUG, instance::APP_BUILDER_APP_SLUG
+    );
     println!("Every future instance/workspace/app/run command against it needs:");
     println!("  export PGAPP_ADMIN_DB_PASSWORD=<the password you just set for '{}'>", instance::ADMIN_ROLE);
     println!("Next: `pgapp workspace create` to create a schema for your first app's tables.");
@@ -911,6 +990,14 @@ async fn cmd_run(args: &[String]) -> anyhow::Result<()> {
     let inst = instance::load()?;
     instance::verify_operator(&inst)?;
     let pool = instance::connect_as_admin(&inst).await?;
+
+    // Self-heals the App Builder onto any instance that predates this
+    // feature (see provision_app_builder's doc) — cheap and idempotent,
+    // so it's fine to just always run this rather than tracking
+    // whether it's "already been done" separately.
+    if let Err(e) = provision_app_builder(&pool).await {
+        println!("warning: could not set up the built-in App Builder: {e:#}");
+    }
 
     let ws = match workspace_arg {
         Some(slug) => control::find_workspace(&pool, &slug)
