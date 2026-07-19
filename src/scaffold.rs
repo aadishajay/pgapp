@@ -142,9 +142,9 @@ async fn run_interactive(parsed: ParsedArgs) -> Result<()> {
 
 fn print_next_steps(target: &str) {
     println!("Next steps — every app is registered into a workspace's schema (see README's \"Instance mode\" section):");
-    println!("  pgapp instance init                 (once per Postgres database)");
-    println!("  pgapp workspace create <dbname>      (once per schema)");
-    println!("  pgapp run {target} --instance <dbname> --workspace <slug>");
+    println!("  pgapp instance init                 (once, ever — one instance per machine)");
+    println!("  pgapp workspace create --schema <name>   (once per schema)");
+    println!("  pgapp run {target} --workspace <slug>");
 }
 
 /// Postgres error code 3D000 = `invalid_catalog_name`, raised when the
@@ -292,9 +292,9 @@ pub fn scaffold_file(target: &str, name: &str, theme: &str) -> Result<()> {
 # entities, pages, and navigation all live in one declarative markup
 # file, synced straight into Postgres. Register and run it with:
 #
-#   pgapp instance init                          (once per Postgres database)
-#   pgapp workspace create <dbname>               (once per schema)
-#   pgapp run {target} --instance <dbname> --workspace <slug>
+#   pgapp instance init                          (once, ever — one instance per machine)
+#   pgapp workspace create --schema <name>       (once per schema)
+#   pgapp run {target} --workspace <slug>
 #
 # See README.md for the full markup reference — every property below
 # has more to it than this minimal starter shows (search, saved views,
@@ -339,9 +339,9 @@ pub fn scaffold_dir(target: &str, name: &str, theme: &str) -> Result<()> {
 # entity/page/query blocks, referencing each other by name exactly as
 # they would inside a single file. Register and run it with:
 #
-#   pgapp instance init                          (once per Postgres database)
-#   pgapp workspace create <dbname>               (once per schema)
-#   pgapp run {target} --instance <dbname> --workspace <slug>
+#   pgapp instance init                          (once, ever — one instance per machine)
+#   pgapp workspace create --schema <name>       (once per schema)
+#   pgapp run {target} --workspace <slug>
 
 app "{name}" {{
   theme: {theme}
