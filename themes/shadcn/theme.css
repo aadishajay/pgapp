@@ -668,3 +668,149 @@ a.pgapp-link:has(.pgapp-icon):hover .pgapp-icon {
 }
 .pgapp-dialog-message { margin: 0 0 1.1rem; color: hsl(var(--card-foreground)); font-weight: 500; }
 .pgapp-dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
+.pgapp-dialog-box .pgapp-input { margin-bottom: 1.1rem; }
+
+/* App Builder (examples/app_builder.pgapp) — an APEX-App-Builder-
+   flavored look for its 4 pages: a card grid for "Apps"/"Pages"
+   (`attrs (class: "pgapp-cards")` on those reports), a compact
+   icon-actioned list for a page's components (added to the existing
+   `pgapp-draggable-rows` class), and card panels for the "Add
+   Component"/preview affordances runtime.js builds into `text`
+   placeholder slots. Every rule here is scoped under these classnames
+   so it only ever applies where the App Builder's own markup opts in
+   — no effect on any other app using this theme. */
+.pgapp-cards .pgapp-table thead { display: none; }
+.pgapp-cards .pgapp-table,
+.pgapp-cards .pgapp-table-wrap { border: none; overflow: visible; }
+/* A picker grid has no use for search/filter/saved-views chrome or a
+   redundant subtitle repeating the page's own <h1> — App-Builder-home
+   reads as a plain tile grid, not another data-grid report. */
+.pgapp-cards .pgapp-report-header,
+.pgapp-cards .pgapp-report-toolbar,
+.pgapp-cards .pgapp-report-views,
+.pgapp-cards .pgapp-pagination { display: none; }
+.pgapp-cards .pgapp-table tbody {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.9rem;
+}
+.pgapp-cards .pgapp-table tr {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) + 2px);
+  background: hsl(var(--card));
+  padding: 1rem 1.1rem;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+.pgapp-cards .pgapp-table tr:hover {
+  border-color: hsl(var(--ring) / 0.4);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 0.08);
+}
+.pgapp-cards .pgapp-table td { border: none; padding: 0; }
+.pgapp-cards .pgapp-table td:first-child {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: hsl(var(--muted-foreground));
+}
+.pgapp-cards .pgapp-table td a.pgapp-link {
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+/* The component list: each row gets a kind icon, its label, an
+   ordinal badge, and a cluster of small icon buttons — laid out by
+   runtime.js's bindComponentRowActions, styled here. */
+.pgapp-draggable-rows .pgapp-table thead { display: none; }
+.pgapp-draggable-rows .pgapp-table,
+.pgapp-draggable-rows .pgapp-table-wrap { border: none; overflow: visible; }
+.pgapp-draggable-rows .pgapp-table tr {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--card));
+  padding: 0.55rem 0.85rem;
+  margin-bottom: 0.5rem;
+  cursor: grab;
+}
+.pgapp-draggable-rows .pgapp-table tr:active { cursor: grabbing; }
+.pgapp-draggable-rows .pgapp-table td { border: none; padding: 0; }
+.pgapp-draggable-rows .pgapp-table td:first-child {
+  /* the raw pgapp_meta.components.id — still read by JS (reorder's
+     POST body, see saveDraggedOrder), never shown */
+  display: none;
+}
+.pgapp-component-kind-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: calc(var(--radius) - 2px);
+  background: hsl(var(--secondary));
+  font-size: 0.9rem;
+  flex: none;
+}
+.pgapp-component-label { font-weight: 500; }
+.pgapp-component-ordinal {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--secondary));
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  flex: none;
+}
+.pgapp-component-actions { display: flex; gap: 0.3rem; flex: none; }
+.pgapp-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: calc(var(--radius) - 2px);
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0;
+}
+.pgapp-icon-btn:hover { color: hsl(var(--foreground)); background: hsl(var(--accent)); }
+.pgapp-icon-btn-destructive:hover { color: hsl(var(--destructive)); border-color: hsl(var(--destructive) / 0.5); }
+
+/* Card panels the App Builder's own JS builds into `text` placeholder
+   slots — the preview link and the Add Component form. */
+.pgapp-toolbar-slot {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.5rem;
+}
+.pgapp-toolbar-slot:empty { display: none; }
+.pgapp-panel-card {
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) + 2px);
+  background: hsl(var(--card));
+  padding: 1rem 1.15rem;
+  margin-top: 1rem;
+}
+.pgapp-panel-card-title {
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+.pgapp-add-component-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.6rem;
+  align-items: end;
+}
+.pgapp-add-component-form .pgapp-btn { grid-column: 1 / -1; justify-self: start; }
+@media (max-width: 640px) {
+  .pgapp-cards .pgapp-table tbody { grid-template-columns: 1fr; }
+}

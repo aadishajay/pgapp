@@ -109,7 +109,7 @@ app "App Builder" {
       columns: workspace_slug, app_slug, app_name
       link: app_name -> page Pages (workspace_slug: target_workspace, app_slug: target_app, meta_app_id: meta_app_id)
       page_size: 50
-    }
+    } attrs (class: "pgapp-cards")
   }
 
   page "Pages" {
@@ -118,26 +118,51 @@ app "App Builder" {
       columns: page_name
       link: page_name -> page EditPage (target_workspace: target_workspace, target_app: target_app, page_name: target_page)
       page_size: 50
-    }
+    } attrs (class: "pgapp-cards")
   }
 
   page "EditPage" {
-    text "Preview:" attrs (id: "pgapp-preview-slot")
-    text "Drag rows to reorder this page's components; each row also has Edit label / Edit columns / Delete. Every change saves immediately, in the database and in the app's own .pgapp file."
+    text "Preview" attrs (id: "pgapp-preview-slot")
+    text "Drag a row to reorder; use the icon buttons to edit a label, edit columns, or delete. Every change saves immediately, in the database and in the app's own .pgapp file."
     region "Components" from query components_list {
       columns: id, kind, ordinal
     } attrs (class: "pgapp-draggable-rows")
-    text "Add a component (it lands at the bottom — drag it into place afterward):" attrs (id: "pgapp-add-component-slot")
+    text "Add Component" attrs (id: "pgapp-add-component-slot")
+  }
+
+  # The history report below reads through a *separate*, query-backed
+  # entity (new_app_requests_view) rather than new_app_requests itself
+  # — on purpose: a Form and a Report of the *same* entity on one page
+  # automatically pair up into an edit/create popup (see render.rs's
+  # `companion_report_idx`), which would hide this page's whole point
+  # (the create form) behind a "+ New" click. A differently-named,
+  # read-only view of the same table sidesteps that pairing with no
+  # framework change — the Form stays always-visible, APEX-Create-
+  # Application-wizard style, and the history list is still real,
+  # still gets `before_load`'s processing on every load.
+  query new_app_requests_view {
+    sql: "select id, app_name, workspace_slug, theme, status, result
+            from pgapp_builder.app_builder_new_app_requests
+           order by id desc"
+  }
+
+  entity "new_app_requests_view" from query new_app_requests_view {
+    field id: integer
+    field app_name: text
+    field workspace_slug: text
+    field theme: text
+    field status: text
+    field result: text
   }
 
   page "NewApp" {
-    text "Scaffold and register a brand-new app into an existing workspace — a single-file app with a starter 'items' entity and page, the same shape `pgapp new` generates. Submitting comes right back here already processed: check the row's status/result below."
+    text "Scaffold and register a brand-new app into an existing workspace — a single-file app with a starter 'items' entity and page, the same shape `pgapp new` generates. Submit and this page reloads already processed: check status/result in Recent requests below."
     form "New App" of new_app_requests {
       fields: app_name, workspace_slug, theme
       item workspace_slug as popup from query workspaces_lov
       item theme as radio ("plain", "shadcn", "vivid", "google_m3")
     }
-    report "Requests" of new_app_requests {
+    report "Recent requests" of new_app_requests_view {
       columns: app_name, workspace_slug, theme, status, result
       before_load: create_app
       page_size: 10

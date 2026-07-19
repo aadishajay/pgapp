@@ -295,13 +295,14 @@ window.pgapp = (function () {
     if (!slot) return;
     var target = pgappEditTarget();
     if (!pgappEditTargetValid(target)) return;
+    slot.textContent = "";
+    slot.classList.add("pgapp-toolbar-slot");
     var a = document.createElement("a");
     a.className = "pgapp-link pgapp-btn pgapp-btn-secondary";
     a.href = "/" + encodeURIComponent(target.workspace) + "/" + encodeURIComponent(target.app) + "/" + encodeURIComponent(target.page);
     a.target = "_blank";
     a.rel = "noopener";
     a.textContent = "Run this page ↗";
-    slot.appendChild(document.createTextNode(" "));
     slot.appendChild(a);
   }
 
@@ -316,6 +317,13 @@ window.pgapp = (function () {
     if (!slot) return;
     var target = pgappEditTarget();
     if (!pgappEditTargetValid(target)) return;
+    slot.textContent = "";
+    slot.classList.add("pgapp-panel-card");
+
+    var title = document.createElement("div");
+    title.className = "pgapp-panel-card-title";
+    title.textContent = "Add Component";
+    slot.appendChild(title);
 
     var form = document.createElement("form");
     form.className = "pgapp-add-component-form";
@@ -344,7 +352,7 @@ window.pgapp = (function () {
     var addBtn = document.createElement("button");
     addBtn.type = "submit";
     addBtn.className = "pgapp-btn pgapp-btn-primary";
-    addBtn.textContent = "Add Component";
+    addBtn.textContent = "Add";
 
     [kindSel, labelInput, sourceInput, columnsInput, addBtn].forEach(function (el) {
       form.appendChild(el);
@@ -380,12 +388,30 @@ window.pgapp = (function () {
     });
   }
 
-  // Per-row Edit label / Edit columns / Delete buttons on the App
-  // Builder's draggable component list — appended as an extra <td>
-  // alongside the id/kind/ordinal columns already in the markup
-  // (`columns: id, kind, ordinal`, see examples/app_builder.pgapp). The
-  // ordinal column doubles as the `idx` the edit/delete routes expect,
-  // since `meta::sync_app` always re-derives ordinal from file order on
+  // One glyph per component kind, purely decorative (an APEX-Page-
+  // Designer-style visual cue in the component list) — falls back to a
+  // generic dot for anything not listed (DynamicAction has no wrapper
+  // and never shows up here; every other kind is covered).
+  var COMPONENT_KIND_ICONS = {
+    report: "▤",
+    form: "✎",
+    editable_table: "▦",
+    chart: "📈",
+    text: "¶",
+    link: "↗",
+    region: "▥",
+    action: "⚡",
+  };
+
+  // Restyles the App Builder's plain id/kind/ordinal table row (from
+  // `columns: id, kind, ordinal` in examples/app_builder.pgapp) into a
+  // compact list row: a kind icon, the component's own label (fetched
+  // once per row via a lightweight same-origin request, since the
+  // table itself only has kind/ordinal, not a title), an ordinal
+  // badge, and icon-only Edit label / Edit columns / Delete actions —
+  // replacing the earlier plain-text-button layout. The ordinal column
+  // doubles as the `idx` the edit/delete routes expect, since
+  // `meta::sync_app` always re-derives ordinal from file order on
   // every reload — it's never stale relative to the file.
   function bindComponentRowActions() {
     var tbodies = document.querySelectorAll(".pgapp-draggable-rows tbody");
@@ -399,12 +425,28 @@ window.pgapp = (function () {
           if (cells.length < 3) return;
           var kind = cells[1].textContent.trim();
           var idx = cells[2].textContent.trim();
+
+          var icon = document.createElement("span");
+          icon.className = "pgapp-component-kind-icon";
+          icon.title = kind;
+          icon.textContent = COMPONENT_KIND_ICONS[kind] || "•";
+          cells[1].textContent = "";
+          cells[1].className = "pgapp-component-label";
+          cells[1].appendChild(icon);
+          cells[1].appendChild(document.createTextNode(" " + kind));
+
+          cells[2].className = "pgapp-component-ordinal";
+          cells[2].textContent = "#" + idx;
+
           var actionsTd = document.createElement("td");
+          actionsTd.className = "pgapp-component-actions";
 
           var editLabelBtn = document.createElement("button");
           editLabelBtn.type = "button";
-          editLabelBtn.className = "pgapp-btn pgapp-btn-secondary";
-          editLabelBtn.textContent = "Edit label";
+          editLabelBtn.className = "pgapp-icon-btn";
+          editLabelBtn.title = "Edit label";
+          editLabelBtn.setAttribute("aria-label", "Edit label");
+          editLabelBtn.textContent = "✎";
           editLabelBtn.addEventListener("click", function () {
             pgappPrompt("New title/content for this component:", "").then(function (label) {
               if (label === null || label === "") return;
@@ -416,8 +458,10 @@ window.pgapp = (function () {
           if (kind === "report" || kind === "region" || kind === "editable_table") {
             var editColsBtn = document.createElement("button");
             editColsBtn.type = "button";
-            editColsBtn.className = "pgapp-btn pgapp-btn-secondary";
-            editColsBtn.textContent = "Edit columns";
+            editColsBtn.className = "pgapp-icon-btn";
+            editColsBtn.title = "Edit columns";
+            editColsBtn.setAttribute("aria-label", "Edit columns");
+            editColsBtn.textContent = "▤";
             editColsBtn.addEventListener("click", function () {
               pgappPrompt("New columns for this component, comma-separated:", "").then(function (columns) {
                 if (columns === null || columns === "") return;
@@ -429,8 +473,10 @@ window.pgapp = (function () {
 
           var deleteBtn = document.createElement("button");
           deleteBtn.type = "button";
-          deleteBtn.className = "pgapp-btn pgapp-btn-destructive";
-          deleteBtn.textContent = "Delete";
+          deleteBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
+          deleteBtn.title = "Delete";
+          deleteBtn.setAttribute("aria-label", "Delete");
+          deleteBtn.textContent = "✕";
           deleteBtn.addEventListener("click", function () {
             pgappConfirm("Delete this component? This can't be undone.").then(function (ok) {
               if (!ok) return;
