@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use crate::actions;
 use crate::item_types::{self, Registry};
-use crate::model::{AppDef, ComponentDef, EntityDef, FieldDef, FieldItem, FieldType, HtmlAttrs, QueryDef};
+use crate::model::{AppDef, ComponentDef, EntityDef, FieldDef, FieldItem, FieldType, HtmlAttrs, PreAction, QueryDef};
 
 fn slug(s: &str) -> String {
     let mut out = String::new();
@@ -488,6 +488,31 @@ fn resolve_item_types(
     Ok(serde_json::Value::Object(map))
 }
 
+/// Validates a `before_load`'s module name against the action registry
+/// (same check `ComponentDef::Action` gets) and turns it into the
+/// `{"name": ..., "config": ...}` shape `meta::load::decode_before_load`
+/// reads back; `None` becomes JSON `null`.
+fn before_load_json(
+    before_load: &Option<PreAction>,
+    action_registry: &actions::Registry,
+    owner_label: &str,
+) -> Result<serde_json::Value> {
+    match before_load {
+        None => Ok(serde_json::Value::Null),
+        Some(pre) => {
+            if !action_registry.contains_key(pre.name.as_str()) {
+                let known: Vec<&str> = action_registry.keys().copied().collect();
+                anyhow::bail!(
+                    "{owner_label} before_load calls unknown module '{}' (known: {})",
+                    pre.name,
+                    known.join(", ")
+                );
+            }
+            Ok(serde_json::json!({ "name": pre.name, "config": pre.config }))
+        }
+    }
+}
+
 /// Validates one page component and turns it into `(kind, config)` for
 /// storage. `known_query` reports whether a name is visible (page- or
 /// app-scoped) from the page this component lives on.
@@ -510,6 +535,7 @@ fn build_component_config(
             source_query,
             link_column,
             page_size,
+            before_load,
             ..
         } => {
             if !entity_ids.contains_key(entity) {
@@ -542,6 +568,8 @@ fn build_component_config(
                     })
                 }
             };
+            let before_load_json_val =
+                before_load_json(before_load, action_registry, &format!("{owner_label} report '{title}'"))?;
             Ok((
                 "report",
                 serde_json::json!({
@@ -551,6 +579,7 @@ fn build_component_config(
                     "source_query": source_query,
                     "link": link_json,
                     "page_size": page_size,
+                    "before_load": before_load_json_val,
                 }),
             ))
         }

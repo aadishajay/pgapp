@@ -43,7 +43,7 @@ use crate::icons::Icons;
 use crate::instance;
 use crate::item_types;
 use crate::meta::{self, Chrome, NavNode, RegionRows, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimePage};
-use crate::model::{FieldItem, HtmlAttrs};
+use crate::model::{FieldItem, HtmlAttrs, PreAction};
 use crate::render;
 use crate::theme::Theme;
 use query_engine::{bind_context, resolve_field_choices, resolve_regions, run_named_query_page, run_named_query_rows};
@@ -661,6 +661,40 @@ async fn asset(Path((_app, path)): Path<(String, String)>) -> Response {
     }
 }
 
+/// Runs a component's `before_load` action, if it has one, immediately
+/// before that component fetches its data — same registry and
+/// `ActionContext` a button-triggered `action` component uses, just
+/// invoked on every page load instead of a click. Failures are
+/// non-fatal (an unreachable third-party API shouldn't take the whole
+/// page down): the error is returned as text for the caller to surface
+/// as an inline warning, and the component still renders with whatever
+/// data already exists.
+async fn run_before_load(
+    state: &AppState,
+    data: &AppData,
+    page: &RuntimePage,
+    query: &HashMap<String, String>,
+    caller_key: &str,
+    pre: &PreAction,
+) -> Option<String> {
+    let module = match state.actions.get(pre.name.as_str()) {
+        Some(m) => m,
+        None => return Some(format!("before_load: action module '{}' is not registered (rebuild?)", pre.name)),
+    };
+    module
+        .run(ActionContext {
+            pool: &state.pool,
+            app: &data.app,
+            page,
+            config: &pre.config,
+            values: query,
+            caller_key,
+        })
+        .await
+        .err()
+        .map(|e| format!("before_load ({}): {e}", pre.name))
+}
+
 /// Renders one component into its HTML body, fetching whatever data it
 /// needs along the way.
 #[allow(clippy::too_many_arguments)]
@@ -701,7 +735,12 @@ async fn render_component(
             Ok(render::chart_html(title, chart_type, x, y, &rows, &data.chart_lib, html))
         }
 
-        RuntimeComponent::Report { title, entity, columns, source_query, link_column, page_size, html } => {
+        RuntimeComponent::Report { title, entity, columns, source_query, link_column, page_size, before_load, html } => {
+            let before_load_warning = match before_load {
+                Some(pre) => run_before_load(state, data, page, query, caller_key, pre).await,
+                None => None,
+            };
+
             let form_idx = sibling_form_idx(page, &entity.name);
             let p_after = format!("r{idx}_after");
             let p_before = format!("r{idx}_before");
@@ -765,7 +804,8 @@ async fn render_component(
                 (rp.rows, prev_href, next_href)
             };
 
-            let extras = report_extras(app, state, data, page_name, idx, &filters, auth_ctx).await?;
+            let mut extras = report_extras(app, state, data, page_name, idx, &filters, auth_ctx).await?;
+            extras.warning = before_load_warning;
 
             Ok(render::report_html(
                 app,
@@ -899,6 +939,7 @@ async fn report_extras(
         fcol: filters.col.as_ref().map(|(c, _)| c.clone()).unwrap_or_default(),
         fval: filters.col.as_ref().map(|(_, v)| v.clone()).unwrap_or_default(),
         views,
+        warning: None,
     })
 }
 

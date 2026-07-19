@@ -10,7 +10,7 @@ use super::types::{
     wrap_to_jsonb, LinkColumn, NavNode, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimeField,
     RuntimePage, RuntimeQuery,
 };
-use crate::model::{FieldItem, FieldType, HtmlAttrs};
+use crate::model::{FieldItem, FieldType, HtmlAttrs, PreAction};
 
 /// One piece of a named query's SQL text, as split by `tokenize_binds`:
 /// either literal SQL or a `:name` bind marker.
@@ -390,6 +390,20 @@ fn decode_field_html(config: &serde_json::Value) -> HashMap<String, HtmlAttrs> {
         .collect()
 }
 
+/// Decodes a report's `"before_load"` key — the inverse of
+/// `meta::sync::before_load_json`. Missing/null (no `before_load:` in
+/// the markup) decodes to `None`.
+fn decode_before_load(config: &serde_json::Value) -> Option<PreAction> {
+    let v = config.get("before_load")?;
+    if v.is_null() {
+        return None;
+    }
+    Some(PreAction {
+        name: v.get("name").and_then(|x| x.as_str())?.to_string(),
+        config: v.get("config").cloned().unwrap_or(serde_json::json!({})),
+    })
+}
+
 fn decode_item_types(v: &serde_json::Value) -> HashMap<String, FieldItem> {
     v.as_object()
         .into_iter()
@@ -450,6 +464,7 @@ fn decode_component(
                 source_query: config.get("source_query").and_then(|v| v.as_str()).map(String::from),
                 link_column,
                 page_size: config.get("page_size").and_then(|v| v.as_i64()).unwrap_or(20),
+                before_load: decode_before_load(&config),
                 html,
             })
         }

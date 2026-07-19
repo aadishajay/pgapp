@@ -764,12 +764,15 @@ pub struct ReportViewLink {
 }
 
 /// A report's toolbar state: current filter values plus the saved views
-/// visible to this user.
+/// visible to this user. `warning` carries a `before_load` action's
+/// error text, if it failed on this request — non-fatal, shown inline
+/// above the table rather than blocking the report from rendering.
 pub struct ReportExtras {
     pub q: String,
     pub fcol: String,
     pub fval: String,
     pub views: Vec<ReportViewLink>,
+    pub warning: Option<String>,
 }
 
 /// A read-only, paginated table — the `Report` component. Edit/delete
@@ -806,6 +809,13 @@ pub fn report_html(
         ));
     }
     body.push_str("</div>");
+
+    if let Some(warning) = &extras.warning {
+        body.push_str(&format!(
+            r#"<div class="pgapp-alert pgapp-alert-error">{}</div>"#,
+            escape(warning)
+        ));
+    }
 
     // Search toolbar: a GET form back to the page, so filters live in
     // the URL (shareable, and exactly what a saved view bookmarks). The

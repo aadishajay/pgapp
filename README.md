@@ -352,6 +352,46 @@ query, there's no SQL text an app author could get wrong here. Two
 different visitors populating a collection under the identical name
 see two disjoint sets of rows.
 
+A collection only ever holds what the last action run into it — nothing
+refreshes it automatically unless a `report`'s `before_load` says so
+(see below).
+
+## Pre-load actions
+
+A `report` may declare `before_load:`, which runs a server-side action
+module automatically, on every request, immediately before that report
+fetches its rows — the same `ServerAction` registry and `ActionContext`
+an `action` component uses, just triggered by a page load instead of a
+click:
+
+```text
+entity "products" from collection "products" {
+  field name: text
+  field price: text
+}
+
+report "Products" of products {
+  columns: name, price
+  before_load: http_request (
+    url: "https://api.example.com/products",
+    collection: "products"
+  )
+}
+```
+
+This is what turns a collection from "shows whatever the last button
+click captured" into "always shows fresh data" — no separate refresh
+click needed, and no dynamic-action wiring either. `before_load` isn't
+limited to `http_request`; it's any registered action module, so a
+`call_function` that recomputes something server-side works the same
+way.
+
+**Failures are non-fatal.** An unreachable third-party API shouldn't
+take the whole page down: if `before_load` fails, the report still
+renders with whatever data already exists (from an earlier successful
+run, or empty if there's never been one), with the error shown as an
+inline warning above the table instead of blocking the page.
+
 ## Deployment checks
 
 On every sync, each table-backed entity's physical table is verified

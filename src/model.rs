@@ -88,6 +88,22 @@ pub struct EntityDef {
     pub source_collection: Option<String>,
 }
 
+/// An action run automatically, server-side, immediately before a
+/// component fetches its data — e.g. an `http_request` call that
+/// refreshes a collection right before the report reading it renders,
+/// so a page never shows stale data without someone manually clicking
+/// a "refresh" button first. Reuses the same `ServerAction` registry
+/// and `ActionContext` as a regular `action` component; only the
+/// trigger differs (page load vs. a click). A failure here is
+/// non-fatal — see `server::render_component`'s Report branch — the
+/// component still renders with whatever data already exists, plus an
+/// inline warning.
+#[derive(Debug, Clone)]
+pub struct PreAction {
+    pub name: String,
+    pub config: serde_json::Value,
+}
+
 /// A named, reusable SQL query. Declared at app scope (visible to every
 /// page) or nested inside one `page { }` block (visible only there,
 /// shadowing an app-scoped query of the same name). `sql` may contain
@@ -168,7 +184,10 @@ pub enum ComponentDef {
     /// makes one column a link to another page (forwarding the row's id
     /// plus any extra parameters). Edit/delete actions appear on each
     /// row automatically when the same page also has a `Form` bound to
-    /// the same entity (see `server.rs`'s `sibling_form`).
+    /// the same entity (see `server.rs`'s `sibling_form`). `before_load`,
+    /// when set, runs that action every time this report is about to
+    /// fetch its rows — typically an `http_request` refreshing the
+    /// collection a collection-backed entity reads from.
     Report {
         title: String,
         entity: String,
@@ -176,6 +195,7 @@ pub enum ComponentDef {
         source_query: Option<String>,
         link_column: Option<LinkColumn>,
         page_size: i64,
+        before_load: Option<PreAction>,
         html: HtmlAttrs,
     },
     /// A create/edit form for one entity. Renders blank (create mode) by

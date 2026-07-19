@@ -44,6 +44,7 @@
 //!             | "source" ":" "query" Ident
 //!             | "link" ":" Ident "->" "page" Ident ( "(" paramlist ")" )?
 //!             | "page_size" ":" Number
+//!             | "before_load" ":" Ident itemconfig?
 //!
 //! form      := "form" String "of" Ident "{" formprop* "}"
 //! formprop  := "fields" ":" identlist
@@ -117,7 +118,7 @@ use anyhow::{bail, Context, Result};
 
 use crate::model::{
     AppDef, ComponentDef, DaOp, EntityDef, FieldDef, FieldItem, FieldType, HtmlAttrs, LinkColumn,
-    NavItem, PageDef, QueryDef, CHART_TYPES,
+    NavItem, PageDef, PreAction, QueryDef, CHART_TYPES,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -692,6 +693,7 @@ impl Parser {
         let mut source_query = None;
         let mut link_column = None;
         let mut page_size: i64 = 20;
+        let mut before_load = None;
         while !self.at_symbol('}') {
             let prop = self.expect_ident()?;
             self.expect_symbol(':')?;
@@ -721,6 +723,15 @@ impl Parser {
                         .parse()
                         .with_context(|| format!("invalid page_size '{n}' on report '{title}'"))?;
                 }
+                "before_load" => {
+                    let name = self.expect_ident()?;
+                    let config = if self.at_symbol('(') {
+                        self.parse_item_config()?
+                    } else {
+                        serde_json::json!({})
+                    };
+                    before_load = Some(PreAction { name, config });
+                }
                 other => bail!("unknown report property '{other}' (line {})", self.cur_line()),
             }
         }
@@ -733,6 +744,7 @@ impl Parser {
             source_query,
             link_column,
             page_size,
+            before_load,
             html: HtmlAttrs::default(),
         })
     }

@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::model::{FieldItem, HtmlAttrs};
+use crate::model::{FieldItem, HtmlAttrs, PreAction};
 
 /// A named query, compiled at load time: `sql` already uses positional
 /// `$N::TYPE` parameters, and `bind_names[i]` is the bind context key
@@ -84,6 +84,10 @@ pub enum RuntimeComponent {
         source_query: Option<String>,
         link_column: Option<LinkColumn>,
         page_size: i64,
+        /// Runs automatically, server-side, immediately before this
+        /// report fetches its rows on every request — see
+        /// `model::PreAction`.
+        before_load: Option<PreAction>,
         html: HtmlAttrs,
     },
     Form {
