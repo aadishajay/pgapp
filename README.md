@@ -24,9 +24,9 @@ registered `.pgapp` file) — there's no lighter-weight mode than this,
 but each step is one command:
 
 ```bash
-pgapp instance init                                   # once per Postgres database
-pgapp workspace create <dbname> --schema <name>       # once per schema (creates it if missing)
-pgapp app create <dbname> --workspace <slug>
+pgapp instance init                          # once, ever — one instance per machine
+pgapp workspace create --schema <name>       # once per schema (creates it if missing)
+pgapp app create --workspace <slug>
 ```
 
 `instance init` prompts for a superuser-capable connection string, the
@@ -39,7 +39,7 @@ directory) the same way `pgapp new` does, then registers it into the
 workspace you picked and prints the exact next command:
 
 ```bash
-pgapp run <generated-file>.pgapp --instance <dbname> --workspace <slug>
+pgapp run <generated-file>.pgapp --workspace <slug>
 ```
 
 It prints the app's URL — `http://127.0.0.1:8080/<workspace>/<slug>` —
@@ -244,7 +244,7 @@ app by name (Terraform-shaped, no `include`, no import graph):
 - The same name declared in two files is a startup error naming both.
 
 `examples/helpdesk-modular/` is the helpdesk app split this way — run
-it with `pgapp run examples/helpdesk-modular --instance <dbname>
+it with `pgapp run examples/helpdesk-modular
 --workspace <slug>`; it syncs to the same metadata as the single-file
 version.
 
@@ -255,7 +255,7 @@ operations, facilities, compliance) across 15 files under one
 `app.pgapp` — every entity gets a list+form, detail, and quick-edit
 page, plus 12 module dashboards, cross-module reports, and admin
 pages. Seed it with `examples/nexus-erp/seed.sql` after the first sync
-(run `pgapp run examples/nexus-erp --instance <dbname> --workspace
+(run `pgapp run examples/nexus-erp --workspace
 <slug>` first so the tables exist, then `psql "$DATABASE_URL" -v
 schema=<workspace_schema> -f examples/nexus-erp/seed.sql`). It's also
 the fixture used to
@@ -866,7 +866,7 @@ itself, distinct from `pgapp_meta`'s per-app metadata) is the durable
 list of `(slug, markup_path, workspace_id, data_schema, enabled)` rows,
 unique on `(workspace_id, slug)` rather than on `slug` alone — a slug
 only has to be unique *within* its own workspace, matching the URL
-scheme above. `pgapp run <path> --instance <dbname> --workspace <slug>`
+scheme above. `pgapp run <path> --workspace <slug>`
 registers (or re-points) one slug into that workspace and then serves
 *every enabled row across every workspace in the instance*, not just
 that one — so pointing the server at a new app one run adds it
@@ -874,23 +874,25 @@ alongside whatever was already registered, without needing to name
 every app again each time:
 
 ```bash
-pgapp run helpdesk.pgapp --instance mydb --workspace erp   # registers + serves "helpdesk"
-pgapp run inventory.pgapp --instance mydb --workspace erp  # registers "inventory" too; both now serve
-pgapp app list mydb   # slug  enabled/disabled  name  workspace=...  schema=...  markup_path, one per line
-pgapp app destroy mydb inventory --soft   # disables it — helpdesk keeps serving
+pgapp run helpdesk.pgapp --workspace erp   # registers + serves "helpdesk"
+pgapp run inventory.pgapp --workspace erp  # registers "inventory" too; both now serve
+pgapp app list   # slug  enabled/disabled  name  workspace=...  schema=...  markup_path, one per line
+pgapp app destroy inventory --soft   # disables it — helpdesk keeps serving
 ```
 
 If the same slug happens to be registered in more than one workspace,
-anything that identifies an app by bare slug alone (`app destroy`,
-`secret ... --app <slug>`) needs `--workspace <slug>` to say which one
-— it errors out naming every workspace that slug matches rather than
-guessing.
+`app destroy <slug>` needs `--workspace <slug>` to say which one — it
+errors out naming every workspace that slug matches rather than
+guessing. `secret ... --app <slug>` has no `--workspace` fallback (it's
+mutually exclusive with `--app`), so an ambiguous slug there just
+errors — give the app a workspace-unique slug if you need to
+secret-scope it.
 
 A single `pgapp run` invocation can also register several apps at once:
 if the given path is a directory containing only subdirectories (no
 loose `.pgapp` files of its own), each subdirectory is loaded as an
 independent app, slugged from its own declared name — `pgapp run
-workspace-dir/ --instance mydb --workspace erp` where
+workspace-dir/ --workspace erp` where
 `workspace-dir/helpdesk/` and `workspace-dir/inventory/` each look like
 a normal single-app directory (see "Scaffolding a new app"), and both
 land in the same `erp` Postgres workspace/schema. A directory with any
@@ -912,7 +914,7 @@ sends one app's token to another's routes, and `pgapp_meta.sessions`/
 one entity, one page with the classic Report+Form CRUD pattern, a nav
 link to it. Both modes are pure file scaffolders: neither touches a
 database, so the generated `.pgapp` file still needs registering into a
-workspace (`pgapp app create`, or `pgapp run --instance --workspace` —
+workspace (`pgapp app create`, or `pgapp run --workspace` —
 see "Instance mode" below) before it's actually served:
 
 ```bash
@@ -925,7 +927,7 @@ pgapp new Inventory --dir --theme vivid    # a directory scaffold instead
 pgapp create
 ```
 
-`pgapp app create <dbname> [--workspace <slug>]` runs this same
+`pgapp app create [--workspace <slug>]` runs this same
 interactive scaffold and registers the result into a workspace in one
 step — the more direct path for anything beyond scripts/CI (see
 "Instance mode").
@@ -944,6 +946,14 @@ dedicated `pgapp_admin` Postgres role, and every app registered into
 exactly one workspace's own schema (a team's own credentials, different
 access grants — not just a separate `pgapp_control` row). There's no
 lighter-weight, workspace-less way to run pgapp.
+
+There is exactly **one instance, globally, per machine** (technically
+per `PGAPP_HOME` — see below) — not one per database. `pgapp instance
+init` refuses if one is already set up (`pgapp instance destroy` first
+if you want to point at a different database), and every other
+instance/workspace/app/secret/run command needs no `<dbname>` argument
+at all: there's nothing to disambiguate, so none of the examples below
+ever pass one.
 
 The commands below assume `pgapp` is installed (`cargo install --path
 .` — see "Quickstart").
@@ -970,9 +980,10 @@ schemas, other applications' tables) is read, altered, or dropped by
   one-way hash can't be used to reconnect, so every later command reads
   it fresh from `PGAPP_ADMIN_DB_PASSWORD`.
 - The CLI admin password *is* stored, but only as an argon2 hash, in
-  `~/.pgapp/instances/<dbname>.json` (`0600`) — it just gates who's
-  allowed to run instance/workspace/app commands against this instance
-  at all, checked interactively (or via `PGAPP_CLI_ADMIN_PASSWORD` for
+  the single instance file `~/.pgapp/instance.json` (`0600`, override
+  the base directory with `PGAPP_HOME`) — it just gates who's allowed
+  to run instance/workspace/app commands against this instance at all,
+  checked interactively (or via `PGAPP_CLI_ADMIN_PASSWORD` for
   scripts), and has nothing to do with Postgres auth.
 
 **Workspace** = `(schema, slug)` — `schema` is the actual Postgres
@@ -981,7 +992,7 @@ use to refer to it in every later command (`--workspace <slug>`) and
 defaults to the schema name if you don't give one:
 
 ```bash
-pgapp workspace create <dbname> [--schema <name>] [--slug <slug>]
+pgapp workspace create [--schema <name>] [--slug <slug>]
 ```
 
 Whether `schema` is treated as new or existing is **auto-detected**
@@ -1000,12 +1011,12 @@ unmodified regardless of which workspace it's registered into.
 
 **App** = `(workspace, app slug)` — `workspace` says which workspace's
 schema the app's tables live in; `app slug` is the app's own URL
-identifier (`/<slug>/...`, unique across the instance) and defaults to
-a slugified version of the app name you enter (`"My Project"` →
-`my_project`) if you don't give one:
+identifier (`/<workspace>/<slug>/...`, unique within that workspace,
+not instance-wide) and defaults to a slugified version of the app name
+you enter (`"My Project"` → `my_project`) if you don't give one:
 
 ```bash
-pgapp app create <dbname> [--workspace <slug>] [--slug <app-slug>]
+pgapp app create [--workspace <slug>] [--slug <app-slug>]
 ```
 
 Same prompts as `pgapp new`'s interactive flow (name, theme, file vs.
@@ -1015,27 +1026,29 @@ and every other enabled app across the whole instance, same "the
 registry decides what's served" rule as multi-app routing:
 
 ```bash
-pgapp run <file>.pgapp --instance <dbname> [--workspace <slug>]
+pgapp run <file>.pgapp [--workspace <slug>]
 ```
 
 **Destroy**, for all three, always needs the CLI admin password first:
 
-- `pgapp instance destroy <dbname>` — always a hard delete: drops
-  every workspace schema/role pgapp itself created, `pgapp_meta`/
+- `pgapp instance destroy` — always a hard delete: drops every
+  workspace schema/role pgapp itself created, `pgapp_meta`/
   `pgapp_control`, the `pgapp_admin` role, and the local instance file.
   Asks for a superuser connection fresh (never stored) and requires
   typing the database name to confirm.
-- `pgapp workspace destroy <dbname> <slug> [--hard|--soft]` — soft
-  just disables the registry row (schema/data untouched, reversible);
-  hard drops the schema and, if pgapp created it, its owning role too
-  (again via a fresh superuser connection) — refuses without an extra
-  typed confirmation if apps are still registered in it.
-- `pgapp app destroy <dbname> <slug> [--hard|--soft]` — soft disables;
-  hard drops its entity tables and `pgapp_meta` rows (using
-  `pgapp_admin`'s own connection — it already owns whatever it created).
+- `pgapp workspace destroy <slug> [--hard|--soft]` — soft just disables
+  the registry row (schema/data untouched, reversible); hard drops the
+  schema and, if pgapp created it, its owning role too (again via a
+  fresh superuser connection) — refuses without an extra typed
+  confirmation if apps are still registered in it.
+- `pgapp app destroy <slug> [--workspace <slug>] [--hard|--soft]` —
+  soft disables; hard drops its entity tables and `pgapp_meta` rows
+  (using `pgapp_admin`'s own connection — it already owns whatever it
+  created). `--workspace` disambiguates if that slug happens to be
+  registered in more than one workspace (see "Multi-app routing").
 
-`pgapp workspace list <dbname>` and `pgapp app list <dbname>` show
-what's currently registered.
+`pgapp workspace list` and `pgapp app list` show what's currently
+registered.
 
 ## Secrets
 
@@ -1044,9 +1057,9 @@ token — that isn't user-typed and shouldn't sit in plaintext in the
 markup file. Managed with the same instance-mode CLI:
 
 ```bash
-pgapp secret set <dbname> <name> (--workspace <slug> | --app <slug>)
-pgapp secret list <dbname> (--workspace <slug> | --app <slug>)
-pgapp secret rm <dbname> <name> (--workspace <slug> | --app <slug>)
+pgapp secret set <name> (--workspace <slug> | --app <slug>)
+pgapp secret list (--workspace <slug> | --app <slug>)
+pgapp secret rm <name> (--workspace <slug> | --app <slug>)
 ```
 
 `set` prompts for the value interactively rather than taking it as an

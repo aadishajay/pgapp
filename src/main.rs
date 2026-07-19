@@ -29,13 +29,13 @@ fn print_usage() {
     println!();
     println!("usage:");
     println!("  pgapp new|create [<AppName>] [path] [--dir] [--theme <name>]   scaffold a .pgapp file");
-    println!("  pgapp instance init | destroy <dbname>                        one Postgres database per instance");
-    println!("  pgapp workspace create <dbname> [--schema <name>] [--slug <slug>]   a schema an app's tables live in");
-    println!("  pgapp workspace destroy|list <dbname>");
-    println!("  pgapp app create <dbname> [--workspace <slug>] [--slug <app-slug>]   scaffold/register an app in a workspace");
-    println!("  pgapp app destroy|list <dbname>");
-    println!("  pgapp secret set|list|rm <dbname> <name> (--workspace <slug> | --app <slug>)");
-    println!("  pgapp run <file>.pgapp --instance <dbname> [--workspace <slug>]   serve every registered app");
+    println!("  pgapp instance init | destroy                                 one instance, globally, per machine");
+    println!("  pgapp workspace create [--schema <name>] [--slug <slug>]      a schema an app's tables live in");
+    println!("  pgapp workspace destroy <slug> | list");
+    println!("  pgapp app create [--workspace <slug>] [--slug <app-slug>]     scaffold/register an app in a workspace");
+    println!("  pgapp app destroy <slug> | list");
+    println!("  pgapp secret set|list|rm <name> (--workspace <slug> | --app <slug>)");
+    println!("  pgapp run <file>.pgapp [--workspace <slug>]                   serve every registered app");
     println!();
     println!("Every app lives in exactly one workspace's schema — see README's \"Instance mode\" section.");
     println!("Start with `pgapp instance init`.");
@@ -281,27 +281,26 @@ async fn connect_with_auto_create(opts: PgConnectOptions) -> anyhow::Result<PgPo
 async fn cmd_instance(args: &[String]) -> anyhow::Result<()> {
     match args.first().map(|s| s.as_str()) {
         Some("init") => instance_init().await,
-        Some("destroy") => {
-            let dbname = args
-                .get(1)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("usage: pgapp instance destroy <dbname>"))?;
-            instance_destroy(&dbname).await
-        }
+        Some("destroy") => instance_destroy().await,
         _ => {
-            println!("usage: pgapp instance init | pgapp instance destroy <dbname>");
+            println!("usage: pgapp instance init | pgapp instance destroy");
             Ok(())
         }
     }
 }
 
-/// `pgapp instance init` — one pgapp instance per target database:
+/// `pgapp instance init` — sets up *the* pgapp instance (there's
+/// exactly one, globally, per machine — see `src/instance.rs`):
 /// creates a dedicated `pgapp_admin` Postgres role the server operates
 /// as from then on, and writes the local instance file
-/// (`~/.pgapp/instances/<dbname>.json`) that gates future
-/// instance/workspace/app commands. See `src/instance.rs` for exactly
-/// what is and isn't persisted.
+/// (`~/.pgapp/instance.json`) that gates future instance/workspace/app
+/// commands. Refuses outright if one is already set up — `pgapp
+/// instance destroy` first if you want to point at a different
+/// database.
 async fn instance_init() -> anyhow::Result<()> {
+    if instance::exists()? {
+        anyhow::bail!("a pgapp instance is already set up on this machine — run `pgapp instance destroy` first if you want to replace it");
+    }
     println!("Let's set up a pgapp instance.");
     println!();
     let conn = scaffold::prompt(
@@ -362,19 +361,20 @@ async fn instance_init() -> anyhow::Result<()> {
     println!("pgapp instance '{dbname}' is ready.");
     println!("Every future instance/workspace/app/run command against it needs:");
     println!("  export PGAPP_ADMIN_DB_PASSWORD=<the password you just set for '{}'>", instance::ADMIN_ROLE);
-    println!("Next: `pgapp workspace create {dbname}` to create a schema for your first app's tables.");
+    println!("Next: `pgapp workspace create` to create a schema for your first app's tables.");
     Ok(())
 }
 
-/// `pgapp instance destroy <dbname>` — always a hard delete: drops
-/// every workspace schema/role pgapp itself created, pgapp_meta/
+/// `pgapp instance destroy` — always a hard delete: drops every
+/// workspace schema/role pgapp itself created, pgapp_meta/
 /// pgapp_control, the `pgapp_admin` role, and the local instance file.
 /// Needs a superuser-capable connection supplied fresh (never the
 /// stored `pgapp_admin` credential, which can't drop its own role or
 /// schemas it doesn't own).
-async fn instance_destroy(dbname: &str) -> anyhow::Result<()> {
-    let inst = instance::load(dbname)?;
+async fn instance_destroy() -> anyhow::Result<()> {
+    let inst = instance::load()?;
     instance::verify_operator(&inst)?;
+    let dbname = &inst.dbname;
 
     println!("This permanently destroys pgapp instance '{dbname}':");
     println!("every workspace schema/role pgapp created, pgapp_meta/pgapp_control, and the '{}' role.", inst.admin_role);
@@ -390,7 +390,7 @@ async fn instance_destroy(dbname: &str) -> anyhow::Result<()> {
         .context("failed to connect with the given credentials")?;
 
     let confirm = scaffold::prompt_required(&format!("Type the database name '{dbname}' to confirm"))?;
-    if confirm != dbname {
+    if &confirm != dbname {
         anyhow::bail!("confirmation did not match '{dbname}' — aborted, nothing was destroyed");
     }
 
@@ -419,62 +419,41 @@ async fn instance_destroy(dbname: &str) -> anyhow::Result<()> {
     .await;
     try_drop(&pool, &format!("drop role if exists {}", inst.admin_role), &format!("role '{}'", inst.admin_role)).await;
 
-    instance::delete_file(dbname)?;
+    instance::delete_file()?;
     println!("Instance '{dbname}' destroyed.");
     Ok(())
 }
 
 async fn cmd_workspace(args: &[String]) -> anyhow::Result<()> {
     match args.first().map(|s| s.as_str()) {
-        Some("create") => {
-            let dbname = args
-                .get(1)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("usage: pgapp workspace create <dbname> [--schema <name>] [--slug <slug>]"))?;
-            workspace_create(&dbname, flag(args, "--schema"), flag(args, "--slug"), flag(args, "--password")).await
-        }
+        Some("create") => workspace_create(flag(args, "--schema"), flag(args, "--slug"), flag(args, "--password")).await,
         Some("destroy") => {
-            let dbname = args
+            let slug = args
                 .get(1)
                 .cloned()
-                .ok_or_else(|| anyhow::anyhow!("usage: pgapp workspace destroy <dbname> <slug> [--hard|--soft]"))?;
-            let slug = args
-                .get(2)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("usage: pgapp workspace destroy <dbname> <slug> [--hard|--soft]"))?;
+                .ok_or_else(|| anyhow::anyhow!("usage: pgapp workspace destroy <slug> [--hard|--soft]"))?;
             let hard = args.iter().any(|a| a == "--hard");
             let soft = args.iter().any(|a| a == "--soft");
-            workspace_destroy(&dbname, &slug, hard, soft).await
+            workspace_destroy(&slug, hard, soft).await
         }
-        Some("list") => {
-            let dbname = args
-                .get(1)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("usage: pgapp workspace list <dbname>"))?;
-            workspace_list(&dbname).await
-        }
+        Some("list") => workspace_list().await,
         _ => {
-            println!("usage: pgapp workspace create|destroy|list <dbname> ...");
+            println!("usage: pgapp workspace create|destroy|list ...");
             Ok(())
         }
     }
 }
 
-/// `pgapp workspace create <dbname> [--schema <name>] [--slug <slug>]`
-/// — `schema` is the actual Postgres schema (existing or new; if
+/// `pgapp workspace create [--schema <name>] [--slug <slug>]` —
+/// `schema` is the actual Postgres schema (existing or new; if
 /// omitted, prompted for); `slug` is just the short name later
 /// commands use to refer to this workspace (`--workspace <slug>`) —
 /// optional, defaults to the schema name. Whether the schema is
 /// treated as "new" or "existing" is auto-detected (`pg_namespace`),
 /// not asked: if it doesn't exist yet, pgapp creates it (and an owning
 /// role for it); if it does, pgapp only asks to be granted access.
-async fn workspace_create(
-    dbname: &str,
-    schema_arg: Option<String>,
-    slug_arg: Option<String>,
-    password_arg: Option<String>,
-) -> anyhow::Result<()> {
-    let inst = instance::load(dbname)?;
+async fn workspace_create(schema_arg: Option<String>, slug_arg: Option<String>, password_arg: Option<String>) -> anyhow::Result<()> {
+    let inst = instance::load()?;
     instance::verify_operator(&inst)?;
     let pool = instance::connect_as_admin(&inst).await?;
 
@@ -551,8 +530,8 @@ async fn workspace_create(
     Ok(())
 }
 
-async fn workspace_destroy(dbname: &str, slug: &str, hard: bool, soft: bool) -> anyhow::Result<()> {
-    let inst = instance::load(dbname)?;
+async fn workspace_destroy(slug: &str, hard: bool, soft: bool) -> anyhow::Result<()> {
+    let inst = instance::load()?;
     instance::verify_operator(&inst)?;
     let pool = instance::connect_as_admin(&inst).await?;
 
@@ -603,13 +582,13 @@ async fn workspace_destroy(dbname: &str, slug: &str, hard: bool, soft: bool) -> 
     Ok(())
 }
 
-async fn workspace_list(dbname: &str) -> anyhow::Result<()> {
-    let inst = instance::load(dbname)?;
+async fn workspace_list() -> anyhow::Result<()> {
+    let inst = instance::load()?;
     instance::verify_operator(&inst)?;
     let pool = instance::connect_as_admin(&inst).await?;
     let workspaces = control::list_workspaces(&pool).await?;
     if workspaces.is_empty() {
-        println!("no workspaces registered yet — `pgapp workspace create {dbname}`");
+        println!("no workspaces registered yet — `pgapp workspace create`");
         return Ok(());
     }
     for ws in workspaces {
@@ -627,11 +606,11 @@ async fn workspace_list(dbname: &str) -> anyhow::Result<()> {
 /// The "if no clue, list available workspaces and ask to choose"
 /// picker — used by both `pgapp app create` and `pgapp run` when
 /// `--workspace` wasn't given.
-async fn pick_workspace(pool: &PgPool, dbname: &str) -> anyhow::Result<control::WorkspaceRow> {
+async fn pick_workspace(pool: &PgPool) -> anyhow::Result<control::WorkspaceRow> {
     let workspaces = control::list_workspaces(pool).await?;
     let enabled: Vec<_> = workspaces.into_iter().filter(|w| w.enabled).collect();
     if enabled.is_empty() {
-        anyhow::bail!("no workspaces registered yet — run `pgapp workspace create {dbname}` first");
+        anyhow::bail!("no workspaces registered yet — run `pgapp workspace create` first");
     }
     println!("Available workspaces:");
     for (i, ws) in enabled.iter().enumerate() {
@@ -651,49 +630,33 @@ async fn pick_workspace(pool: &PgPool, dbname: &str) -> anyhow::Result<control::
 
 async fn cmd_app(args: &[String]) -> anyhow::Result<()> {
     match args.first().map(|s| s.as_str()) {
-        Some("create") => {
-            let dbname = args
-                .get(1)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("usage: pgapp app create <dbname> [--workspace <slug>] [--slug <app-slug>]"))?;
-            app_create(&dbname, flag(args, "--workspace"), flag(args, "--slug")).await
-        }
+        Some("create") => app_create(flag(args, "--workspace"), flag(args, "--slug")).await,
         Some("destroy") => {
-            let dbname = args
+            let slug = args
                 .get(1)
                 .cloned()
-                .ok_or_else(|| anyhow::anyhow!("usage: pgapp app destroy <dbname> <slug> [--workspace <slug>] [--hard|--soft]"))?;
-            let slug = args
-                .get(2)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("usage: pgapp app destroy <dbname> <slug> [--workspace <slug>] [--hard|--soft]"))?;
+                .ok_or_else(|| anyhow::anyhow!("usage: pgapp app destroy <slug> [--workspace <slug>] [--hard|--soft]"))?;
             let hard = args.iter().any(|a| a == "--hard");
             let soft = args.iter().any(|a| a == "--soft");
-            app_destroy(&dbname, &slug, flag(args, "--workspace"), hard, soft).await
+            app_destroy(&slug, flag(args, "--workspace"), hard, soft).await
         }
-        Some("list") => {
-            let dbname = args
-                .get(1)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("usage: pgapp app list <dbname>"))?;
-            app_list(&dbname).await
-        }
+        Some("list") => app_list().await,
         _ => {
-            println!("usage: pgapp app create|destroy|list <dbname> ...");
+            println!("usage: pgapp app create|destroy|list ...");
             Ok(())
         }
     }
 }
 
-/// `pgapp app list <dbname>` — every app registered across every
-/// workspace in this instance (including disabled ones).
-async fn app_list(dbname: &str) -> anyhow::Result<()> {
-    let inst = instance::load(dbname)?;
+/// `pgapp app list` — every app registered across every workspace in
+/// this instance (including disabled ones).
+async fn app_list() -> anyhow::Result<()> {
+    let inst = instance::load()?;
     instance::verify_operator(&inst)?;
     let pool = instance::connect_as_admin(&inst).await?;
     let apps = control::list_all(&pool).await?;
     if apps.is_empty() {
-        println!("no apps registered yet — `pgapp app create {dbname}`");
+        println!("no apps registered yet — `pgapp app create`");
         return Ok(());
     }
     for a in apps {
@@ -710,28 +673,23 @@ async fn app_list(dbname: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `pgapp secret set|list|rm <dbname> ...` — a workspace- or app-scoped
-/// named secret, referenced from markup as `{{secret.<name>}}` (see
+/// `pgapp secret set|list|rm ...` — a workspace- or app-scoped named
+/// secret, referenced from markup as `{{secret.<name>}}` (see
 /// `src/secrets.rs`). Exactly one of `--workspace <slug>` / `--app
 /// <slug>` picks the scope; an app-scoped secret shadows a workspace-
 /// scoped one of the same name at resolve time.
 async fn cmd_secret(args: &[String]) -> anyhow::Result<()> {
-    const USAGE: &str = "usage: pgapp secret set|list|rm <dbname> <name> (--workspace <slug> | --app <slug>) [--value <value>]\n\
+    const USAGE: &str = "usage: pgapp secret set|list|rm <name> (--workspace <slug> | --app <slug>) [--value <value>]\n\
                           (\"set\"'s <name> is required; \"list\" takes no name — omit it to list every secret in scope)";
     match args.first().map(|s| s.as_str()) {
         Some("set") => {
-            let dbname = args.get(1).cloned().ok_or_else(|| anyhow::anyhow!(USAGE))?;
-            let name = args.get(2).cloned().ok_or_else(|| anyhow::anyhow!(USAGE))?;
-            secret_set(&dbname, &name, flag(args, "--workspace"), flag(args, "--app"), flag(args, "--value")).await
+            let name = args.get(1).cloned().ok_or_else(|| anyhow::anyhow!(USAGE))?;
+            secret_set(&name, flag(args, "--workspace"), flag(args, "--app"), flag(args, "--value")).await
         }
-        Some("list") => {
-            let dbname = args.get(1).cloned().ok_or_else(|| anyhow::anyhow!(USAGE))?;
-            secret_list(&dbname, flag(args, "--workspace"), flag(args, "--app")).await
-        }
+        Some("list") => secret_list(flag(args, "--workspace"), flag(args, "--app")).await,
         Some("rm") => {
-            let dbname = args.get(1).cloned().ok_or_else(|| anyhow::anyhow!(USAGE))?;
-            let name = args.get(2).cloned().ok_or_else(|| anyhow::anyhow!(USAGE))?;
-            secret_rm(&dbname, &name, flag(args, "--workspace"), flag(args, "--app")).await
+            let name = args.get(1).cloned().ok_or_else(|| anyhow::anyhow!(USAGE))?;
+            secret_rm(&name, flag(args, "--workspace"), flag(args, "--app")).await
         }
         _ => {
             println!("{USAGE}");
@@ -750,7 +708,7 @@ async fn secret_scope(pool: &PgPool, workspace_arg: Option<String>, app_arg: Opt
         (Some(slug), None) => {
             let ws = control::find_workspace(pool, &slug)
                 .await?
-                .ok_or_else(|| anyhow::anyhow!("no workspace '{slug}' registered (see `pgapp workspace list <dbname>`)"))?;
+                .ok_or_else(|| anyhow::anyhow!("no workspace '{slug}' registered (see `pgapp workspace list`)"))?;
             Ok(secrets::Scope::Workspace(ws.id))
         }
         (None, Some(slug)) => {
@@ -768,13 +726,12 @@ async fn secret_scope(pool: &PgPool, workspace_arg: Option<String>, app_arg: Opt
 }
 
 async fn secret_set(
-    dbname: &str,
     name: &str,
     workspace_arg: Option<String>,
     app_arg: Option<String>,
     value_arg: Option<String>,
 ) -> anyhow::Result<()> {
-    let inst = instance::load(dbname)?;
+    let inst = instance::load()?;
     instance::verify_operator(&inst)?;
     let pool = instance::connect_as_admin(&inst).await?;
     let scope = secret_scope(&pool, workspace_arg, app_arg).await?;
@@ -792,8 +749,8 @@ async fn secret_set(
     Ok(())
 }
 
-async fn secret_list(dbname: &str, workspace_arg: Option<String>, app_arg: Option<String>) -> anyhow::Result<()> {
-    let inst = instance::load(dbname)?;
+async fn secret_list(workspace_arg: Option<String>, app_arg: Option<String>) -> anyhow::Result<()> {
+    let inst = instance::load()?;
     instance::verify_operator(&inst)?;
     let pool = instance::connect_as_admin(&inst).await?;
     let scope = secret_scope(&pool, workspace_arg, app_arg).await?;
@@ -808,8 +765,8 @@ async fn secret_list(dbname: &str, workspace_arg: Option<String>, app_arg: Optio
     Ok(())
 }
 
-async fn secret_rm(dbname: &str, name: &str, workspace_arg: Option<String>, app_arg: Option<String>) -> anyhow::Result<()> {
-    let inst = instance::load(dbname)?;
+async fn secret_rm(name: &str, workspace_arg: Option<String>, app_arg: Option<String>) -> anyhow::Result<()> {
+    let inst = instance::load()?;
     instance::verify_operator(&inst)?;
     let pool = instance::connect_as_admin(&inst).await?;
     let scope = secret_scope(&pool, workspace_arg, app_arg).await?;
@@ -821,22 +778,22 @@ async fn secret_rm(dbname: &str, name: &str, workspace_arg: Option<String>, app_
     Ok(())
 }
 
-/// `pgapp app create <dbname> [--workspace <slug>] [--slug <app-slug>]`
-/// — `workspace` says which workspace's schema the app's tables live
-/// in (prompted with a picker if omitted); `slug` is the app's own URL
-/// identifier (`/<slug>/...`, globally unique across the instance) —
-/// optional, defaults to a slugified version of the app name you enter
-/// below.
-async fn app_create(dbname: &str, workspace_arg: Option<String>, slug_arg: Option<String>) -> anyhow::Result<()> {
-    let inst = instance::load(dbname)?;
+/// `pgapp app create [--workspace <slug>] [--slug <app-slug>]` —
+/// `workspace` says which workspace's schema the app's tables live in
+/// (prompted with a picker if omitted); `slug` is the app's own URL
+/// identifier (`/<workspace>/<slug>/...`, unique within that
+/// workspace) — optional, defaults to a slugified version of the app
+/// name you enter below.
+async fn app_create(workspace_arg: Option<String>, slug_arg: Option<String>) -> anyhow::Result<()> {
+    let inst = instance::load()?;
     instance::verify_operator(&inst)?;
     let pool = instance::connect_as_admin(&inst).await?;
 
     let ws = match workspace_arg {
         Some(slug) => control::find_workspace(&pool, &slug)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("no workspace '{slug}' registered (see `pgapp workspace list {dbname}`)"))?,
-        None => pick_workspace(&pool, dbname).await?,
+            .ok_or_else(|| anyhow::anyhow!("no workspace '{slug}' registered (see `pgapp workspace list`)"))?,
+        None => pick_workspace(&pool).await?,
     };
 
     println!("Let's scaffold a new app in workspace '{}'.", ws.slug);
@@ -870,12 +827,12 @@ async fn app_create(dbname: &str, workspace_arg: Option<String>, slug_arg: Optio
 
     println!("App '{slug}' registered in workspace '{}'. Run it with:", ws.slug);
     println!("  export PGAPP_ADMIN_DB_PASSWORD=<the '{}' role's password>", instance::ADMIN_ROLE);
-    println!("  pgapp run {target} --instance {dbname} --workspace {}", ws.slug);
+    println!("  pgapp run {target} --workspace {}", ws.slug);
     Ok(())
 }
 
-async fn app_destroy(dbname: &str, slug: &str, workspace_arg: Option<String>, hard: bool, soft: bool) -> anyhow::Result<()> {
-    let inst = instance::load(dbname)?;
+async fn app_destroy(slug: &str, workspace_arg: Option<String>, hard: bool, soft: bool) -> anyhow::Result<()> {
+    let inst = instance::load()?;
     instance::verify_operator(&inst)?;
     let pool = instance::connect_as_admin(&inst).await?;
 
@@ -931,28 +888,26 @@ async fn app_destroy(dbname: &str, slug: &str, workspace_arg: Option<String>, ha
     Ok(())
 }
 
-/// `pgapp run <file>.pgapp --instance <dbname> [--workspace <slug>]` —
-/// registers/re-points the given app into the chosen workspace, then
-/// serves every enabled app across every workspace in the instance —
-/// the registry, not just this one invocation's markup path, decides
-/// what's actually served.
+/// `pgapp run <file>.pgapp [--workspace <slug>]` — registers/re-points
+/// the given app into the chosen workspace, then serves every enabled
+/// app across every workspace in the instance — the registry, not just
+/// this one invocation's markup path, decides what's actually served.
 async fn cmd_run(args: &[String]) -> anyhow::Result<()> {
     let markup_path = args
         .first()
         .cloned()
-        .ok_or_else(|| anyhow::anyhow!("usage: pgapp run <file>.pgapp --instance <dbname> [--workspace <slug>]"))?;
-    let dbname = flag(args, "--instance").ok_or_else(|| anyhow::anyhow!("`pgapp run` needs --instance <dbname>"))?;
+        .ok_or_else(|| anyhow::anyhow!("usage: pgapp run <file>.pgapp [--workspace <slug>]"))?;
     let workspace_arg = flag(args, "--workspace");
 
-    let inst = instance::load(&dbname)?;
+    let inst = instance::load()?;
     instance::verify_operator(&inst)?;
     let pool = instance::connect_as_admin(&inst).await?;
 
     let ws = match workspace_arg {
         Some(slug) => control::find_workspace(&pool, &slug)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("no workspace '{slug}' registered (see `pgapp workspace list {dbname}`)"))?,
-        None => pick_workspace(&pool, &dbname).await?,
+            .ok_or_else(|| anyhow::anyhow!("no workspace '{slug}' registered (see `pgapp workspace list`)"))?,
+        None => pick_workspace(&pool).await?,
     };
 
     let discovered =

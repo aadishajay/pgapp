@@ -2,6 +2,12 @@
 //! dedicated `pgapp_admin` login role pgapp itself created and
 //! operates as from then on — set up once via `pgapp instance init`.
 //!
+//! There is exactly one instance, globally, per machine (per
+//! `PGAPP_HOME`) — not one per database. `pgapp instance init` refuses
+//! if one is already set up (run `pgapp instance destroy` first), and
+//! every other instance/workspace/app/secret/run command needs no
+//! `<dbname>` argument at all: there's nothing to disambiguate.
+//!
 //! Two separate secrets are involved, deliberately kept apart:
 //! - The **`pgapp_admin` Postgres role's password** is never written
 //!   to disk anywhere. It's needed to actually open a connection, so a
@@ -17,10 +23,8 @@
 //!   for scripts) before any of those commands proceed.
 //!
 //! The instance file itself (host/port/dbname/role name/password hash)
-//! lives at `~/.pgapp/instances/<dbname>.json` (override the base
-//! directory with `PGAPP_HOME`), `0600`, one file per instance — "one
-//! pgapp instance per database instance" means the database name is
-//! the natural key.
+//! lives at the fixed path `~/.pgapp/instance.json` (override the base
+//! directory with `PGAPP_HOME`), `0600`.
 
 use std::path::{Path, PathBuf};
 
@@ -97,24 +101,33 @@ pub struct InstanceFile {
     pub created_at: String,
 }
 
-fn instances_dir() -> Result<PathBuf> {
+fn home_dir() -> Result<PathBuf> {
     if let Ok(home) = std::env::var("PGAPP_HOME") {
-        return Ok(PathBuf::from(home).join("instances"));
+        return Ok(PathBuf::from(home));
     }
     let home = std::env::var("HOME").context("HOME is not set and PGAPP_HOME wasn't given")?;
-    Ok(PathBuf::from(home).join(".pgapp").join("instances"))
+    Ok(PathBuf::from(home).join(".pgapp"))
 }
 
-fn instance_path(dbname: &str) -> Result<PathBuf> {
-    Ok(instances_dir()?.join(format!("{dbname}.json")))
+/// The single, fixed path every instance command reads/writes — there
+/// is exactly one pgapp instance per machine (per `PGAPP_HOME`), so
+/// unlike a per-database file there's nothing to key this by.
+fn instance_path() -> Result<PathBuf> {
+    Ok(home_dir()?.join("instance.json"))
 }
 
-/// Writes the instance file, creating `~/.pgapp/instances` (`0700`) if
-/// needed and the file itself `0600` — this holds a password *hash*,
-/// never a usable secret, but there's no reason to leave it world
-/// readable.
+/// Whether an instance is already set up — `instance_init` refuses to
+/// overwrite one silently; the operator has to `pgapp instance destroy`
+/// first.
+pub fn exists() -> Result<bool> {
+    Ok(Path::new(&instance_path()?).exists())
+}
+
+/// Writes the instance file, creating `~/.pgapp` (`0700`) if needed and
+/// the file itself `0600` — this holds a password *hash*, never a
+/// usable secret, but there's no reason to leave it world readable.
 pub fn save(instance: &InstanceFile) -> Result<()> {
-    let dir = instances_dir()?;
+    let dir = home_dir()?;
     std::fs::create_dir_all(&dir).with_context(|| format!("failed to create '{}'", dir.display()))?;
     #[cfg(unix)]
     {
@@ -122,7 +135,7 @@ pub fn save(instance: &InstanceFile) -> Result<()> {
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).ok();
     }
 
-    let path = instance_path(&instance.dbname)?;
+    let path = instance_path()?;
     let json = serde_json::to_string_pretty(instance).context("failed to serialize instance file")?;
     std::fs::write(&path, json).with_context(|| format!("failed to write '{}'", path.display()))?;
     #[cfg(unix)]
@@ -134,13 +147,10 @@ pub fn save(instance: &InstanceFile) -> Result<()> {
     Ok(())
 }
 
-pub fn load(dbname: &str) -> Result<InstanceFile> {
-    let path = instance_path(dbname)?;
+pub fn load() -> Result<InstanceFile> {
+    let path = instance_path()?;
     if !Path::new(&path).exists() {
-        bail!(
-            "no pgapp instance is set up for database '{dbname}' (expected '{}') — run `pgapp instance init` first",
-            path.display()
-        );
+        bail!("no pgapp instance is set up (expected '{}') — run `pgapp instance init` first", path.display());
     }
     let text = std::fs::read_to_string(&path).with_context(|| format!("failed to read '{}'", path.display()))?;
     serde_json::from_str(&text).with_context(|| format!("failed to parse '{}'", path.display()))
@@ -149,8 +159,8 @@ pub fn load(dbname: &str) -> Result<InstanceFile> {
 /// Deletes the instance file — the local half of `pgapp instance
 /// destroy`; the caller is responsible for the Postgres-side teardown
 /// (dropping the role/schemas) before or after this.
-pub fn delete_file(dbname: &str) -> Result<()> {
-    let path = instance_path(dbname)?;
+pub fn delete_file() -> Result<()> {
+    let path = instance_path()?;
     if path.exists() {
         std::fs::remove_file(&path).with_context(|| format!("failed to remove '{}'", path.display()))?;
     }
@@ -273,13 +283,16 @@ mod tests {
             admin_password_hash: hash_password("whatever").unwrap(),
             created_at: "2026-01-01T00:00:00Z".to_string(),
         };
+        assert!(!exists().unwrap());
         save(&instance).unwrap();
-        let loaded = load("roundtrip_test").unwrap();
+        assert!(exists().unwrap());
+        let loaded = load().unwrap();
         assert_eq!(loaded.dbname, instance.dbname);
         assert_eq!(loaded.admin_role, ADMIN_ROLE);
 
-        delete_file("roundtrip_test").unwrap();
-        assert!(load("roundtrip_test").is_err());
+        delete_file().unwrap();
+        assert!(!exists().unwrap());
+        assert!(load().is_err());
 
         std::env::remove_var("PGAPP_HOME");
         std::fs::remove_dir_all(&dir).ok();
