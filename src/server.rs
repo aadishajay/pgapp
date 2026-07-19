@@ -392,6 +392,60 @@ impl ReportFilters {
     }
 }
 
+/// Reads one caller's page of a named collection — OFFSET-paginated
+/// like a query-backed report (a collection has no assumed sort key
+/// beyond its own insertion `seq`, and collections are small enough in
+/// practice that `COUNT(*)`-free keyset pagination isn't worth the
+/// complexity). The `app_id`/`caller_key`/`name` filter is baked in
+/// here, not written by the app author — see `EntityDef::source_collection`.
+async fn fetch_collection_page(
+    pool: &PgPool,
+    app_id: i32,
+    caller_key: &str,
+    collection_name: &str,
+    entity: &RuntimeEntity,
+    page_size: i64,
+    page_num: i64,
+) -> anyhow::Result<(Vec<BTreeMap<String, Option<String>>>, bool)> {
+    let offset = (page_num - 1).max(0) * page_size;
+    let json_rows: Vec<(i32, serde_json::Value)> = sqlx::query_as(
+        "select seq, data from pgapp_meta.collections
+          where app_id = $1 and caller_key = $2 and name = $3
+          order by seq
+          offset $4 limit $5",
+    )
+    .bind(app_id)
+    .bind(caller_key)
+    .bind(collection_name)
+    .bind(offset)
+    .bind(page_size + 1)
+    .fetch_all(pool)
+    .await?;
+
+    let has_next = json_rows.len() as i64 > page_size;
+    let rows = json_rows
+        .into_iter()
+        .take(page_size as usize)
+        .map(|(seq, data)| {
+            let mut map = BTreeMap::new();
+            map.insert("id".to_string(), Some(seq.to_string()));
+            for f in &entity.fields {
+                if f.name == "id" {
+                    continue;
+                }
+                let value = match data.get(&f.name) {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(serde_json::Value::String(s)) => Some(s.clone()),
+                    Some(other) => Some(other.to_string()),
+                };
+                map.insert(f.name.clone(), value);
+            }
+            map
+        })
+        .collect();
+    Ok((rows, has_next))
+}
+
 /// Keyset ("seek") pagination for an entity-backed `Report`: `after`/
 /// `before` cursor on `id`, fetching `page_size + 1` rows in the
 /// query's own direction. Zero extra queries: the direction we fetched
@@ -621,6 +675,7 @@ async fn render_component(
     query: &HashMap<String, String>,
     regions: &RegionRows,
     auth_ctx: &AuthCtx,
+    caller_key: &str,
 ) -> anyhow::Result<String> {
     match component {
         RuntimeComponent::Text { text, html } => Ok(render::text_html(text, html)),
@@ -665,43 +720,49 @@ async fn render_component(
             }
 
             // A report is query-paginated when it declares `source:` or
-            // its entity is query-backed (`entity ... from query`).
+            // its entity is query-backed (`entity ... from query`);
+            // offset-paginated the same way when the entity is
+            // collection-backed instead; keyset-paginated otherwise.
             let effective_query = source_query.as_deref().or(entity.source_query.as_deref());
 
-            let (rows, prev_href, next_href) = match effective_query {
-                None => {
-                    let after = query.get(&p_after).map(|s| s.as_str());
-                    let before = query.get(&p_before).map(|s| s.as_str());
-                    let rp = fetch_report_rows(&state.pool, &data.app.data_schema, entity, &filters, columns, *page_size, after, before).await?;
-                    let prev_href = rp.has_prev.then(|| {
-                        let id = rp.rows.first().and_then(|r| r.get("id")).and_then(|v| v.clone()).unwrap_or_default();
-                        format!("/{app}/{page_name}?{p_before}={}{filter_qs}", url_encode(&id))
-                    });
-                    let next_href = rp.has_next.then(|| {
-                        let id = rp.rows.last().and_then(|r| r.get("id")).and_then(|v| v.clone()).unwrap_or_default();
-                        format!("/{app}/{page_name}?{p_after}={}{filter_qs}", url_encode(&id))
-                    });
-                    (rp.rows, prev_href, next_href)
-                }
-                Some(qname) => {
-                    let rq = page
-                        .resolve_query(&data.app, qname)
-                        .ok_or_else(|| anyhow::anyhow!("report '{title}' sources from unknown query '{qname}'"))?;
-                    let ctx = bind_context(query, None);
-                    let page_num: i64 = query.get(&p_page).and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
-                    let (conditions, binds) = filters.to_sql("t.", columns, rq.bind_names.len() + 1);
-                    let where_clause = if conditions.is_empty() {
-                        String::new()
-                    } else {
-                        format!("where {}", conditions.join(" and "))
-                    };
-                    let (json_rows, has_next) =
-                        run_named_query_page(&state.pool, rq, &ctx, &where_clause, &binds, *page_size, page_num).await?;
-                    let rows: Vec<_> = json_rows.into_iter().map(query_engine::json_row_to_map).collect();
-                    let prev_href = (page_num > 1).then(|| format!("/{app}/{page_name}?{p_page}={}{filter_qs}", page_num - 1));
-                    let next_href = has_next.then(|| format!("/{app}/{page_name}?{p_page}={}{filter_qs}", page_num + 1));
-                    (rows, prev_href, next_href)
-                }
+            let (rows, prev_href, next_href) = if let Some(qname) = effective_query {
+                let rq = page
+                    .resolve_query(&data.app, qname)
+                    .ok_or_else(|| anyhow::anyhow!("report '{title}' sources from unknown query '{qname}'"))?;
+                let ctx = bind_context(query, None);
+                let page_num: i64 = query.get(&p_page).and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
+                let (conditions, binds) = filters.to_sql("t.", columns, rq.bind_names.len() + 1);
+                let where_clause = if conditions.is_empty() {
+                    String::new()
+                } else {
+                    format!("where {}", conditions.join(" and "))
+                };
+                let (json_rows, has_next) =
+                    run_named_query_page(&state.pool, rq, &ctx, &where_clause, &binds, *page_size, page_num).await?;
+                let rows: Vec<_> = json_rows.into_iter().map(query_engine::json_row_to_map).collect();
+                let prev_href = (page_num > 1).then(|| format!("/{app}/{page_name}?{p_page}={}{filter_qs}", page_num - 1));
+                let next_href = has_next.then(|| format!("/{app}/{page_name}?{p_page}={}{filter_qs}", page_num + 1));
+                (rows, prev_href, next_href)
+            } else if let Some(coll_name) = entity.source_collection.as_deref() {
+                let page_num: i64 = query.get(&p_page).and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
+                let (rows, has_next) =
+                    fetch_collection_page(&state.pool, data.app.id, caller_key, coll_name, entity, *page_size, page_num).await?;
+                let prev_href = (page_num > 1).then(|| format!("/{app}/{page_name}?{p_page}={}{filter_qs}", page_num - 1));
+                let next_href = has_next.then(|| format!("/{app}/{page_name}?{p_page}={}{filter_qs}", page_num + 1));
+                (rows, prev_href, next_href)
+            } else {
+                let after = query.get(&p_after).map(|s| s.as_str());
+                let before = query.get(&p_before).map(|s| s.as_str());
+                let rp = fetch_report_rows(&state.pool, &data.app.data_schema, entity, &filters, columns, *page_size, after, before).await?;
+                let prev_href = rp.has_prev.then(|| {
+                    let id = rp.rows.first().and_then(|r| r.get("id")).and_then(|v| v.clone()).unwrap_or_default();
+                    format!("/{app}/{page_name}?{p_before}={}{filter_qs}", url_encode(&id))
+                });
+                let next_href = rp.has_next.then(|| {
+                    let id = rp.rows.last().and_then(|r| r.get("id")).and_then(|v| v.clone()).unwrap_or_default();
+                    format!("/{app}/{page_name}?{p_after}={}{filter_qs}", url_encode(&id))
+                });
+                (rp.rows, prev_href, next_href)
             };
 
             let extras = report_extras(app, state, data, page_name, idx, &filters, auth_ctx).await?;
@@ -844,6 +905,7 @@ async fn report_extras(
 async fn show(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
+    Extension(caller): Extension<auth::CallerKey>,
     Path((app, page_name)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
@@ -858,7 +920,7 @@ async fn show(
 
     let mut body = String::new();
     for (idx, component) in page.components.iter().enumerate() {
-        let html = render_component(&app, &state, &data, &page_name, page, idx, component, &query, &regions, &auth_ctx)
+        let html = render_component(&app, &state, &data, &page_name, page, idx, component, &query, &regions, &auth_ctx, &caller.0)
             .await
             .map_err(err_response)?;
         // A stable per-component anchor: mutating actions (save/delete,
@@ -937,6 +999,7 @@ async fn region_fragment(
 async fn run_action(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
+    Extension(caller): Extension<auth::CallerKey>,
     Path((app, page_name, idx)): Path<(String, String, usize)>,
     Query(query): Query<HashMap<String, String>>,
     Form(values): Form<HashMap<String, String>>,
@@ -971,6 +1034,7 @@ async fn run_action(
             page,
             config,
             values: &merged,
+            caller_key: &caller.0,
         })
         .await;
 
@@ -1193,6 +1257,7 @@ async fn delete(
 /// Query-backed entities serve their query's rows.
 async fn api_list(
     State(state): State<Arc<AppState>>,
+    Extension(caller): Extension<auth::CallerKey>,
     Path((app, entity_name)): Path<(String, String)>,
 ) -> Result<Response, AppError> {
     let entry = state.app_or_404(&app)?;
@@ -1210,18 +1275,27 @@ async fn api_list(
         })
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("no such entity '{entity_name}'")))?;
 
-    let rows = match &entity.source_query {
-        None => fetch_rows(&state.pool, &data.app.data_schema, entity).await.map_err(err_response)?,
-        Some(qname) => {
-            let rq = data.app.queries.get(qname).ok_or_else(|| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("entity '{entity_name}' is backed by unknown query '{qname}'"),
-                )
-            })?;
-            let ctx = HashMap::new();
-            run_named_query_rows(&state.pool, rq, &ctx).await.map_err(err_response)?
-        }
+    let rows = if let Some(qname) = &entity.source_query {
+        let rq = data.app.queries.get(qname).ok_or_else(|| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("entity '{entity_name}' is backed by unknown query '{qname}'"),
+            )
+        })?;
+        let ctx = HashMap::new();
+        run_named_query_rows(&state.pool, rq, &ctx).await.map_err(err_response)?
+    } else if let Some(coll_name) = &entity.source_collection {
+        // No pagination here (unlike the Report component) — the /api
+        // route always returns every row, same as a table-backed
+        // entity's fetch_rows. i64::MAX/2 avoids overflowing the
+        // `page_size + 1` inside fetch_collection_page while still
+        // being an effectively unbounded limit.
+        let (rows, _) = fetch_collection_page(&state.pool, data.app.id, &caller.0, coll_name, entity, i64::MAX / 2, 1)
+            .await
+            .map_err(err_response)?;
+        rows
+    } else {
+        fetch_rows(&state.pool, &data.app.data_schema, entity).await.map_err(err_response)?
     };
     Ok(axum::Json(json!(rows)).into_response())
 }

@@ -53,6 +53,9 @@ pub struct RuntimeEntity {
     /// Non-null = read-only, query-backed entity (no physical table);
     /// see `model::EntityDef::source_query`.
     pub source_query: Option<String>,
+    /// Non-null = read-only, collection-backed entity; see
+    /// `model::EntityDef::source_collection`.
+    pub source_collection: Option<String>,
 }
 
 impl RuntimeEntity {

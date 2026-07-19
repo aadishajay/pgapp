@@ -42,6 +42,11 @@ pub struct ActionContext<'a> {
     /// the page's URL query parameters (form wins on conflict) — the
     /// same shape named-query bind contexts use.
     pub values: &'a HashMap<String, String>,
+    /// This request's collection-scoping identity (`server::auth::CallerKey`)
+    /// — a module that writes into `pgapp_meta.collections` (see
+    /// `http_request`) scopes every row to this, so one caller's data
+    /// never becomes visible to another's.
+    pub caller_key: &'a str,
 }
 
 /// One pluggable server-side action module.

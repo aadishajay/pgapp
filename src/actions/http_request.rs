@@ -30,6 +30,18 @@
 //! cache with its own lifetime, which is a bigger feature than one
 //! action module; `bearer` still works if you already have a token in
 //! hand.
+//!
+//! `collection: "<name>"` captures a successful (2xx) JSON response
+//! into `pgapp_meta.collections` (an APEX-collection-style scratch
+//! table — see db/schema.sql) instead of just echoing it back: a JSON
+//! array becomes one row per element, a bare object becomes one row.
+//! `collection_mode`: `"replace"` (default, clears any existing rows
+//! under that name first) or `"append"`. Rows are scoped to the
+//! current caller (`server::auth::CallerKey`) — the same browser that
+//! triggered the action — so nothing another visitor does can read or
+//! overwrite them. Read a collection back with `entity "x" from
+//! collection "<name>" { field ...: type ... }`, which any `report`
+//! can bind to exactly like a table- or query-backed entity.
 
 use std::time::Duration;
 
@@ -121,6 +133,13 @@ impl ServerAction for HttpRequest {
             let resp = req.send().await.map_err(|e| anyhow::anyhow!("http_request: {method} {url} failed: {e}"))?;
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
+
+            let collection = cfg("collection");
+            if status.is_success() && !collection.is_empty() {
+                let mode = if cfg("collection_mode").is_empty() { "replace" } else { cfg("collection_mode") };
+                write_collection(ctx.pool, ctx.app.id, ctx.caller_key, collection, mode, &text).await?;
+            }
+
             let echoed = if text.len() > MAX_ECHOED_BODY { format!("{}… ({} bytes total)", &text[..MAX_ECHOED_BODY], text.len()) } else { text };
 
             if status.is_success() {
@@ -130,6 +149,64 @@ impl ServerAction for HttpRequest {
             }
         })
     }
+}
+
+/// Stashes a successful JSON response into `pgapp_meta.collections`,
+/// scoped to this caller (never a hand-written WHERE clause — see
+/// `EntityDef::source_collection`). A JSON array becomes one row per
+/// element; a bare object becomes a single row. `mode: "replace"`
+/// (the default) clears any existing rows under this name first, in
+/// the same transaction, so the collection never sits half-old/half-
+/// new; `"append"` keeps them and continues the `seq` numbering.
+async fn write_collection(
+    pool: &sqlx::PgPool,
+    app_id: i32,
+    caller_key: &str,
+    name: &str,
+    mode: &str,
+    body: &str,
+) -> anyhow::Result<()> {
+    let parsed: serde_json::Value = serde_json::from_str(body).map_err(|e| {
+        anyhow::anyhow!("http_request: collection \"{name}\" needs a JSON response body to store, got invalid JSON: {e}")
+    })?;
+    let items: Vec<serde_json::Value> = match parsed {
+        serde_json::Value::Array(items) => items,
+        other => vec![other],
+    };
+
+    let mut tx = pool.begin().await?;
+    let mut next_seq: i32 = if mode == "append" {
+        sqlx::query_scalar(
+            "select coalesce(max(seq), -1) + 1 from pgapp_meta.collections
+              where app_id = $1 and caller_key = $2 and name = $3",
+        )
+        .bind(app_id)
+        .bind(caller_key)
+        .bind(name)
+        .fetch_one(&mut *tx)
+        .await?
+    } else {
+        sqlx::query("delete from pgapp_meta.collections where app_id = $1 and caller_key = $2 and name = $3")
+            .bind(app_id)
+            .bind(caller_key)
+            .bind(name)
+            .execute(&mut *tx)
+            .await?;
+        0
+    };
+    for item in items {
+        sqlx::query("insert into pgapp_meta.collections (app_id, caller_key, name, seq, data) values ($1, $2, $3, $4, $5)")
+            .bind(app_id)
+            .bind(caller_key)
+            .bind(name)
+            .bind(next_seq)
+            .bind(&item)
+            .execute(&mut *tx)
+            .await?;
+        next_seq += 1;
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
 /// `{{item}}` → that item's current value from the page's bind

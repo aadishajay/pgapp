@@ -47,6 +47,23 @@ pub const SESSION_COOKIE: &str = "pgapp_session";
 const SESSION_SECONDS: i64 = 7 * 24 * 3600;
 const MIN_PASSWORD_LEN: usize = 8;
 
+/// A stable per-browser identity, independent of login — minted the
+/// first time any request for an app arrives without one, kept for a
+/// year, scoped `Path=/{app}` like the session cookie. Exists purely
+/// so collections (`pgapp_meta.collections`, see db/schema.sql) have
+/// something to scope "only the caller can see this" to that works
+/// the same whether or not the app uses `auth { }` — a signed-in
+/// user's session cookie would do for an auth-enabled app, but public
+/// apps have no session concept to reuse, and collections shouldn't
+/// have a different guarantee depending on that.
+pub const CALLER_COOKIE: &str = "pgapp_caller";
+const CALLER_COOKIE_SECONDS: i64 = 365 * 24 * 3600;
+
+/// The current request's collection-scoping identity — inserted by
+/// [`require_login`] on every request, same as [`AuthCtx`].
+#[derive(Debug, Clone)]
+pub struct CallerKey(pub String);
+
 #[derive(Debug, Clone)]
 pub struct CurrentUser {
     pub id: i32,
@@ -95,13 +112,13 @@ fn verify_password(password: &str, stored_hash: &str) -> bool {
 
 // ---- sessions ----
 
-fn cookie_token(headers: &HeaderMap) -> Option<String> {
+fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     for value in headers.get_all(header::COOKIE) {
         let Ok(raw) = value.to_str() else { continue };
         for pair in raw.split(';') {
-            if let Some((name, token)) = pair.trim().split_once('=') {
-                if name.trim() == SESSION_COOKIE && !token.is_empty() {
-                    return Some(token.trim().to_string());
+            if let Some((n, v)) = pair.trim().split_once('=') {
+                if n.trim() == name && !v.is_empty() {
+                    return Some(v.trim().to_string());
                 }
             }
         }
@@ -193,7 +210,7 @@ pub async fn require_login(State(state): State<Arc<AppState>>, mut req: Request,
 
     let mut ctx = AuthCtx(None);
     if data.app.auth_enabled {
-        if let Some(token) = cookie_token(req.headers()) {
+        if let Some(token) = cookie_value(req.headers(), SESSION_COOKIE) {
             if let Ok(user) = load_session(&state.pool, data.app.id, &token).await {
                 ctx = AuthCtx(user);
             }
@@ -203,8 +220,29 @@ pub async fn require_login(State(state): State<Arc<AppState>>, mut req: Request,
         }
     }
 
+    let minted_cookie = match cookie_value(req.headers(), CALLER_COOKIE) {
+        Some(existing) => {
+            req.extensions_mut().insert(CallerKey(existing));
+            None
+        }
+        None => {
+            let fresh = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+            let cookie = format!(
+                "{CALLER_COOKIE}={fresh}; Path=/{app_slug}; HttpOnly; SameSite=Lax; Max-Age={CALLER_COOKIE_SECONDS}"
+            );
+            req.extensions_mut().insert(CallerKey(fresh));
+            Some(cookie)
+        }
+    };
+
     req.extensions_mut().insert(ctx);
-    next.run(req).await
+    let mut response = next.run(req).await;
+    if let Some(cookie) = minted_cookie {
+        if let Ok(value) = header::HeaderValue::from_str(&cookie) {
+            response.headers_mut().append(header::SET_COOKIE, value);
+        }
+    }
+    response
 }
 
 /// The per-page role gate, called by every page-serving/writing
@@ -332,7 +370,7 @@ pub async fn setup(
 
 pub async fn logout(State(state): State<Arc<AppState>>, Path(app): Path<String>, req: Request) -> Result<Response, AppError> {
     state.app_or_404(&app)?;
-    if let Some(token) = cookie_token(req.headers()) {
+    if let Some(token) = cookie_value(req.headers(), SESSION_COOKIE) {
         sqlx::query("delete from pgapp_meta.sessions where token = $1")
             .bind(&token)
             .execute(&state.pool)

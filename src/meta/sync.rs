@@ -117,17 +117,19 @@ pub async fn sync_app(
         }
 
         let entity_id: i32 = sqlx::query_scalar(
-            "insert into pgapp_meta.entities (app_id, name, table_name, source_query)
-             values ($1, $2, $3, $4)
+            "insert into pgapp_meta.entities (app_id, name, table_name, source_query, source_collection)
+             values ($1, $2, $3, $4, $5)
              on conflict (app_id, name) do update set
                 table_name = excluded.table_name,
-                source_query = excluded.source_query
+                source_query = excluded.source_query,
+                source_collection = excluded.source_collection
              returning id",
         )
         .bind(app_id)
         .bind(&entity.name)
         .bind(&table_name)
         .bind(&entity.source_query)
+        .bind(&entity.source_collection)
         .fetch_one(pool)
         .await?;
 
@@ -152,7 +154,7 @@ pub async fn sync_app(
             .await?;
         }
 
-        if entity.source_query.is_none() {
+        if entity.source_query.is_none() && entity.source_collection.is_none() {
             ensure_data_table(pool, data_schema, &table_name, entity).await?;
             verify_data_table(pool, data_schema, &table_name, entity).await?;
         }
@@ -570,6 +572,12 @@ fn build_component_config(
                      query-backed and read-only — forms need a real table"
                 );
             }
+            if entity_def.source_collection.is_some() {
+                anyhow::bail!(
+                    "{owner_label} form '{title}' binds to entity '{entity}', which is \
+                     collection-backed and read-only — forms need a real table"
+                );
+            }
             let owner = format!("{owner_label} form '{title}'");
             let resolved = resolve_item_types(entity_def, fields, item_types, registry, &owner)?;
             let field_html_resolved = field_html_json(field_html, fields, &owner)?;
@@ -602,6 +610,12 @@ fn build_component_config(
                 anyhow::bail!(
                     "{owner_label} editable_table '{title}' binds to entity '{entity}', which is \
                      query-backed and read-only — editable tables need a real table"
+                );
+            }
+            if entity_def.source_collection.is_some() {
+                anyhow::bail!(
+                    "{owner_label} editable_table '{title}' binds to entity '{entity}', which is \
+                     collection-backed and read-only — editable tables need a real table"
                 );
             }
             let owner = format!("{owner_label} editable_table '{title}'");

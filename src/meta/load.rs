@@ -228,15 +228,15 @@ pub async fn load_app(pool: &PgPool, app_name: &str) -> Result<RuntimeApp> {
 /// resolve their `entity` config field into a full [`RuntimeEntity`]
 /// without another round trip per component.
 async fn load_entities(pool: &PgPool, app_id: i32) -> Result<HashMap<String, RuntimeEntity>> {
-    let entity_rows: Vec<(i32, String, String, Option<String>)> = sqlx::query_as(
-        "select id, name, table_name, source_query from pgapp_meta.entities where app_id = $1",
+    let entity_rows: Vec<(i32, String, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "select id, name, table_name, source_query, source_collection from pgapp_meta.entities where app_id = $1",
     )
     .bind(app_id)
     .fetch_all(pool)
     .await?;
 
     let mut entities = HashMap::new();
-    for (entity_id, name, table_name, source_query) in entity_rows {
+    for (entity_id, name, table_name, source_query, source_collection) in entity_rows {
         let field_rows: Vec<(String, String, bool)> = sqlx::query_as(
             "select name, data_type, is_required from pgapp_meta.fields
               where entity_id = $1 order by ordinal",
@@ -254,7 +254,7 @@ async fn load_entities(pool: &PgPool, app_id: i32) -> Result<HashMap<String, Run
             })
             .collect();
 
-        entities.insert(name.clone(), RuntimeEntity { name, table_name, fields, source_query });
+        entities.insert(name.clone(), RuntimeEntity { name, table_name, fields, source_query, source_collection });
     }
     Ok(entities)
 }

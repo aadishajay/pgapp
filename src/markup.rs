@@ -19,7 +19,7 @@
 //!
 //! query     := "query" Ident "{" "sql" ":" String "}"
 //!
-//! entity    := "entity" String ("from" "query" Ident)? "{" field* "}"
+//! entity    := "entity" String ("from" ("query" Ident | "collection" String))? "{" field* "}"
 //! field     := "field" Ident ":" Ident ("required")? ("default" Value)?
 //!
 //! page      := "page" String "{" (pageprop | component | query | dynaction)* "}"
@@ -433,13 +433,18 @@ impl Parser {
         self.expect_keyword("entity")?;
         let name = self.expect_string()?;
 
-        let source_query = if self.at_keyword("from") {
+        let mut source_query = None;
+        let mut source_collection = None;
+        if self.at_keyword("from") {
             self.advance()?;
-            self.expect_keyword("query")?;
-            Some(self.expect_ident()?)
-        } else {
-            None
-        };
+            if self.at_keyword("query") {
+                self.advance()?;
+                source_query = Some(self.expect_ident()?);
+            } else {
+                self.expect_keyword("collection")?;
+                source_collection = Some(self.expect_string()?);
+            }
+        }
 
         self.expect_symbol('{')?;
         let mut fields = Vec::new();
@@ -448,7 +453,7 @@ impl Parser {
         }
         self.expect_symbol('}')?;
 
-        Ok(EntityDef { name, fields, source_query })
+        Ok(EntityDef { name, fields, source_query, source_collection })
     }
 
     fn parse_field(&mut self) -> Result<FieldDef> {
@@ -1368,6 +1373,32 @@ mod tests {
             })
             .unwrap();
         assert_eq!(config["body"], "say \"hi\" and a\\backslash");
+    }
+
+    #[test]
+    fn parses_a_collection_backed_entity() {
+        let src = r#"
+            app "Demo" {
+                entity "search_results" from collection "search_results" {
+                    field title: text
+                    field price: text
+                }
+                entity "t" { field id: id field name: text }
+
+                page "P" {
+                    report "Results" of search_results { columns: title, price }
+                }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+        let coll = app.entities.iter().find(|e| e.name == "search_results").unwrap();
+        assert_eq!(coll.source_collection.as_deref(), Some("search_results"));
+        assert!(coll.source_query.is_none());
+        assert_eq!(coll.fields.len(), 2);
+
+        let t = app.entities.iter().find(|e| e.name == "t").unwrap();
+        assert!(t.source_collection.is_none());
+        assert!(t.source_query.is_none());
     }
 
     #[test]

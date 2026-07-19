@@ -78,6 +78,14 @@ pub struct EntityDef {
     /// sort key. The declared fields describe the query's columns for
     /// rendering/typing purposes.
     pub source_query: Option<String>,
+    /// `entity "x" from collection "name"` — a read-only entity backed
+    /// by `pgapp_meta.collections` (see db/schema.sql), scoped to the
+    /// current caller so one visitor's rows are never visible to
+    /// another's. Unlike `source_query`, the SQL isn't author-written:
+    /// server.rs compiles it, always including the caller/name filter,
+    /// so there's no WHERE clause an app author could omit or bypass.
+    /// Mutually exclusive with `source_query` (checked at parse time).
+    pub source_collection: Option<String>,
 }
 
 /// A named, reusable SQL query. Declared at app scope (visible to every

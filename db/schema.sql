@@ -60,6 +60,30 @@ create table if not exists pgapp_meta.entities (
 -- physical table: no table is created and no Form/EditableTable may
 -- bind to it (enforced at sync time).
 alter table pgapp_meta.entities add column if not exists source_query text;
+-- Non-null = a read-only entity backed by a collection instead (see
+-- pgapp_meta.collections below) — same read-only restriction as
+-- source_query, and mutually exclusive with it.
+alter table pgapp_meta.entities add column if not exists source_collection text;
+
+-- APEX-collection-style scratch storage: rows an app writes at runtime
+-- (typically an external API response via the http_request action),
+-- not part of its declared schema. Scoped by caller_key, not user_id,
+-- so it works the same whether or not the app uses auth { } — see
+-- server/auth.rs's CALLER_COOKIE. "Only the caller can see it" is
+-- enforced by every read going through the server-generated SQL an
+-- `entity ... from collection "name"` compiles to (src/server.rs),
+-- never a hand-written named query, so there's no WHERE clause an app
+-- author could omit or get wrong.
+create table if not exists pgapp_meta.collections (
+    id         bigserial primary key,
+    app_id     integer not null references pgapp_meta.apps(id) on delete cascade,
+    caller_key text not null,
+    name       text not null,
+    seq        integer not null,
+    data       jsonb not null,
+    created_at timestamptz not null default now()
+);
+create index if not exists collections_lookup on pgapp_meta.collections (app_id, caller_key, name, seq);
 
 create table if not exists pgapp_meta.fields (
     id            serial primary key,
