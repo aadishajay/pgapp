@@ -58,15 +58,20 @@ body {
   background: hsl(var(--background));
   color: hsl(var(--foreground));
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  max-width: 720px;
+  max-width: 1400px;
   margin: 2rem auto;
   padding: 0 1rem;
   line-height: 1.5;
 }
 
+/* Wraps onto extra rows rather than forcing the whole page wider than
+   its max-width — a flex row with many non-shrinking items otherwise
+   overflows its container at any width, not just mobile. */
 .pgapp-nav {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  row-gap: 0.5rem;
   gap: 1.5rem;
   margin-bottom: 1.5rem;
   font-size: 0.875rem;
@@ -78,6 +83,8 @@ body {
 .pgapp-nav-collapse {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  row-gap: 0.5rem;
   gap: 1.5rem;
   flex: 1;
 }
@@ -105,6 +112,8 @@ body {
    hover/focus-within so no JS is required. */
 .pgapp-navbar {
   display: flex;
+  flex-wrap: wrap;
+  row-gap: 0.35rem;
   gap: 1.25rem;
   list-style: none;
   margin: 0;
@@ -525,6 +534,10 @@ a.pgapp-link:has(.pgapp-icon):hover .pgapp-icon {
 .pgapp-chart canvas {
   max-width: 100%;
 }
+/* A donut's punched-out center — matches the page background rather
+   than a hardcoded white, which would show as a stark mismatched
+   circle in dark mode. */
+.pgapp-chart-donut-hole { fill: hsl(var(--background)); }
 
 /* Report toolbar, saved views, actions, notices */
 .pgapp-report-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }

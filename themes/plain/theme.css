@@ -5,20 +5,23 @@
 
 body {
   font-family: system-ui, sans-serif;
-  max-width: 720px;
+  max-width: 1200px;
   margin: 2rem auto;
   padding: 0 1rem;
   color: #222;
 }
 
-.pgapp-nav { display: flex; align-items: center; gap: 1rem; margin-bottom: 1.5rem; }
-.pgapp-nav-collapse { display: flex; align-items: center; gap: 1rem; flex: 1; }
+/* Wraps onto extra rows rather than forcing the whole page wider than
+   its max-width — a flex row with many non-shrinking items otherwise
+   overflows its container at any width, not just mobile. */
+.pgapp-nav { display: flex; align-items: center; flex-wrap: wrap; row-gap: 0.35rem; gap: 1rem; margin-bottom: 1.5rem; }
+.pgapp-nav-collapse { display: flex; align-items: center; flex-wrap: wrap; row-gap: 0.35rem; gap: 1rem; flex: 1; }
 .pgapp-nav-toggle { display: none; border: none; background: transparent; cursor: pointer; font-size: 1.25rem; line-height: 1; padding: 0.1rem 0.35rem; color: #222; }
 .pgapp-link { color: #06c; }
 .pgapp-title { margin: 0 0 1rem; }
 .pgapp-subtitle { margin: 1.5rem 0 0.75rem; }
 
-.pgapp-navbar { display: flex; gap: 1rem; list-style: none; margin: 0; padding: 0; }
+.pgapp-navbar { display: flex; flex-wrap: wrap; row-gap: 0.35rem; gap: 1rem; list-style: none; margin: 0; padding: 0; }
 .pgapp-navbar-item { position: relative; }
 .pgapp-navbar-label { color: #666; }
 .pgapp-navbar-submenu {
@@ -119,6 +122,10 @@ body {
 .pgapp-chart { margin: 0 0 1rem; padding: 0.75rem; border: 1px solid #ddd; }
 .pgapp-chart-svg { width: 100%; height: auto; color: #06c; }
 .pgapp-chart canvas { max-width: 100%; }
+/* A donut's punched-out center — matches this theme's (unset, so
+   browser-default white) background rather than a separately
+   hardcoded white, so the two can never drift apart. */
+.pgapp-chart-donut-hole { fill: #fff; }
 
 /* Report toolbar, saved views, actions, notices */
 .pgapp-report-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-bottom: 0.6rem; }

@@ -32,7 +32,7 @@ body {
     var(--v-bg);
   color: var(--v-ink);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  max-width: 860px;
+  max-width: 1400px;
   margin: 2rem auto;
   padding: 0 1.25rem;
   line-height: 1.55;
@@ -60,10 +60,16 @@ body {
 .pgapp-link { color: var(--v-indigo); text-decoration: none; font-weight: 600; }
 .pgapp-link:hover { color: var(--v-fuchsia); }
 
-/* Top nav: white pill bar */
+/* Top nav: white pill bar. Wraps onto extra rows rather than forcing
+   the whole page wider than its max-width — a flex row with many
+   non-shrinking items otherwise overflows its container at any width,
+   not just mobile. A large border-radius still reads fine once
+   wrapped (Postgres/CSS clamps it to the box's own height). */
 .pgapp-nav {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  row-gap: 0.4rem;
   gap: 1.25rem;
   margin-bottom: 1.5rem;
   background: var(--v-surface);
@@ -74,7 +80,7 @@ body {
   font-size: 0.9rem;
 }
 
-.pgapp-nav-collapse { display: flex; align-items: center; gap: 1.25rem; flex: 1; }
+.pgapp-nav-collapse { display: flex; align-items: center; flex-wrap: wrap; row-gap: 0.4rem; gap: 1.25rem; flex: 1; }
 .pgapp-nav-toggle {
   display: none;
   border: none;
@@ -86,7 +92,7 @@ body {
   color: var(--v-indigo);
 }
 
-.pgapp-navbar { display: flex; gap: 0.35rem; list-style: none; margin: 0; padding: 0; }
+.pgapp-navbar { display: flex; flex-wrap: wrap; row-gap: 0.35rem; gap: 0.35rem; list-style: none; margin: 0; padding: 0; }
 .pgapp-navbar-item { position: relative; }
 .pgapp-navbar .pgapp-link,
 .pgapp-navbar-label {
@@ -349,6 +355,9 @@ a.pgapp-link:hover .pgapp-icon { color: var(--v-fuchsia); }
 .pgapp-region .pgapp-table { margin-bottom: 0; box-shadow: none; }
 .pgapp-chart-svg { width: 100%; height: auto; color: var(--v-violet); }
 .pgapp-chart canvas { max-width: 100%; }
+/* A donut's punched-out center — matches the chart card's own
+   background rather than a hardcoded white. */
+.pgapp-chart-donut-hole { fill: var(--v-surface); }
 /* Demo of a per-instance override via markup's `attrs (class: "...")` —
    see examples/helpdesk.pgapp's "Tickets by status (share)" chart. */
 .pgapp-chart-tall .pgapp-chart-svg { max-height: 340px; }

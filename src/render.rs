@@ -268,8 +268,12 @@ fn cartesian_chart_svg(title: &str, chart_type: &str, x: &str, y: &str, rows: &[
 
     for (i, label) in labels.iter().enumerate() {
         let px = pad + bar_w * (i as f64 + 0.5);
+        // fill="currentColor": SVG text ignores the page's CSS `color`
+        // and defaults to black unless told otherwise, unlike every
+        // other mark here — without this it's unreadable in dark mode
+        // (black on a dark card).
         svg.push_str(&format!(
-            r#"<text x="{px:.1}" y="{:.1}" font-size="9" text-anchor="middle">{}</text>"#,
+            r#"<text x="{px:.1}" y="{:.1}" font-size="9" text-anchor="middle" fill="currentColor">{}</text>"#,
             baseline + 12.0,
             escape(label)
         ));
@@ -318,8 +322,12 @@ fn radial_chart_svg(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTr
         angle = end_angle;
     }
     if chart_type == "donut" {
+        // A class, not an inline fill: needs to match the chart card's
+        // own background (theme- and light/dark-mode-dependent, so
+        // only the theme's own CSS knows the right color — see
+        // `.pgapp-chart-donut-hole` in each theme.css).
         let hole_r = r * 0.55;
-        svg.push_str(&format!(r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{hole_r:.1}" fill="white"/>"#));
+        svg.push_str(&format!(r#"<circle cx="{cx:.1}" cy="{cy:.1}" r="{hole_r:.1}" class="pgapp-chart-donut-hole"/>"#));
     }
 
     let legend_x = cx + r + 30.0;
@@ -329,8 +337,10 @@ fn radial_chart_svg(title: &str, chart_type: &str, x: &str, y: &str, rows: &[BTr
             break;
         }
         let pct = (v / total) * 100.0;
+        // fill="currentColor" on the <text>: see cartesian_chart_svg's
+        // axis labels for why this can't be left to inherit.
         svg.push_str(&format!(
-            r#"<rect x="{legend_x:.1}" y="{:.1}" width="9" height="9" fill="currentColor" fill-opacity="0.85"/><text x="{:.1}" y="{:.1}" font-size="9">{} ({pct:.0}%)</text>"#,
+            r#"<rect x="{legend_x:.1}" y="{:.1}" width="9" height="9" fill="currentColor" fill-opacity="0.85"/><text x="{:.1}" y="{:.1}" font-size="9" fill="currentColor">{} ({pct:.0}%)</text>"#,
             ly - 8.0,
             legend_x + 13.0,
             ly,
