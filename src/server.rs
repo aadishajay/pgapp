@@ -32,6 +32,7 @@ use axum::routing::{get, post};
 use axum::{Extension, Router};
 use serde_json::json;
 use sqlx::{PgPool, Row};
+use tower::limit::ConcurrencyLimitLayer;
 
 use auth::AuthCtx;
 
@@ -39,6 +40,7 @@ use crate::actions::{self, ActionContext};
 use crate::chart_lib::ChartLib;
 use crate::html::url_encode;
 use crate::icons::Icons;
+use crate::instance;
 use crate::item_types;
 use crate::meta::{self, Chrome, NavNode, RegionRows, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimePage};
 use crate::model::{FieldItem, HtmlAttrs};
@@ -119,6 +121,25 @@ impl AppState {
     }
 }
 
+/// Caps how many requests this process processes at once, across every
+/// app it serves. Sized to the shared connection pool rather than
+/// picked separately: since almost every route needs a pool connection
+/// to do anything, admitting more requests than the pool can serve in
+/// parallel doesn't add throughput — it just piles up in-flight work
+/// (each holding its own row buffers, rendered-HTML strings, etc.) that
+/// then queues for the same fixed number of connections anyway. Excess
+/// requests wait here (tower's semaphore-backed backpressure) instead
+/// of being admitted and immediately blocking on the pool — the same
+/// total wait, but without the extra memory pressure from having all
+/// of it in flight simultaneously. Confirmed by load-testing
+/// examples/nexus-erp: a 1,000-concurrent-request burst against a
+/// 20-connection pool spiked RSS from ~11MB to 400-600MB, a floor that
+/// then persisted (allocator retention, not a leak, but still real
+/// memory the host doesn't get back without a restart).
+fn concurrency_limit() -> usize {
+    instance::max_connections() as usize
+}
+
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(landing))
@@ -144,6 +165,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/:app/:page/c/:idx/views/:vid/delete", post(delete_view))
         .layer(middleware::from_fn_with_state(state.clone(), auth::require_login))
         .with_state(state)
+        .layer(ConcurrencyLimitLayer::new(concurrency_limit()))
 }
 
 /// Gate for `/:app/admin/reload`: same "everyone's an admin" fallback as

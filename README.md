@@ -691,6 +691,20 @@ few dozen is already generous for one server); override with
 `PGAPP_MAX_CONNECTIONS`. Same default and override for the
 `pgapp_admin` connection Instance mode's `pgapp run` serves through.
 
+A `tower::limit::ConcurrencyLimitLayer` wraps the whole router, capped
+at the same number as the pool: since almost every route needs a
+connection to do anything, admitting more requests than the pool can
+serve in parallel doesn't add throughput, just piles up in-flight work
+that queues for the same fixed number of connections anyway — with
+each one holding its own row buffers and rendered-HTML strings in the
+meantime. Load-testing confirmed this actually helps latency under a
+big concurrent spike, not just tidiness (p50 dropped ~40% at 1,000
+concurrent requests in one run). It doesn't fully bound memory though
+— hyper still accepts and buffers every incoming TCP connection before
+the limiter's gate, so a connection flood is still a job for whatever
+sits in front of this in production (the same reverse proxy handling
+TLS termination is the natural place for connection-level limits too).
+
 **What's registered, not what's on the command line, decides what's
 served.** `pgapp_control.apps` (a schema of its own — pgapp managing
 itself, distinct from `pgapp_meta`'s per-app metadata) is the durable
