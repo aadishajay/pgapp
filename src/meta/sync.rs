@@ -179,20 +179,6 @@ pub async fn sync_app(
         page_ids.insert(page.name.clone(), page_id);
     }
 
-    // A page removed from the markup (the App Builder's "Delete Page",
-    // or just hand-edited out) needs its `pgapp_meta.pages` row gone
-    // too, not just absent from `page_ids` above — otherwise it lingers
-    // forever, still visible to anything reading `pgapp_meta` directly
-    // (the App Builder's own "Pages" listing is exactly that). Cascades
-    // to `pgapp_meta.components`/`.saved_views`/etc. via their own
-    // `on delete cascade` (see db/schema.sql).
-    let current_page_names: Vec<&str> = app.pages.iter().map(|p| p.name.as_str()).collect();
-    sqlx::query("delete from pgapp_meta.pages where app_id = $1 and not (name = any($2))")
-        .bind(app_id)
-        .bind(&current_page_names)
-        .execute(pool)
-        .await?;
-
     // Phase 3: page-scoped queries and components — components may
     // reference another page (link targets), an entity, or a query by
     // name, all of which now have ids/known names to validate against.
@@ -244,6 +230,28 @@ pub async fn sync_app(
     for (ordinal, item) in app.nav.iter().enumerate() {
         sync_nav_item(pool, app_id, None, ordinal as i32, item, &page_ids).await?;
     }
+
+    // A page removed from the markup (the App Builder's "Delete Page"
+    // or "Rename Page" — a rename is a delete-of-the-old-name plus an
+    // insert-of-the-new-one, since the upsert above conflicts on
+    // (app_id, name) — or just hand-edited out) needs its
+    // `pgapp_meta.pages` row gone too, not just absent from `page_ids`
+    // above — otherwise it lingers forever, still visible to anything
+    // reading `pgapp_meta` directly (the App Builder's own "Pages"
+    // listing is exactly that). Cascades to
+    // `pgapp_meta.components`/`.saved_views`/etc. via their own
+    // `on delete cascade` (see db/schema.sql) — but `nav_items` isn't
+    // one of those cascades, so this has to run *after* Phase 4 has
+    // already retargeted every nav item at the fresh page ids above,
+    // or deleting a renamed-away-from page id here would still violate
+    // `nav_items_target_page_id_fkey` for any nav item that used to
+    // point at it.
+    let current_page_names: Vec<&str> = app.pages.iter().map(|p| p.name.as_str()).collect();
+    sqlx::query("delete from pgapp_meta.pages where app_id = $1 and not (name = any($2))")
+        .bind(app_id)
+        .bind(&current_page_names)
+        .execute(pool)
+        .await?;
 
     // Phase 5: the app-wide header/footer chrome — restricted to
     // Text/Link/Region, which is all "chrome" (content with no entity

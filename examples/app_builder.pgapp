@@ -2,27 +2,35 @@
 # main.rs's provision_app_builder), tied to its own reserved
 # pgapp_builder schema rather than a user workspace, at the fixed
 # workspace/app slugs "pgapp"/"builder". Lists every OTHER app
-# registered across every workspace in this instance and lets you: add/
-# reorder/edit/delete a page's components, add/delete whole pages, jump
-# to a live preview, and scaffold brand-new apps — an Oracle-APEX-App-
-# Builder-flavored editor, without hand-editing markup. Every entity
-# here reading pgapp_control.*/pgapp_meta.* is query-backed — no core
-# framework changes were needed for that read side: a named query can
-# reference any schema this connection can see, and the shared
-# pgapp_admin pool this app runs through already can. Its one real,
-# physical table (new_app_requests) lives in pgapp_builder too, matching
-# that schema's role as one of pgapp's own bookkeeping schemas rather
-# than a workspace holding real app data.
+# registered across every workspace in this instance and lets you:
+# reorder/add/edit(full markup, any attribute, any of the 8 component
+# kinds)/delete a page's components, add/rename/delete whole pages, jump
+# to a live preview, scaffold brand-new apps with zero restart, and (via
+# the "Advanced" link) reach the full-file raw editor for anything
+# structural this picker doesn't have a dedicated control for yet
+# (entities, queries, nav, header/footer, app-level settings) — an
+# Oracle-APEX-App-Builder-flavored editor, without hand-editing markup
+# over SSH. Every entity here reading pgapp_control.*/pgapp_meta.* is
+# query-backed — no core framework changes were needed for that read
+# side: a named query can reference any schema this connection can see,
+# and the shared pgapp_admin pool this app runs through already can. Its
+# one real, physical table (new_app_requests) lives in pgapp_builder
+# too, matching that schema's role as one of pgapp's own bookkeeping
+# schemas rather than a workspace holding real app data.
 #
 # The actual file-editing mechanics for an existing app's pages/
-# components — reorder/add/delete/edit-label/edit-columns, and add/
-# delete whole pages — live in src/page_reorder.rs and the
-# `/:workspace/:app/admin/pages/...` routes in server.rs, not here; this
-# app is only the picker + the draggable list + a few small forms. Every
-# one of those routes also refuses outright if the target is the App
-# Builder itself — belt and suspenders alongside the self-exclusion
-# below, since a URL can always be hand-crafted past whatever a picker
-# itself declines to link to.
+# components — reorder/add/edit/delete a component (as raw markup text,
+# so any kind/attribute is reachable, not a fixed structured-fields
+# subset), add/rename/delete a whole page — live in src/page_reorder.rs
+# and the `/:workspace/:app/admin/pages/...` routes in server.rs, not
+# here; this app is only the picker + the draggable list + a few small
+# forms. Every one of those routes also refuses outright if the target
+# is the App Builder itself — belt and suspenders alongside the
+# self-exclusion below, since a URL can always be hand-crafted past
+# whatever a picker itself declines to link to. The "Advanced" link
+# instead points at `/admin/reload` — a full-file raw editor already
+# built into every app (not something the App Builder adds), for
+# whatever this picker doesn't cover.
 
 app "App Builder" {
   theme: shadcn
@@ -119,19 +127,20 @@ app "App Builder" {
 
   page "Pages" {
     text "Editing:" attrs (id: "pgapp-context-slot")
-    text "Pick a page to edit its components, or add a new one below."
+    text "Pick a page to edit its components, or add a new one below. Use the pencil on a card to rename it."
     report "Pages" of pages_list {
       columns: page_name
       link: page_name -> page EditPage (target_workspace: target_workspace, target_app: target_app, page_name: target_page)
       page_size: 50
     } attrs (class: "pgapp-cards pgapp-page-cards")
     text "Add Page" attrs (id: "pgapp-add-page-slot")
+    text "Advanced" attrs (id: "pgapp-advanced-source-slot")
   }
 
   page "EditPage" {
     text "Editing:" attrs (id: "pgapp-context-slot")
     text "Preview" attrs (id: "pgapp-preview-slot")
-    text "Drag a row to reorder; use the icon buttons to edit a label, edit columns, or delete. Every change saves immediately, in the database and in the app's own .pgapp file."
+    text "Drag a row to reorder. The pencil opens the component's full markup for editing (any attribute, any kind); the ✕ deletes it. Every change saves immediately, in the database and in the app's own .pgapp file."
     region "Components" from query components_list {
       columns: id, kind, ordinal
     } attrs (class: "pgapp-draggable-rows")

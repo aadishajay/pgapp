@@ -48,6 +48,7 @@ use crate::instance;
 use crate::item_types;
 use crate::meta::{self, Chrome, NavNode, RegionRows, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimePage};
 use crate::model::{FieldItem, HtmlAttrs, PreAction};
+use crate::markup;
 use crate::page_reorder;
 use crate::render;
 use crate::theme::Theme;
@@ -230,8 +231,16 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/:workspace/:app/admin/pages/:page/reorder", post(admin_reorder_page))
         .route("/:workspace/:app/admin/pages/add", post(admin_add_page))
         .route("/:workspace/:app/admin/pages/:page/delete", post(admin_delete_page))
-        .route("/:workspace/:app/admin/pages/:page/components/add", post(admin_add_component))
-        .route("/:workspace/:app/admin/pages/:page/components/:idx/edit", post(admin_edit_component))
+        .route("/:workspace/:app/admin/pages/:page/rename", post(admin_rename_page))
+        .route(
+            "/:workspace/:app/admin/pages/:page/components/add",
+            post(admin_add_component_source),
+        )
+        .route(
+            "/:workspace/:app/admin/pages/:page/components/:idx/source",
+            get(admin_component_source),
+        )
+        .route("/:workspace/:app/admin/pages/:page/components/:idx/edit", post(admin_edit_component_source))
         .route("/:workspace/:app/admin/pages/:page/components/:idx/delete", post(admin_delete_component))
         .route("/pgapp/builder/admin/apps/create-pending", post(admin_create_pending_app))
         .route("/:workspace/:app/:page", get(show))
@@ -1647,66 +1656,77 @@ fn admin_edit_guard(
     Ok(entry)
 }
 
-/// Renders exactly one new top-level component's markup text (no
-/// trailing newline needed — `page_reorder::append_component` splits
-/// on `\n` itself), for the fixed, deliberately small set of kinds the
-/// App Builder's "Add Component" panel offers. Anything referencing an
-/// unknown entity/query is caught later, at `entry.reload()`'s
-/// `meta::sync_app` validation — same as any other markup edit — not
-/// re-validated here.
-fn render_new_component(kind: &str, label: &str, source_name: &str, columns: &str) -> anyhow::Result<String> {
-    let label = page_reorder::escape_string(label.trim());
-    let columns = columns.trim();
-    match kind {
-        "text" => Ok(format!("    text \"{label}\"")),
-        "report" => {
-            let source_name = source_name.trim();
-            if source_name.is_empty() {
-                anyhow::bail!("a report needs an entity name");
-            }
-            if columns.is_empty() {
-                anyhow::bail!("a report needs at least one column");
-            }
-            Ok(format!("    report \"{label}\" of {source_name} {{\n      columns: {columns}\n    }}"))
+/// Parses `text` as a whole app and discards the result — used to
+/// reject a hand-edited component/page block *before* it's written to
+/// disk, so a typo can never leave the file in a broken state (unlike
+/// `entry.reload()`, which only notices after the write already
+/// happened). Doesn't catch every possible mistake (an unknown
+/// entity/query reference still only surfaces at `meta::sync_app`,
+/// same as any other markup edit) — just malformed syntax.
+fn validate_markup(text: &str) -> anyhow::Result<()> {
+    markup::parse_app(text).map(|_| ()).context("that markup doesn't parse")
+}
+
+/// GET /:workspace/:app/admin/pages/:page/components/:idx/source —
+/// returns component `idx`'s exact current markup text, for the App
+/// Builder's "Edit" panel to prefill its textarea with (see
+/// `page_reorder::component_source`).
+async fn admin_component_source(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, page, idx)): Path<(String, String, String, usize)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let result: anyhow::Result<String> = async {
+        if std::path::Path::new(&entry.markup_path).is_dir() {
+            anyhow::bail!("this app's markup is a directory of files — the App Builder only supports single-file apps right now");
         }
-        "region" => {
-            let source_name = source_name.trim();
-            if source_name.is_empty() {
-                anyhow::bail!("a region needs a query name");
-            }
-            let cols_line = if columns.is_empty() { String::new() } else { format!(" {{\n      columns: {columns}\n    }}") };
-            Ok(format!("    region \"{label}\" from query {source_name}{cols_line}"))
-        }
-        other => anyhow::bail!("unknown component kind '{other}' (expected text, report, or region)"),
+        let markup_text = tokio::fs::read_to_string(&entry.markup_path)
+            .await
+            .with_context(|| format!("failed to read '{}'", entry.markup_path))?;
+        page_reorder::component_source(&markup_text, &page, idx)
+    }
+    .await;
+
+    match result {
+        Ok(source) => Ok(axum::Json(json!({"ok": true, "source": source})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
     }
 }
 
 /// POST /:workspace/:app/admin/pages/:page/components/add — the App
-/// Builder's "Add Component" panel. `kind` is `text`/`report`/`region`;
-/// `label` is the title (report/region) or content (text); `source` is
-/// the entity name (report) or query name (region), ignored for text;
-/// `columns` is a comma-separated list, required for report, optional
-/// for region. Always appends at the end of the page — drag it into
-/// place afterward with the existing reorder feature. JSON in/out, same
-/// as `admin_reorder_page`.
-async fn admin_add_component(
+/// Builder's "Add Component" panel: `source` is the caller's own raw
+/// markup text for exactly one new component, of *any* kind
+/// (text/report/form/editable_table/chart/region/action/link) with
+/// *any* attribute the grammar supports — the panel just seeds the
+/// textarea with a per-kind starter template client-side (see
+/// runtime.js's `bindAddComponentForm`), it doesn't constrain what gets
+/// submitted. Validated with `validate_markup` before writing, so a
+/// malformed block is rejected instead of corrupting the file. Always
+/// appends at the end of the page — drag it into place afterward with
+/// the existing reorder feature. JSON in/out, same as
+/// `admin_reorder_page`.
+async fn admin_add_component_source(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
     Path((workspace, app, page)): Path<(String, String, String)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
-    let get = |k: &str| values.get(k).map(|s| s.as_str()).unwrap_or("");
+    let new_component = values.get("source").map(|s| s.as_str()).unwrap_or("").trim().to_string();
 
     let result: anyhow::Result<()> = async {
+        if new_component.is_empty() {
+            anyhow::bail!("a component needs some markup text");
+        }
         if std::path::Path::new(&entry.markup_path).is_dir() {
             anyhow::bail!("this app's markup is a directory of files — the App Builder only supports single-file apps right now");
         }
-        let new_component = render_new_component(get("kind"), get("label"), get("source"), get("columns"))?;
         let markup_text = tokio::fs::read_to_string(&entry.markup_path)
             .await
             .with_context(|| format!("failed to read '{}'", entry.markup_path))?;
         let updated = page_reorder::append_component(&markup_text, &page, &new_component)?;
+        validate_markup(&updated)?;
         tokio::fs::write(&entry.markup_path, updated)
             .await
             .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
@@ -1723,38 +1743,36 @@ async fn admin_add_component(
     }
 }
 
-/// POST /:workspace/:app/admin/pages/:page/components/:idx/edit — edits
-/// component `idx`'s label (its title/content) and/or `columns:` list.
-/// Either field is optional in the post; only the ones present are
-/// changed. Works uniformly across component kinds since a label is
-/// always a component's first string literal (see
-/// `page_reorder::set_component_label`'s doc).
-async fn admin_edit_component(
+/// POST /:workspace/:app/admin/pages/:page/components/:idx/edit — the
+/// App Builder's full-property "Edit": `source` replaces component
+/// `idx` outright (see `page_reorder::replace_component`), so *any*
+/// attribute of *any* kind can change, not just label/columns —
+/// APEX-Page-Designer-style full edit, minus the property-sheet UI
+/// (this is a raw block editor instead, prefilled via
+/// `admin_component_source`). Validated with `validate_markup` before
+/// writing.
+async fn admin_edit_component_source(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
     Path((workspace, app, page, idx)): Path<(String, String, String, usize)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let new_component = values.get("source").map(|s| s.as_str()).unwrap_or("").trim().to_string();
 
     let result: anyhow::Result<()> = async {
+        if new_component.is_empty() {
+            anyhow::bail!("a component needs some markup text");
+        }
         if std::path::Path::new(&entry.markup_path).is_dir() {
             anyhow::bail!("this app's markup is a directory of files — the App Builder only supports single-file apps right now");
         }
-        let mut markup_text = tokio::fs::read_to_string(&entry.markup_path)
+        let markup_text = tokio::fs::read_to_string(&entry.markup_path)
             .await
             .with_context(|| format!("failed to read '{}'", entry.markup_path))?;
-        if let Some(label) = values.get("label") {
-            markup_text = page_reorder::set_component_label(&markup_text, &page, idx, label)?;
-        }
-        if let Some(columns) = values.get("columns") {
-            let cols: Vec<String> = columns.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
-            if cols.is_empty() {
-                anyhow::bail!("'columns' can't be empty");
-            }
-            markup_text = page_reorder::set_component_columns(&markup_text, &page, idx, &cols)?;
-        }
-        tokio::fs::write(&entry.markup_path, markup_text)
+        let updated = page_reorder::replace_component(&markup_text, &page, idx, &new_component)?;
+        validate_markup(&updated)?;
+        tokio::fs::write(&entry.markup_path, updated)
             .await
             .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
         Ok(())
@@ -1765,6 +1783,47 @@ async fn admin_edit_component(
         Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
             Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
             Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("edited, but reload failed: {e:#}")})).into_response()),
+        },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/pages/:page/rename — renames a whole
+/// page (see `page_reorder::rename_page`, which also fixes up any
+/// `-> page <old_name>` reference elsewhere in the file). Validated
+/// with `validate_markup` before writing.
+async fn admin_rename_page(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, page)): Path<(String, String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let new_name = values.get("new_name").map(|s| s.trim().to_string()).unwrap_or_default();
+
+    let result: anyhow::Result<()> = async {
+        if new_name.is_empty() {
+            anyhow::bail!("a page needs a name");
+        }
+        if std::path::Path::new(&entry.markup_path).is_dir() {
+            anyhow::bail!("this app's markup is a directory of files — the App Builder only supports single-file apps right now");
+        }
+        let markup_text = tokio::fs::read_to_string(&entry.markup_path)
+            .await
+            .with_context(|| format!("failed to read '{}'", entry.markup_path))?;
+        let updated = page_reorder::rename_page(&markup_text, &page, &new_name)?;
+        validate_markup(&updated)?;
+        tokio::fs::write(&entry.markup_path, updated)
+            .await
+            .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
+            Ok(()) => Ok(axum::Json(json!({"ok": true, "new_name": new_name})).into_response()),
+            Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("renamed, but reload failed: {e:#}")})).into_response()),
         },
         Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
     }

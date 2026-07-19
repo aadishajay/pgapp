@@ -306,6 +306,31 @@ window.pgapp = (function () {
     slot.appendChild(a);
   }
 
+  // The App Builder's "Advanced" escape hatch: a `text ... attrs (id:
+  // "pgapp-advanced-source-slot")` placeholder (see examples/
+  // app_builder.pgapp's Pages page) gets a link to the target app's
+  // own, already-existing `/admin/reload` page — a full-file raw
+  // markup editor built into every app (see `admin_reload_page` in
+  // server.rs), not something the App Builder adds. Entities, queries,
+  // nav, header/footer, and app-level settings (theme/auth/icons) have
+  // no dedicated GUI here — this is how to reach them without SSHing
+  // in to hand-edit the file.
+  function bindAdvancedSourceLink() {
+    var slot = document.getElementById("pgapp-advanced-source-slot");
+    if (!slot) return;
+    var target = pgappEditTarget();
+    if (!pgappEditTargetValid2(target)) return;
+    slot.textContent = "";
+    slot.classList.add("pgapp-toolbar-slot");
+    var a = document.createElement("a");
+    a.className = "pgapp-link pgapp-btn pgapp-btn-secondary";
+    a.href = "/" + encodeURIComponent(target.workspace) + "/" + encodeURIComponent(target.app) + "/admin/reload";
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = "Advanced: edit full app source ↗";
+    slot.appendChild(a);
+  }
+
   // The App Builder's breadcrumb: a `text ... attrs (id:
   // "pgapp-context-slot")` placeholder (on both the Pages and EditPage
   // pages) gets filled with which app/page is actually being edited —
@@ -396,6 +421,39 @@ window.pgapp = (function () {
       (function (row) {
         var link = row.querySelector("a.pgapp-link");
         var pageName = link ? link.textContent.trim() : row.textContent.trim();
+        var pageUrl =
+          "/" + encodeURIComponent(target.workspace) + "/" + encodeURIComponent(target.app) + "/admin/pages/" + encodeURIComponent(pageName);
+
+        var renameBtn = document.createElement("button");
+        renameBtn.type = "button";
+        renameBtn.className = "pgapp-icon-btn";
+        renameBtn.title = "Rename page";
+        renameBtn.setAttribute("aria-label", "Rename page");
+        renameBtn.textContent = "✎";
+        renameBtn.addEventListener("click", function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          pgappPrompt("New name for this page:", pageName).then(function (newName) {
+            if (newName === null || newName === "" || newName === pageName) return;
+            fetch(pageUrl + "/rename", {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: "new_name=" + encodeURIComponent(newName),
+            })
+              .then(function (r) {
+                return r.json();
+              })
+              .then(function (data) {
+                if (data.ok) location.reload();
+                else pgappAlert("Couldn't rename page: " + data.error);
+              })
+              .catch(function (e) {
+                pgappAlert("pgapp: " + e);
+              });
+          });
+        });
+        row.appendChild(renameBtn);
+
         var btn = document.createElement("button");
         btn.type = "button";
         btn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
@@ -407,16 +465,7 @@ window.pgapp = (function () {
           ev.stopPropagation();
           pgappConfirm('Delete page "' + pageName + '" and all its components? This can\'t be undone.').then(function (ok) {
             if (!ok) return;
-            fetch(
-              "/" +
-                encodeURIComponent(target.workspace) +
-                "/" +
-                encodeURIComponent(target.app) +
-                "/admin/pages/" +
-                encodeURIComponent(pageName) +
-                "/delete",
-              { method: "POST" }
-            )
+            fetch(pageUrl + "/delete", { method: "POST" })
               .then(function (r) {
                 return r.json();
               })
@@ -456,12 +505,34 @@ window.pgapp = (function () {
       .catch(function () {});
   }
 
-  // The App Builder's "Add Component" panel: another `text ... attrs
-  // (id: "pgapp-add-component-slot")` placeholder gets real form
-  // controls appended into it (kind/label/source/columns), POSTing to
-  // the target app's own `/admin/pages/:page/components/add` on submit
-  // — see `render_new_component` in server.rs for what each field means
-  // per kind, and why only text/report/region are offered here.
+  // Starter markup text per component kind — seeds the "Add Component"
+  // panel's raw textarea (see bindAddComponentForm) with a valid, if
+  // generic, block the user then edits in place: fill in the real
+  // entity/query name, tweak columns, add item overrides, whatever the
+  // kind supports — since the textarea submits verbatim, every
+  // attribute the grammar has is reachable here, not just a fixed
+  // subset. `<>`-bracketed tokens are placeholders to replace, not
+  // valid syntax on their own.
+  var COMPONENT_TEMPLATES = {
+    text: '    text "New text"',
+    report: '    report "New Report" of <entity_name> {\n      columns: <col1>, <col2>\n    }',
+    region: '    region "New Region" from query <query_name> {\n      columns: <col1>, <col2>\n    }',
+    editable_table: '    editable_table "New Table" of <entity_name> {\n      columns: <col1>, <col2>\n    }',
+    form: '    form "New Form" of <entity_name> {\n      fields: <field1>, <field2>\n    }',
+    chart: '    chart "New Chart" from query <query_name> {\n      type: bar\n      x: <label_column>\n      y: <value_column>\n    }',
+    action: '    action "Run action" runs <action_name>',
+    link: '    link "Go" -> page <PageName>',
+  };
+
+  // The App Builder's "Add Component" panel: a `text ... attrs (id:
+  // "pgapp-add-component-slot")` placeholder gets a kind picker plus a
+  // raw markup textarea appended into it. Picking a kind just seeds the
+  // textarea with a starter template (COMPONENT_TEMPLATES) — the
+  // textarea's own content, not the kind picker, is what's actually
+  // submitted, so any of the 8 component kinds and any of their
+  // attributes can be added, not a fixed structured-fields subset.
+  // POSTs the raw text to the target app's own
+  // `/admin/pages/:page/components/add`.
   function bindAddComponentForm() {
     var slot = document.getElementById("pgapp-add-component-slot");
     if (!slot) return;
@@ -480,50 +551,38 @@ window.pgapp = (function () {
 
     var kindSel = document.createElement("select");
     kindSel.className = "pgapp-select";
-    ["text", "report", "region"].forEach(function (k) {
+    Object.keys(COMPONENT_TEMPLATES).forEach(function (k) {
       var opt = document.createElement("option");
       opt.value = k;
       opt.textContent = k;
       kindSel.appendChild(opt);
     });
 
-    var labelInput = document.createElement("input");
-    labelInput.className = "pgapp-input";
-    labelInput.placeholder = "Title (report/region) or content (text)";
+    var sourceArea = document.createElement("textarea");
+    sourceArea.className = "pgapp-input pgapp-source-textarea";
+    sourceArea.rows = 4;
+    sourceArea.value = COMPONENT_TEMPLATES[kindSel.value];
 
-    var sourceInput = document.createElement("input");
-    sourceInput.className = "pgapp-input";
-    sourceInput.placeholder = "Entity name (report) or query name (region)";
-
-    var columnsInput = document.createElement("input");
-    columnsInput.className = "pgapp-input";
-    columnsInput.placeholder = "Columns, comma-separated (report/region)";
+    kindSel.addEventListener("change", function () {
+      sourceArea.value = COMPONENT_TEMPLATES[kindSel.value];
+    });
 
     var addBtn = document.createElement("button");
     addBtn.type = "submit";
     addBtn.className = "pgapp-btn pgapp-btn-primary";
     addBtn.textContent = "Add";
 
-    [kindSel, labelInput, sourceInput, columnsInput, addBtn].forEach(function (el) {
+    [kindSel, sourceArea, addBtn].forEach(function (el) {
       form.appendChild(el);
     });
     slot.appendChild(form);
 
     form.addEventListener("submit", function (ev) {
       ev.preventDefault();
-      var body =
-        "kind=" +
-        encodeURIComponent(kindSel.value) +
-        "&label=" +
-        encodeURIComponent(labelInput.value) +
-        "&source=" +
-        encodeURIComponent(sourceInput.value) +
-        "&columns=" +
-        encodeURIComponent(columnsInput.value);
       fetch(pgappAdminPagesUrl(target, "/components/add"), {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: body,
+        body: "source=" + encodeURIComponent(sourceArea.value),
       })
         .then(function (r) {
           return r.json();
@@ -555,11 +614,11 @@ window.pgapp = (function () {
 
   // Restyles the App Builder's plain id/kind/ordinal table row (from
   // `columns: id, kind, ordinal` in examples/app_builder.pgapp) into a
-  // compact list row: a kind icon, the component's own label (fetched
-  // once per row via a lightweight same-origin request, since the
-  // table itself only has kind/ordinal, not a title), an ordinal
-  // badge, and icon-only Edit label / Edit columns / Delete actions —
-  // replacing the earlier plain-text-button layout. The ordinal column
+  // compact list row: a kind icon, an ordinal badge, and icon-only
+  // Edit/Delete actions. Edit fetches the component's exact current
+  // markup text and opens it in a full raw-source editor (see
+  // `pgappSourceEditor`) — every attribute of every kind is editable
+  // this way, not a fixed label/columns subset. The ordinal column
   // doubles as the `idx` the edit/delete routes expect, since
   // `meta::sync_app` always re-derives ordinal from file order on
   // every reload — it's never stale relative to the file.
@@ -591,35 +650,32 @@ window.pgapp = (function () {
           var actionsTd = document.createElement("td");
           actionsTd.className = "pgapp-component-actions";
 
-          var editLabelBtn = document.createElement("button");
-          editLabelBtn.type = "button";
-          editLabelBtn.className = "pgapp-icon-btn";
-          editLabelBtn.title = "Edit label";
-          editLabelBtn.setAttribute("aria-label", "Edit label");
-          editLabelBtn.textContent = "✎";
-          editLabelBtn.addEventListener("click", function () {
-            pgappPrompt("New title/content for this component:", "").then(function (label) {
-              if (label === null || label === "") return;
-              postComponentEdit(target, idx, "label=" + encodeURIComponent(label));
-            });
-          });
-          actionsTd.appendChild(editLabelBtn);
-
-          if (kind === "report" || kind === "region" || kind === "editable_table") {
-            var editColsBtn = document.createElement("button");
-            editColsBtn.type = "button";
-            editColsBtn.className = "pgapp-icon-btn";
-            editColsBtn.title = "Edit columns";
-            editColsBtn.setAttribute("aria-label", "Edit columns");
-            editColsBtn.textContent = "▤";
-            editColsBtn.addEventListener("click", function () {
-              pgappPrompt("New columns for this component, comma-separated:", "").then(function (columns) {
-                if (columns === null || columns === "") return;
-                postComponentEdit(target, idx, "columns=" + encodeURIComponent(columns));
+          var editBtn = document.createElement("button");
+          editBtn.type = "button";
+          editBtn.className = "pgapp-icon-btn";
+          editBtn.title = "Edit";
+          editBtn.setAttribute("aria-label", "Edit component");
+          editBtn.textContent = "✎";
+          editBtn.addEventListener("click", function () {
+            fetch(pgappAdminPagesUrl(target, "/components/" + encodeURIComponent(idx) + "/source"))
+              .then(function (r) {
+                return r.json();
+              })
+              .then(function (data) {
+                if (!data.ok) {
+                  pgappAlert("Couldn't load component source: " + data.error);
+                  return;
+                }
+                pgappSourceEditor("Edit component (" + kind + ")", data.source).then(function (edited) {
+                  if (edited === null) return;
+                  postComponentEdit(target, idx, "source=" + encodeURIComponent(edited));
+                });
+              })
+              .catch(function (e) {
+                pgappAlert("pgapp: " + e);
               });
-            });
-            actionsTd.appendChild(editColsBtn);
-          }
+          });
+          actionsTd.appendChild(editBtn);
 
           var deleteBtn = document.createElement("button");
           deleteBtn.type = "button";
@@ -780,9 +836,9 @@ window.pgapp = (function () {
   }
 
   // Same non-blocking, themed idea as showDialog, but with a single
-  // text input — the App Builder's "Edit label"/"Edit columns" buttons
-  // use this in place of window.prompt(). Resolves the input's value on
-  // OK/Enter, or null on Cancel/Escape.
+  // text input — the App Builder's "Rename page" button uses this in
+  // place of window.prompt(). Resolves the input's value on OK/Enter,
+  // or null on Cancel/Escape.
   function pgappPrompt(message, defaultValue) {
     return new Promise(function (resolve) {
       var overlay = document.createElement("div");
@@ -843,6 +899,71 @@ window.pgapp = (function () {
     });
   }
 
+  // Full-property editing, APEX-Page-Designer-style but as a raw text
+  // box instead of a property sheet: same shell as pgappPrompt, but a
+  // multi-line, monospace `<textarea>` instead of a single-line
+  // `<input>` — used by the App Builder's component "Edit" button
+  // (prefilled with that component's exact current markup) and its
+  // "Advanced: edit full app source" link's inline variant. Resolves
+  // the textarea's value on Save, or null on Cancel/Escape (Enter does
+  // *not* submit, unlike pgappPrompt, since newlines are meaningful
+  // here).
+  function pgappSourceEditor(title, initialText) {
+    return new Promise(function (resolve) {
+      var overlay = document.createElement("div");
+      overlay.className = "pgapp-dialog-overlay";
+      var box = document.createElement("div");
+      box.className = "pgapp-dialog-box pgapp-dialog-box-wide";
+      box.setAttribute("role", "alertdialog");
+      box.setAttribute("aria-modal", "true");
+      var p = document.createElement("p");
+      p.className = "pgapp-dialog-message";
+      p.textContent = title;
+      box.appendChild(p);
+      var textarea = document.createElement("textarea");
+      textarea.className = "pgapp-input pgapp-source-textarea";
+      textarea.rows = 10;
+      textarea.value = initialText || "";
+      box.appendChild(textarea);
+      var actions = document.createElement("div");
+      actions.className = "pgapp-dialog-actions";
+      var cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "pgapp-btn pgapp-btn-secondary";
+      cancelBtn.textContent = "Cancel";
+      var saveBtn = document.createElement("button");
+      saveBtn.type = "button";
+      saveBtn.className = "pgapp-btn pgapp-btn-primary";
+      saveBtn.textContent = "Save";
+
+      function cleanup() {
+        document.removeEventListener("keydown", onKey);
+        overlay.remove();
+      }
+      function onKey(ev) {
+        if (ev.key === "Escape") {
+          cleanup();
+          resolve(null);
+        }
+      }
+      cancelBtn.addEventListener("click", function () {
+        cleanup();
+        resolve(null);
+      });
+      saveBtn.addEventListener("click", function () {
+        cleanup();
+        resolve(textarea.value);
+      });
+      actions.appendChild(cancelBtn);
+      actions.appendChild(saveBtn);
+      box.appendChild(actions);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      document.addEventListener("keydown", onKey);
+      textarea.focus();
+    });
+  }
+
   // Delete/destructive forms carry `data-pgapp-confirm="<message>"`
   // instead of a native onsubmit="return confirm(...)" — this intercepts
   // the submit, shows the themed confirm dialog, and only actually
@@ -880,6 +1001,7 @@ window.pgapp = (function () {
     document.addEventListener("DOMContentLoaded", bindAddPageForm);
     document.addEventListener("DOMContentLoaded", bindPageCardActions);
     document.addEventListener("DOMContentLoaded", bindNewAppProcessing);
+    document.addEventListener("DOMContentLoaded", bindAdvancedSourceLink);
   } else {
     bindDynamicActions();
     bindNavToggles();
@@ -893,6 +1015,7 @@ window.pgapp = (function () {
     bindAddPageForm();
     bindPageCardActions();
     bindNewAppProcessing();
+    bindAdvancedSourceLink();
   }
 
   return {

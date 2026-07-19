@@ -199,48 +199,17 @@ pub fn append_component(source: &str, page_name: &str, new_component: &str) -> R
     Ok(join_lines(&new_lines, source.ends_with('\n')))
 }
 
-/// Finds the first quoted string literal starting at or after `from`
-/// within `lines[..end]` (searching only whole lines, in order) and
-/// returns `(line_index, byte_start, byte_end)` of the quotes
-/// (inclusive), respecting `\"`/`\\` escapes the same way the lexer
-/// does. Used to replace a component's label (its first string
-/// argument — title for report/region/form, content for text) without
-/// disturbing anything else on or around that line.
-fn find_first_quoted(lines: &[&str], from: usize, end: usize) -> Option<(usize, usize, usize)> {
-    for (i, line) in lines.iter().enumerate().take(end).skip(from) {
-        let bytes = line.as_bytes();
-        let mut j = 0;
-        while j < bytes.len() {
-            if bytes[j] == b'"' {
-                let start = j;
-                j += 1;
-                while j < bytes.len() {
-                    if bytes[j] == b'\\' && j + 1 < bytes.len() && (bytes[j + 1] == b'"' || bytes[j + 1] == b'\\') {
-                        j += 2;
-                    } else if bytes[j] == b'"' {
-                        return Some((i, start, j + 1));
-                    } else {
-                        j += 1;
-                    }
-                }
-                break; // unterminated string on this line — give up on it
-            }
-            j += 1;
-        }
-    }
-    None
-}
-
 /// Same escaping the markup lexer accepts back: `\` and `"` doubled up.
 pub(crate) fn escape_string(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-/// Replaces component `idx`'s label — its first string literal — with
-/// `new_label`. Works uniformly across text/report/region/form/
-/// editable_table, since a component's label is always its first
-/// quoted string, immediately after the leading keyword.
-pub fn set_component_label(source: &str, page_name: &str, idx: usize, new_label: &str) -> Result<String> {
+/// Returns component `idx`'s exact source text, unindented from
+/// however it appears in `source` — used to prefill the App Builder's
+/// full-property "Edit" panel with the real, current markup for that
+/// one component (any kind, any attribute), rather than a fixed set of
+/// structured fields.
+pub fn component_source(source: &str, page_name: &str, idx: usize) -> Result<String> {
     let (bounds, _) = component_bounds(source, page_name)?;
     let n = bounds.len();
     if idx >= n {
@@ -248,59 +217,100 @@ pub fn set_component_label(source: &str, page_name: &str, idx: usize, new_label:
     }
     let (start, end) = bounds[idx];
     let lines: Vec<&str> = source.lines().collect();
-    let (line_idx, qstart, qend) =
-        find_first_quoted(&lines, start, end).ok_or_else(|| anyhow::anyhow!("component {idx} has no label to replace"))?;
+    Ok(lines[start..end].join("\n"))
+}
 
-    let replaced_line = format!("{}\"{}\"{}", &lines[line_idx][..qstart], escape_string(new_label), &lines[line_idx][qend..]);
+/// Replaces component `idx` outright with `new_component` (caller-
+/// formatted markup text for exactly one component) — the App
+/// Builder's full-property "Edit": the whole block is swapped, so any
+/// attribute of any kind can change, not just a fixed subset. The
+/// caller is expected to validate the result (e.g. via
+/// `markup::parse_app` on the whole file) before persisting it, since a
+/// hand-edited block can easily be malformed.
+pub fn replace_component(source: &str, page_name: &str, idx: usize, new_component: &str) -> Result<String> {
+    let (bounds, _) = component_bounds(source, page_name)?;
+    let n = bounds.len();
+    if idx >= n {
+        anyhow::bail!("index {idx} out of range for page '{page_name}' ({n} components)");
+    }
+    let (start, end) = bounds[idx];
+    let lines: Vec<&str> = source.lines().collect();
+
+    let mut new_lines: Vec<&str> = Vec::with_capacity(lines.len() + 4);
+    new_lines.extend_from_slice(&lines[..start]);
+    new_lines.extend(new_component.lines());
+    new_lines.extend_from_slice(&lines[end..]);
+    Ok(join_lines(&new_lines, source.ends_with('\n')))
+}
+
+/// Renames page `old_name` to `new_name`: the page's own declaration
+/// line changes, and every `-> page <old_name>` reference elsewhere in
+/// the file (nav items, report `link:`, `link` components) is rewritten
+/// to match, since a page target is a bare identifier that has to keep
+/// matching the (unquoted) page name for those links to keep working.
+/// Matches on word boundaries so e.g. renaming "Task" can't clobber a
+/// reference to "TaskDetail" — the one blind spot is a `text`/label
+/// string that just happens to contain the literal substring
+/// `page <old_name>` as ordinary display text, which would also get
+/// rewritten; considered an acceptable, rare edge case for a text-splice
+/// based editor.
+pub fn rename_page(source: &str, old_name: &str, new_name: &str) -> Result<String> {
+    let (starts, _) = markup::app_page_start_lines(source).context("failed to parse app")?;
+    if old_name != new_name && starts.iter().any(|(n, _)| n == new_name) {
+        anyhow::bail!("a page named '{new_name}' already exists in this app");
+    }
+    let (_, token_line) = starts
+        .into_iter()
+        .find(|(n, _)| n == old_name)
+        .ok_or_else(|| anyhow::anyhow!("no page named '{old_name}' in this app"))?;
+    let idx = (token_line - 1) as usize;
+    let lines: Vec<&str> = source.lines().collect();
+    let line = lines[idx];
+    let needle = format!("\"{}\"", escape_string(old_name));
+    let pos = line
+        .find(&needle)
+        .ok_or_else(|| anyhow::anyhow!("couldn't locate page '{old_name}'s declaration to rename"))?;
+    let replaced_line = format!("{}\"{}\"{}", &line[..pos], escape_string(new_name), &line[pos + needle.len()..]);
+
     let new_lines: Vec<String> = lines
         .iter()
         .enumerate()
-        .map(|(i, l)| if i == line_idx { replaced_line.clone() } else { l.to_string() })
+        .map(|(i, l)| if i == idx { replaced_line.clone() } else { l.to_string() })
         .collect();
-    let borrowed: Vec<&str> = new_lines.iter().map(|s| s.as_str()).collect();
-    Ok(join_lines(&borrowed, source.ends_with('\n')))
+    let joined = new_lines.join("\n");
+    let renamed = replace_page_target_refs(&joined, old_name, new_name);
+    Ok(if source.ends_with('\n') && !renamed.ends_with('\n') {
+        format!("{renamed}\n")
+    } else {
+        renamed
+    })
 }
 
-/// Replaces (or, if absent, inserts right after the component's own
-/// first line) component `idx`'s `columns:` property — the display
-/// column list on report/region/editable_table.
-pub fn set_component_columns(source: &str, page_name: &str, idx: usize, columns: &[String]) -> Result<String> {
-    let (bounds, _) = component_bounds(source, page_name)?;
-    let n = bounds.len();
-    if idx >= n {
-        anyhow::bail!("index {idx} out of range for page '{page_name}' ({n} components)");
-    }
-    let (start, end) = bounds[idx];
-    let lines: Vec<&str> = source.lines().collect();
-    let new_line = format!("    columns: {}", columns.join(", "));
-
-    let existing = (start..end).find(|&i| lines[i].trim_start().starts_with("columns:"));
-
-    let mut new_lines: Vec<String> = Vec::with_capacity(lines.len() + 1);
-    match existing {
-        Some(col_line) => {
-            for (i, l) in lines.iter().enumerate() {
-                if i == col_line {
-                    new_lines.push(new_line.clone());
-                } else {
-                    new_lines.push(l.to_string());
-                }
-            }
+/// Rewrites every word-boundary-matched `page <old_name>` occurrence
+/// (as used after `->` in nav items, report `link:`, and `link`
+/// components) to `page <new_name>`. Never touches a *quoted* page
+/// name (a page's own declaration, `page "Name" {`), since the needle
+/// has no leading quote.
+fn replace_page_target_refs(source: &str, old_name: &str, new_name: &str) -> String {
+    let needle = format!("page {old_name}");
+    let mut result = String::with_capacity(source.len());
+    let mut rest = source;
+    while let Some(pos) = rest.find(needle.as_str()) {
+        let before = &rest[..pos];
+        let after = &rest[pos + needle.len()..];
+        let prev_ok = before.chars().next_back().is_none_or(|c| !c.is_alphanumeric() && c != '_');
+        let next_ok = after.chars().next().is_none_or(|c| !c.is_alphanumeric() && c != '_');
+        result.push_str(before);
+        if prev_ok && next_ok {
+            result.push_str("page ");
+            result.push_str(new_name);
+        } else {
+            result.push_str(&needle);
         }
-        None => {
-            // No columns: line yet — insert one right after the
-            // component's own opening line (index `start`).
-            for (i, l) in lines.iter().enumerate() {
-                new_lines.push(l.to_string());
-                if i == start {
-                    new_lines.push(new_line.clone());
-                }
-            }
-        }
+        rest = after;
     }
-
-    let borrowed: Vec<&str> = new_lines.iter().map(|s| s.as_str()).collect();
-    Ok(join_lines(&borrowed, source.ends_with('\n')))
+    result.push_str(rest);
+    result
 }
 
 #[cfg(test)]
@@ -439,74 +449,6 @@ mod tests {
     }
 
     #[test]
-    fn replaces_a_components_label() {
-        let out = set_component_label(SRC, "Target", 2, "THIRD (edited)").unwrap();
-        let expected = r#"app "Demo" {
-  page "Target" {
-    text "first"
-    # a comment right above second
-    text "second"
-    text "THIRD (edited)"
-  }
-}
-"#;
-        assert_eq!(out, expected);
-    }
-
-    #[test]
-    fn label_replacement_escapes_quotes_and_backslashes() {
-        let out = set_component_label(SRC, "Target", 0, "say \"hi\" \\ ok").unwrap();
-        assert!(out.contains(r#"text "say \"hi\" \\ ok""#));
-    }
-
-    #[test]
-    fn sets_columns_on_a_component_without_any_yet() {
-        let src = r#"app "Demo" {
-  page "Target" {
-    report "R" of items {
-      page_size: 10
-    }
-  }
-}
-"#;
-        let out = set_component_columns(src, "Target", 0, &["name".to_string(), "done".to_string()]).unwrap();
-        let expected = r#"app "Demo" {
-  page "Target" {
-    report "R" of items {
-    columns: name, done
-      page_size: 10
-    }
-  }
-}
-"#;
-        assert_eq!(out, expected);
-    }
-
-    #[test]
-    fn replaces_existing_columns_in_place() {
-        let src = r#"app "Demo" {
-  page "Target" {
-    report "R" of items {
-      columns: name
-      page_size: 10
-    }
-  }
-}
-"#;
-        let out = set_component_columns(src, "Target", 0, &["name".to_string(), "done".to_string()]).unwrap();
-        let expected = r#"app "Demo" {
-  page "Target" {
-    report "R" of items {
-    columns: name, done
-      page_size: 10
-    }
-  }
-}
-"#;
-        assert_eq!(out, expected);
-    }
-
-    #[test]
     fn adds_a_new_empty_page_before_the_apps_closing_brace() {
         let out = add_page(SRC, "NewPage").unwrap();
         let expected = r#"app "Demo" {
@@ -563,5 +505,98 @@ mod tests {
     #[test]
     fn rejects_deleting_an_unknown_page() {
         assert!(delete_page(SRC, "Nope").is_err());
+    }
+
+    #[test]
+    fn returns_a_components_exact_source_text() {
+        let out = component_source(SRC, "Target", 1).unwrap();
+        assert_eq!(out, "    # a comment right above second\n    text \"second\"");
+    }
+
+    #[test]
+    fn replaces_a_component_outright_with_new_markup() {
+        let out = replace_component(SRC, "Target", 2, "    report \"New\" of items {\n      columns: name\n    }").unwrap();
+        let expected = r#"app "Demo" {
+  page "Target" {
+    text "first"
+    # a comment right above second
+    text "second"
+    report "New" of items {
+      columns: name
+    }
+  }
+}
+"#;
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn renames_a_page_and_its_own_link_targets() {
+        let src = r#"app "Demo" {
+  nav {
+    item "Go" -> page Target
+  }
+
+  page "Target" {
+    text "first"
+  }
+
+  page "Other" {
+    link "Back" -> page Target
+  }
+}
+"#;
+        let out = rename_page(src, "Target", "Renamed").unwrap();
+        let expected = r#"app "Demo" {
+  nav {
+    item "Go" -> page Renamed
+  }
+
+  page "Renamed" {
+    text "first"
+  }
+
+  page "Other" {
+    link "Back" -> page Renamed
+  }
+}
+"#;
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn rename_page_does_not_clobber_a_longer_identifier_sharing_a_prefix() {
+        let src = r#"app "Demo" {
+  page "Task" {
+    text "a"
+  }
+
+  page "TaskDetail" {
+    link "Go" -> page Task
+    link "Detail" -> page TaskDetail
+  }
+}
+"#;
+        let out = rename_page(src, "Task", "Job").unwrap();
+        assert!(out.contains("page \"Job\""));
+        assert!(out.contains("-> page Job"));
+        assert!(out.contains("-> page TaskDetail"), "must not have rewritten TaskDetail's own reference");
+        assert!(out.contains("page \"TaskDetail\""));
+    }
+
+    #[test]
+    fn rejects_renaming_to_an_existing_page_name() {
+        assert!(rename_page(SRC, "Target", "Target").is_ok());
+        let src = r#"app "Demo" {
+  page "A" { text "x" }
+  page "B" { text "y" }
+}
+"#;
+        assert!(rename_page(src, "A", "B").is_err());
+    }
+
+    #[test]
+    fn rejects_renaming_an_unknown_page() {
+        assert!(rename_page(SRC, "Nope", "Whatever").is_err());
     }
 }

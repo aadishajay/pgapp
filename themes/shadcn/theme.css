@@ -669,6 +669,16 @@ a.pgapp-link:has(.pgapp-icon):hover .pgapp-icon {
 .pgapp-dialog-message { margin: 0 0 1.1rem; color: hsl(var(--card-foreground)); font-weight: 500; }
 .pgapp-dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
 .pgapp-dialog-box .pgapp-input { margin-bottom: 1.1rem; }
+.pgapp-dialog-box-wide { max-width: 40rem; }
+.pgapp-source-textarea {
+  display: block;
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  resize: vertical;
+  white-space: pre;
+}
 
 /* App Builder (examples/app_builder.pgapp) — an APEX-App-Builder-
    flavored look for its 4 pages: a card grid for "Apps"/"Pages"
@@ -828,8 +838,9 @@ a.pgapp-link:has(.pgapp-icon):hover .pgapp-icon {
    (bindPageCardActions) instead of a 4th column like the component
    list's table shape allows — a picker card is a single link, not a
    multi-column row. */
-.pgapp-page-cards .pgapp-table tr { position: relative; padding-right: 2.5rem; }
+.pgapp-page-cards .pgapp-table tr { position: relative; padding-right: 4.5rem; }
 .pgapp-page-cards .pgapp-table tr .pgapp-icon-btn { position: absolute; top: 0.6rem; right: 0.6rem; }
+.pgapp-page-cards .pgapp-table tr .pgapp-icon-btn:not(.pgapp-icon-btn-destructive) { right: 2.5rem; }
 
 @media (max-width: 640px) {
   .pgapp-cards .pgapp-table tbody { grid-template-columns: 1fr; }

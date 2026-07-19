@@ -717,10 +717,15 @@ still Rust code — those need `cargo build` + restart. Markup changes
 
 `examples/app_builder.pgapp` is a pgapp app, like any other, that lists
 every app registered across every workspace in the instance and lets
-you drag-and-drop reorder, add, edit, and delete any of their pages'
-components, add/delete whole pages, jump straight to a live preview,
-and scaffold brand-new apps — an Oracle-APEX-App-Builder-flavored way
-to build without hand-editing markup.
+you drag-and-drop reorder a page's components, add a component of any
+of the 8 kinds, edit any of its attributes (not just a label or column
+list), delete it, add/rename/delete whole pages, jump straight to a
+live preview, and scaffold brand-new apps — an Oracle-APEX-App-Builder-
+flavored way to build without hand-editing markup over SSH. Anything
+structural this picker doesn't have a dedicated control for yet
+(entities, queries, nav, header/footer, app-level settings) is still
+one click away via its "Advanced" link into the full-file raw editor
+every app already has.
 
 **Available by default, no setup needed.** Every instance auto-provisions
 it — at `pgapp instance init` for a new instance, and again (idempotently)
@@ -754,24 +759,48 @@ in place — no restart:
   `.../pages/:page/reorder`.
 - **Add page**: a name, on the Pages screen — POSTs to
   `.../pages/add`. Lands empty; add components to it the normal way.
-- **Delete page**: per-card button (with a confirm dialog) on the
+- **Rename page**: per-card pencil button (a themed prompt) on the
+  Pages screen — POSTs to `.../pages/:page/rename`. Rewrites the
+  page's own declaration *and* every `-> page <old name>` reference to
+  it elsewhere in the file (nav items, report `link:`, `link`
+  components — see `page_reorder::rename_page`), so nothing dangles.
+- **Delete page**: per-card ✕ button (with a confirm dialog) on the
   Pages screen — POSTs to `.../pages/:page/delete`.
-- **Add component**: pick a kind (`text`/`report`/`region`), fill in a
-  title/content, and (for report/region) an entity or query name plus
-  columns — POSTs to `.../pages/:page/components/add`. The new
-  component always lands at the bottom of the page; drag it into place
-  from there.
-- **Edit label** / **Edit columns**: per-row icon buttons — POSTs to
-  `.../pages/:page/components/:idx/edit`. A component's label is
-  always its first string literal (title for report/region/form,
-  content for text), so this works uniformly across kinds; columns
-  only shows for report/region/editable_table.
-- **Delete component**: per-row icon button (with a confirm dialog) —
+- **Add component**: pick a kind (all 8: `text`/`report`/`form`/
+  `editable_table`/`chart`/`region`/`action`/`link`) to seed a raw
+  markup textarea with a starter template, edit it freely, submit —
+  POSTs the raw text to `.../pages/:page/components/add`. Since the
+  textarea's own content is what's submitted, any attribute the
+  grammar supports for that kind is reachable, not a fixed structured-
+  fields subset. The new component always lands at the bottom of the
+  page; drag it into place from there.
+- **Edit**: per-row pencil button opens the same kind of raw-markup
+  textarea, prefilled with that component's *exact* current source
+  (`GET .../components/:idx/source`) — change anything (columns,
+  page_size, item overrides, a form's fields, a chart's type/x/y,
+  whatever the kind has), submit — POSTs to
+  `.../pages/:page/components/:idx/edit`, replacing the whole block
+  (`page_reorder::replace_component`). Full-property, APEX-Page-
+  Designer-style editing, just as a raw text box instead of a property
+  sheet.
+- **Delete component**: per-row ✕ button (with a confirm dialog) —
   POSTs to `.../pages/:page/components/:idx/delete`.
 - **Run this page ↗**: opens the page's real, live URL in a new tab —
   built client-side from this page's own `?target_workspace=`/
   `?target_app=`/`?target_page=`, same params every cross-app action
   here reads.
+- **Advanced: edit full app source ↗** (on the Pages screen): a link
+  to the target app's own, already-existing `/admin/reload` page — a
+  full-file raw markup editor built into *every* app (not something
+  the App Builder adds; see "Reloading metadata without a restart"
+  below). Entities, queries, nav, header/footer, and app-level
+  settings (theme/auth/icons) have no dedicated control in this picker
+  — this is how to reach them without SSHing in.
+
+Every add/edit/rename above is validated (`markup::parse_app` on the
+whole file, in memory) *before* it's written to disk, so a typo in a
+hand-edited component block or a bad rename is rejected with the parse
+error instead of corrupting the file.
 
 Every one of these keeps `pgapp_meta` and the target app's own
 `.pgapp` file in agreement by construction: the route edits the file
@@ -791,16 +820,18 @@ more than one file, and splicing across files isn't implemented yet.
 
 The drag itself, the panels, and the per-row/per-card action buttons
 are all `runtime.js` (`bindDraggableRows`/`bindAddComponentForm`/
-`bindComponentRowActions`/`bindAddPageForm`/`bindPageCardActions`) —
-plain HTML5 drag-and-drop plus small DOM-built forms injected into
-`text` component placeholders (`attrs (id: "...")`), no framework
-changes needed to host them. Since these all describe some *other*
-app's page, every one of them builds that app's own URL from
-`?target_workspace=`/`?target_app=`/`?target_page=` on the **current**
-(App Builder) page's own URL, not from anything baked into the markup
-— forwarded page-to-page the same way any other cross-page parameter
-is (a report's `link: <field> -> page <Name> (<row column>: <param
-name>)`).
+`bindComponentRowActions`/`bindAddPageForm`/`bindPageCardActions`/
+`bindAdvancedSourceLink`) — plain HTML5 drag-and-drop, a themed raw-
+source editor modal (`pgappSourceEditor`) built the same way as the
+existing `pgappPrompt`/`pgappAlert`/`pgappConfirm` dialogs, and small
+DOM-built forms injected into `text` component placeholders (`attrs
+(id: "...")`), no framework changes needed to host them. Since these
+all describe some *other* app's page, every one of them builds that
+app's own URL from `?target_workspace=`/`?target_app=`/`?target_page=`
+on the **current** (App Builder) page's own URL, not from anything
+baked into the markup — forwarded page-to-page the same way any other
+cross-page parameter is (a report's `link: <field> -> page <Name>
+(<row column>: <param name>)`).
 
 ### Creating a brand-new app
 
@@ -972,9 +1003,11 @@ component kinds, e.g.
 - `GET  /:workspace/:app/admin/reload` (+ POST)         — re-syncs that app's markup file into `pgapp_meta` and reloads it, no restart
 - `POST /:workspace/:app/admin/pages/:page/reorder`     — the App Builder's drag-and-drop save (see "App Builder")
 - `POST /:workspace/:app/admin/pages/add`                          — the App Builder's "Add Page" (see "App Builder")
+- `POST /:workspace/:app/admin/pages/:page/rename`                 — the App Builder's "Rename page" (see "App Builder")
 - `POST /:workspace/:app/admin/pages/:page/delete`                 — the App Builder's "Delete page" (see "App Builder")
-- `POST /:workspace/:app/admin/pages/:page/components/add`         — the App Builder's "Add Component" (see "App Builder")
-- `POST /:workspace/:app/admin/pages/:page/components/:idx/edit`   — the App Builder's "Edit label"/"Edit columns" (see "App Builder")
+- `POST /:workspace/:app/admin/pages/:page/components/add`         — the App Builder's "Add Component" (raw markup, any kind — see "App Builder")
+- `GET  /:workspace/:app/admin/pages/:page/components/:idx/source` — a component's exact current markup, for the App Builder's "Edit" panel
+- `POST /:workspace/:app/admin/pages/:page/components/:idx/edit`   — the App Builder's full-property "Edit" (see "App Builder")
 - `POST /:workspace/:app/admin/pages/:page/components/:idx/delete` — the App Builder's per-row "Delete" (see "App Builder")
 - `POST /pgapp/builder/admin/apps/create-pending`                  — the App Builder's "New App" processing step (see "App Builder")
 - `GET  /:workspace/:app/runtime.js`                    — the DB-stored `pgapp` JS runtime
