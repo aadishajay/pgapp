@@ -79,19 +79,29 @@ async fn load_one_app(
 /// `pgapp_control.apps` across every workspace (each already knows its
 /// own `data_schema`), print the banner, and serve. One bad app is
 /// skipped with a warning rather than taking the whole process down.
+///
+/// [`server::AppState::apps`] is keyed by `"<workspace_slug>/<slug>"`,
+/// not just `slug` — the app's full URL path prefix — so two apps of
+/// the same slug in different workspaces route independently instead
+/// of colliding (see `build_router`'s `/:workspace/:app` routes).
 async fn serve_registered_apps(pool: PgPool, bind_addr: &str) -> anyhow::Result<()> {
     let item_types = item_types::registry();
     let action_registry = actions::registry();
 
     let registered = control::list_enabled(&pool).await?;
     let mut apps: HashMap<String, server::AppEntry> = HashMap::new();
-    for (control_app_id, slug, path, data_schema, workspace_id) in registered {
+    for (control_app_id, slug, path, data_schema, workspace_id, workspace_slug) in registered {
+        let Some(workspace_slug) = workspace_slug else {
+            println!("pgapp: warning: skipping app '{slug}' at '{path}' — its workspace no longer exists");
+            continue;
+        };
+        let key = format!("{workspace_slug}/{slug}");
         match load_one_app(&pool, &path, &data_schema, control_app_id, workspace_id, &item_types, &action_registry).await {
             Ok(entry) => {
-                apps.insert(slug, entry);
+                apps.insert(key, entry);
             }
             Err(e) => {
-                println!("pgapp: warning: skipping app '{slug}' at '{path}' — {e:#}");
+                println!("pgapp: warning: skipping app '{key}' at '{path}' — {e:#}");
             }
         }
     }
@@ -652,14 +662,14 @@ async fn cmd_app(args: &[String]) -> anyhow::Result<()> {
             let dbname = args
                 .get(1)
                 .cloned()
-                .ok_or_else(|| anyhow::anyhow!("usage: pgapp app destroy <dbname> <slug> [--hard|--soft]"))?;
+                .ok_or_else(|| anyhow::anyhow!("usage: pgapp app destroy <dbname> <slug> [--workspace <slug>] [--hard|--soft]"))?;
             let slug = args
                 .get(2)
                 .cloned()
-                .ok_or_else(|| anyhow::anyhow!("usage: pgapp app destroy <dbname> <slug> [--hard|--soft]"))?;
+                .ok_or_else(|| anyhow::anyhow!("usage: pgapp app destroy <dbname> <slug> [--workspace <slug>] [--hard|--soft]"))?;
             let hard = args.iter().any(|a| a == "--hard");
             let soft = args.iter().any(|a| a == "--soft");
-            app_destroy(&dbname, &slug, hard, soft).await
+            app_destroy(&dbname, &slug, flag(args, "--workspace"), hard, soft).await
         }
         Some("list") => {
             let dbname = args
@@ -744,7 +754,11 @@ async fn secret_scope(pool: &PgPool, workspace_arg: Option<String>, app_arg: Opt
             Ok(secrets::Scope::Workspace(ws.id))
         }
         (None, Some(slug)) => {
-            let app = control::find_app(pool, &slug)
+            // No `--workspace` alongside `--app` here (mutually
+            // exclusive above) — if `slug` happens to be registered in
+            // more than one workspace, `find_app` reports exactly that
+            // rather than guessing which app the secret belongs to.
+            let app = control::find_app(pool, &slug, None)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("no app '{slug}' registered"))?;
             Ok(secrets::Scope::App(app.id))
@@ -860,12 +874,12 @@ async fn app_create(dbname: &str, workspace_arg: Option<String>, slug_arg: Optio
     Ok(())
 }
 
-async fn app_destroy(dbname: &str, slug: &str, hard: bool, soft: bool) -> anyhow::Result<()> {
+async fn app_destroy(dbname: &str, slug: &str, workspace_arg: Option<String>, hard: bool, soft: bool) -> anyhow::Result<()> {
     let inst = instance::load(dbname)?;
     instance::verify_operator(&inst)?;
     let pool = instance::connect_as_admin(&inst).await?;
 
-    let app = control::find_app(&pool, slug)
+    let app = control::find_app(&pool, slug, workspace_arg.as_deref())
         .await?
         .ok_or_else(|| anyhow::anyhow!("no app '{slug}' registered"))?;
 
@@ -878,7 +892,7 @@ async fn app_destroy(dbname: &str, slug: &str, hard: bool, soft: bool) -> anyhow
     };
 
     if !do_hard {
-        control::disable(&pool, slug).await?;
+        control::disable(&pool, app.id).await?;
         println!("App '{slug}' disabled (soft) — its tables and rows are untouched.");
         return Ok(());
     }
@@ -912,7 +926,7 @@ async fn app_destroy(dbname: &str, slug: &str, hard: bool, soft: bool) -> anyhow
         }
         sqlx::query("delete from pgapp_meta.apps where id = $1").bind(app_id).execute(&pool).await?;
     }
-    control::delete_app_row(&pool, slug).await?;
+    control::delete_app_row(&pool, app.id).await?;
     println!("App '{slug}' destroyed — its data tables are gone.");
     Ok(())
 }

@@ -24,7 +24,7 @@ create table if not exists pgapp_control.workspaces (
 
 create table if not exists pgapp_control.apps (
     id          serial primary key,
-    slug        text not null unique,
+    slug        text not null,
     markup_path text not null,
     enabled     boolean not null default true,
     created_at  timestamptz not null default now(),
@@ -39,6 +39,14 @@ create table if not exists pgapp_control.apps (
 alter table pgapp_control.apps add column if not exists workspace_id integer references pgapp_control.workspaces(id) on delete cascade;
 alter table pgapp_control.apps alter column workspace_id set not null;
 alter table pgapp_control.apps add column if not exists data_schema text not null default 'pgapp_data';
+-- Slug is unique per workspace, not instance-wide: two workspaces can
+-- each register an app called "reports" without colliding, since the
+-- URL that actually routes to it is `/<workspace_slug>/<slug>/...`
+-- (see `server::build_router`). `drop constraint if exists` clears the
+-- old instance-wide `unique (slug)` a pre-existing database may still
+-- have from before every app was required to have a workspace.
+alter table pgapp_control.apps drop constraint if exists apps_slug_key;
+create unique index if not exists apps_workspace_slug on pgapp_control.apps (workspace_id, slug);
 -- The app's declared name (app "Name" { ... }), not its URL slug —
 -- needed to look up its pgapp_meta.apps row (keyed by that name) when
 -- hard-deleting an app, without re-parsing its markup file from disk.

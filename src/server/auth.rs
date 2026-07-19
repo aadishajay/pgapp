@@ -4,14 +4,14 @@
 //!   hashes, never plaintext), server-side sessions in
 //!   `pgapp_meta.sessions` with only a random token in an HttpOnly
 //!   cookie — a session is revoked by deleting its row. The cookie is
-//!   scoped to `Path=/{app}` (see `create_session`), so a browser only
-//!   ever sends one app's token to that app's own routes, even when
-//!   several apps share the same process/pool. The first visit to
-//!   `/{app}/login` on an app with no users offers a one-time "create
-//!   the admin account" form; after that, only admins can add users
-//!   (via the built-in `/{app}/users` page). Users are deliberately
-//!   *not* declarable in markup: passwords don't belong in a source
-//!   file.
+//!   scoped to `Path=/{workspace}/{app}` (see `create_session`), so a
+//!   browser only ever sends one app's token to that app's own routes,
+//!   even when several apps share the same process/pool. The first
+//!   visit to `/{workspace}/{app}/login` on an app with no users offers
+//!   a one-time "create the admin account" form; after that, only
+//!   admins can add users (via the built-in `/{workspace}/{app}/users`
+//!   page). Users are deliberately *not* declarable in markup:
+//!   passwords don't belong in a source file.
 //! - **AuthZ**: a user has one `role` (free-form string). A page's
 //!   `requires: <role>` markup restricts it to that role; 'admin'
 //!   passes every check. Pages without `requires:` need any signed-in
@@ -19,10 +19,10 @@
 //!   public.
 //!
 //! Everything hangs off [`require_login`], an axum middleware that
-//! resolves the app slug from the raw request path (it runs before any
-//! route's own `Path` extraction), looks up that app's session cookie
-//! into an [`AuthCtx`] request extension, and redirects unauthenticated
-//! page requests to that app's own `/login`.
+//! resolves the app's `{workspace}/{app}` key from the raw request path
+//! (it runs before any route's own `Path` extraction), looks up that
+//! app's session cookie into an [`AuthCtx`] request extension, and
+//! redirects unauthenticated page requests to that app's own `/login`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -49,7 +49,7 @@ const MIN_PASSWORD_LEN: usize = 8;
 
 /// A stable per-browser identity, independent of login — minted the
 /// first time any request for an app arrives without one, kept for a
-/// year, scoped `Path=/{app}` like the session cookie. Exists purely
+/// year, scoped `Path=/{workspace}/{app}` like the session cookie. Exists purely
 /// so collections (`pgapp_meta.collections`, see db/schema.sql) have
 /// something to scope "only the caller can see this" to that works
 /// the same whether or not the app uses `auth { }` — a signed-in
@@ -127,12 +127,12 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
 }
 
 /// Creates a session row and returns the Set-Cookie header value. Two
-/// v4 UUIDs give the token ~244 bits of randomness. `Path=/{app_slug}`
-/// keeps the cookie from ever being sent to a *different* app sharing
-/// this process — `load_session`'s own `app_id` filter would reject it
-/// anyway, but scoping the cookie itself means the browser doesn't
-/// even offer it cross-app.
-async fn create_session(pool: &PgPool, app_id: i32, user_id: i32, app_slug: &str) -> anyhow::Result<String> {
+/// v4 UUIDs give the token ~244 bits of randomness. `Path=/{app_key}`
+/// (`app_key` is `"{workspace}/{app_slug}"`) keeps the cookie from ever
+/// being sent to a *different* app sharing this process — `load_session`'s
+/// own `app_id` filter would reject it anyway, but scoping the cookie
+/// itself means the browser doesn't even offer it cross-app.
+async fn create_session(pool: &PgPool, app_id: i32, user_id: i32, app_key: &str) -> anyhow::Result<String> {
     // Opportunistic cleanup: expired sessions are dead weight either way.
     sqlx::query("delete from pgapp_meta.sessions where expires_at < now()")
         .execute(pool)
@@ -151,7 +151,7 @@ async fn create_session(pool: &PgPool, app_id: i32, user_id: i32, app_slug: &str
     .await?;
 
     Ok(format!(
-        "{SESSION_COOKIE}={token}; Path=/{app_slug}; HttpOnly; SameSite=Lax; Max-Age={SESSION_SECONDS}"
+        "{SESSION_COOKIE}={token}; Path=/{app_key}; HttpOnly; SameSite=Lax; Max-Age={SESSION_SECONDS}"
     ))
 }
 
@@ -178,11 +178,11 @@ async fn user_count(pool: &PgPool, app_id: i32) -> anyhow::Result<i64> {
 
 // ---- middleware ----
 
-/// Sub-paths (everything after `/{app}`) that must stay reachable
-/// without a session, or the login page couldn't render (its
+/// Sub-paths (everything after `/{workspace}/{app}`) that must stay
+/// reachable without a session, or the login page couldn't render (its
 /// stylesheet!) and nobody could ever sign in. The empty string is
-/// `/{app}` itself — `index` doesn't check auth; it just redirects to
-/// the app's first page, which `show` re-checks.
+/// `/{workspace}/{app}` itself — `index` doesn't check auth; it just
+/// redirects to the app's first page, which `show` re-checks.
 fn is_public(rest: &str) -> bool {
     matches!(rest, "" | "/login" | "/setup" | "/theme.css" | "/runtime.js" | "/chart-lib.js")
         || rest.starts_with("/assets/")
@@ -197,13 +197,20 @@ pub async fn require_login(State(state): State<Arc<AppState>>, mut req: Request,
         return next.run(req).await;
     }
 
+    // The app's two leading path segments — `/{workspace}/{app}/...` —
+    // resolved before any route's own `Path` extraction runs.
     let trimmed = path.trim_start_matches('/');
-    let (app_slug, rest) = match trimmed.split_once('/') {
-        Some((a, r)) => (a, format!("/{r}")),
-        None => (trimmed, String::new()),
+    let mut segments = trimmed.splitn(3, '/');
+    let (Some(workspace), Some(app)) = (segments.next(), segments.next()) else {
+        return StatusCode::NOT_FOUND.into_response();
     };
+    let rest = match segments.next() {
+        Some(r) => format!("/{r}"),
+        None => String::new(),
+    };
+    let app_key = format!("{workspace}/{app}");
 
-    let Some(entry) = state.apps.get(app_slug) else {
+    let Some(entry) = state.apps.get(app_key.as_str()) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let data = entry.data();
@@ -216,7 +223,7 @@ pub async fn require_login(State(state): State<Arc<AppState>>, mut req: Request,
             }
         }
         if ctx.0.is_none() && !is_public(&rest) {
-            return Redirect::to(&format!("/{app_slug}/login")).into_response();
+            return Redirect::to(&format!("/{app_key}/login")).into_response();
         }
     }
 
@@ -228,7 +235,7 @@ pub async fn require_login(State(state): State<Arc<AppState>>, mut req: Request,
         None => {
             let fresh = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
             let cookie = format!(
-                "{CALLER_COOKIE}={fresh}; Path=/{app_slug}; HttpOnly; SameSite=Lax; Max-Age={CALLER_COOKIE_SECONDS}"
+                "{CALLER_COOKIE}={fresh}; Path=/{app_key}; HttpOnly; SameSite=Lax; Max-Age={CALLER_COOKIE_SECONDS}"
             );
             req.extensions_mut().insert(CallerKey(fresh));
             Some(cookie)
@@ -274,7 +281,11 @@ fn require_admin(auth: &AuthCtx) -> Result<&CurrentUser, AppError> {
 
 // ---- handlers ----
 
-pub async fn login_form(State(state): State<Arc<AppState>>, Path(app): Path<String>) -> Result<Html<String>, AppError> {
+pub async fn login_form(
+    State(state): State<Arc<AppState>>,
+    Path((workspace, app)): Path<(String, String)>,
+) -> Result<Html<String>, AppError> {
+    let app = format!("{workspace}/{app}");
     let entry = state.app_or_404(&app)?;
     let data = entry.data();
     if !data.app.auth_enabled {
@@ -286,9 +297,10 @@ pub async fn login_form(State(state): State<Arc<AppState>>, Path(app): Path<Stri
 
 pub async fn login(
     State(state): State<Arc<AppState>>,
-    Path(app): Path<String>,
+    Path((workspace, app)): Path<(String, String)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    let app = format!("{workspace}/{app}");
     let entry = state.app_or_404(&app)?;
     let data = entry.data();
     if !data.app.auth_enabled {
@@ -326,9 +338,10 @@ pub async fn login(
 /// refuses, so it can't be used to sneak in a second admin.
 pub async fn setup(
     State(state): State<Arc<AppState>>,
-    Path(app): Path<String>,
+    Path((workspace, app)): Path<(String, String)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    let app = format!("{workspace}/{app}");
     let entry = state.app_or_404(&app)?;
     let data = entry.data();
     if !data.app.auth_enabled {
@@ -368,7 +381,12 @@ pub async fn setup(
     Ok((StatusCode::SEE_OTHER, [(header::SET_COOKIE, cookie), (header::LOCATION, format!("/{app}"))]).into_response())
 }
 
-pub async fn logout(State(state): State<Arc<AppState>>, Path(app): Path<String>, req: Request) -> Result<Response, AppError> {
+pub async fn logout(
+    State(state): State<Arc<AppState>>,
+    Path((workspace, app)): Path<(String, String)>,
+    req: Request,
+) -> Result<Response, AppError> {
+    let app = format!("{workspace}/{app}");
     state.app_or_404(&app)?;
     if let Some(token) = cookie_value(req.headers(), SESSION_COOKIE) {
         sqlx::query("delete from pgapp_meta.sessions where token = $1")
@@ -381,15 +399,16 @@ pub async fn logout(State(state): State<Arc<AppState>>, Path(app): Path<String>,
     Ok((StatusCode::SEE_OTHER, [(header::SET_COOKIE, clear), (header::LOCATION, format!("/{app}/login"))]).into_response())
 }
 
-// ---- the built-in /:app/users admin page ----
+// ---- the built-in /:workspace/:app/users admin page ----
 
 pub async fn users_page(
     State(state): State<Arc<AppState>>,
-    Path(app): Path<String>,
+    Path((workspace, app)): Path<(String, String)>,
     axum::Extension(auth): axum::Extension<AuthCtx>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
     let current = require_admin(&auth)?;
+    let app = format!("{workspace}/{app}");
     let entry = state.app_or_404(&app)?;
     let data = entry.data();
 
@@ -422,11 +441,12 @@ pub async fn users_page(
 
 pub async fn users_create(
     State(state): State<Arc<AppState>>,
-    Path(app): Path<String>,
+    Path((workspace, app)): Path<(String, String)>,
     axum::Extension(auth): axum::Extension<AuthCtx>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     require_admin(&auth)?;
+    let app = format!("{workspace}/{app}");
     let entry = state.app_or_404(&app)?;
 
     let username = values.get("username").map(|s| s.trim()).unwrap_or_default();
@@ -461,10 +481,11 @@ pub async fn users_create(
 
 pub async fn users_delete(
     State(state): State<Arc<AppState>>,
-    Path((app, user_id)): Path<(String, i32)>,
+    Path((workspace, app, user_id)): Path<(String, String, i32)>,
     axum::Extension(auth): axum::Extension<AuthCtx>,
 ) -> Result<Response, AppError> {
     let current = require_admin(&auth)?;
+    let app = format!("{workspace}/{app}");
     let entry = state.app_or_404(&app)?;
     if current.id == user_id {
         let msg = "You cannot delete the account you are signed in with.";

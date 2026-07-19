@@ -100,7 +100,7 @@ pub struct EntityDef {
 /// inline warning.
 ///
 /// Hard invariant, by design: `before_load` only ever fires from the
-/// read-only `GET /:app/:page` render path (`server::show` →
+/// read-only `GET /:workspace/:app/:page` render path (`server::show` →
 /// `render_component` — its only caller). It must never be wired into
 /// a POST/mutating handler (create/update/delete, `run_action`, a form
 /// submission's own action, etc.) — those already have an explicit,

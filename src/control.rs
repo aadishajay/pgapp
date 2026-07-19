@@ -39,10 +39,9 @@ pub async fn register_in_workspace(
     sqlx::query(
         "insert into pgapp_control.apps (slug, markup_path, app_name, workspace_id, data_schema)
          values ($1, $2, $3, $4, $5)
-         on conflict (slug) do update set
+         on conflict (workspace_id, slug) do update set
             markup_path = excluded.markup_path,
             app_name = excluded.app_name,
-            workspace_id = excluded.workspace_id,
             data_schema = excluded.data_schema,
             enabled = true,
             updated_at = now()",
@@ -58,14 +57,21 @@ pub async fn register_in_workspace(
     Ok(())
 }
 
-/// (id, slug, markup_path, data_schema, workspace_id) for every enabled
-/// app, in a stable order — the full set a server process loads and
-/// serves on startup. `id` and `workspace_id` (this table's own, not
-/// `pgapp_meta.apps`') are what `secrets::resolve` scopes a
-/// `{{secret...}}` lookup by.
-pub async fn list_enabled(pool: &PgPool) -> Result<Vec<(i32, String, String, String, Option<i32>)>> {
-    let rows: Vec<(i32, String, String, String, Option<i32>)> = sqlx::query_as(
-        "select id, slug, markup_path, data_schema, workspace_id from pgapp_control.apps where enabled order by slug",
+/// (id, slug, markup_path, data_schema, workspace_id, workspace_slug)
+/// for every enabled app, in a stable order — the full set a server
+/// process loads and serves on startup. `id` and `workspace_id` (this
+/// table's own, not `pgapp_meta.apps`') are what `secrets::resolve`
+/// scopes a `{{secret...}}` lookup by; `workspace_slug` is what
+/// `main.rs` prefixes onto the app's own slug to build its URL path
+/// (`/<workspace_slug>/<slug>/...`), so two apps of the same name in
+/// different workspaces don't collide there either.
+pub async fn list_enabled(pool: &PgPool) -> Result<Vec<(i32, String, String, String, Option<i32>, Option<String>)>> {
+    let rows: Vec<(i32, String, String, String, Option<i32>, Option<String>)> = sqlx::query_as(
+        "select a.id, a.slug, a.markup_path, a.data_schema, a.workspace_id, w.slug
+           from pgapp_control.apps a
+           left join pgapp_control.workspaces w on w.id = a.workspace_id
+          where a.enabled
+          order by a.slug",
     )
     .fetch_all(pool)
     .await
@@ -111,48 +117,70 @@ pub async fn list_all(pool: &PgPool) -> Result<Vec<AppRow>> {
         .collect())
 }
 
-pub async fn find_app(pool: &PgPool, slug: &str) -> Result<Option<AppRow>> {
-    let row: Option<(i32, String, String, String, String, Option<i32>, Option<String>, bool)> = sqlx::query_as(
+/// Looks up an app by its slug — `workspace_slug` disambiguates when
+/// more than one workspace happens to register an app under the same
+/// slug (allowed since slug is only unique *per workspace*, not
+/// instance-wide; see `db/control_schema.sql`'s `apps_workspace_slug`
+/// index). Omitting it works as long as `slug` is unambiguous right
+/// now; once two workspaces share it, every command that identifies an
+/// app by bare slug alone needs `--workspace` to say which one.
+pub async fn find_app(pool: &PgPool, slug: &str, workspace_slug: Option<&str>) -> Result<Option<AppRow>> {
+    let rows: Vec<(i32, String, String, String, String, Option<i32>, Option<String>, bool)> = sqlx::query_as(
         "select a.id, a.slug, a.app_name, a.markup_path, a.data_schema, a.workspace_id, w.slug, a.enabled
            from pgapp_control.apps a
            left join pgapp_control.workspaces w on w.id = a.workspace_id
-          where a.slug = $1",
+          where a.slug = $1 and ($2::text is null or w.slug = $2)",
     )
     .bind(slug)
-    .fetch_optional(pool)
+    .bind(workspace_slug)
+    .fetch_all(pool)
     .await
     .context("failed to look up app")?;
-    Ok(row.map(|(id, slug, app_name, markup_path, data_schema, workspace_id, workspace_slug, enabled)| AppRow {
-        id,
-        slug,
-        app_name,
-        markup_path,
-        data_schema,
-        workspace_id,
-        workspace_slug,
-        enabled,
-    }))
+
+    if workspace_slug.is_none() && rows.len() > 1 {
+        let workspaces: Vec<&str> = rows.iter().filter_map(|r| r.6.as_deref()).collect();
+        anyhow::bail!(
+            "slug '{slug}' is registered in more than one workspace ({}) — pass --workspace to say which one",
+            workspaces.join(", ")
+        );
+    }
+
+    Ok(rows
+        .into_iter()
+        .next()
+        .map(|(id, slug, app_name, markup_path, data_schema, workspace_id, workspace_slug, enabled)| AppRow {
+            id,
+            slug,
+            app_name,
+            markup_path,
+            data_schema,
+            workspace_id,
+            workspace_slug,
+            enabled,
+        }))
 }
 
-/// Disables a slug so it stops being served (without deleting its row
-/// — re-registering it later reactivates it). Returns whether a
-/// matching row existed.
-pub async fn disable(pool: &PgPool, slug: &str) -> Result<bool> {
-    let result = sqlx::query("update pgapp_control.apps set enabled = false, updated_at = now() where slug = $1")
-        .bind(slug)
+/// Disables an app (by its `pgapp_control.apps.id`, not slug — a slug
+/// alone can now name more than one row across different workspaces)
+/// so it stops being served, without deleting its row — re-registering
+/// it later reactivates it. Returns whether a matching row existed.
+pub async fn disable(pool: &PgPool, id: i32) -> Result<bool> {
+    let result = sqlx::query("update pgapp_control.apps set enabled = false, updated_at = now() where id = $1")
+        .bind(id)
         .execute(pool)
         .await
         .context("failed to disable app in pgapp_control.apps")?;
     Ok(result.rows_affected() > 0)
 }
 
-/// Removes an app's registry row outright — the bookkeeping half of a
-/// hard delete; the caller is responsible for dropping the app's own
-/// `pgapp_meta`/data-table rows first (see `main.rs`'s hard-delete
-/// handler, which needs `pgapp_meta` to know every entity table name).
-pub async fn delete_app_row(pool: &PgPool, slug: &str) -> Result<bool> {
-    let result = sqlx::query("delete from pgapp_control.apps where slug = $1")
-        .bind(slug)
+/// Removes an app's registry row outright, by `id` (same reasoning as
+/// [`disable`]) — the bookkeeping half of a hard delete; the caller is
+/// responsible for dropping the app's own `pgapp_meta`/data-table rows
+/// first (see `main.rs`'s hard-delete handler, which needs
+/// `pgapp_meta` to know every entity table name).
+pub async fn delete_app_row(pool: &PgPool, id: i32) -> Result<bool> {
+    let result = sqlx::query("delete from pgapp_control.apps where id = $1")
+        .bind(id)
         .execute(pool)
         .await
         .context("failed to delete app row from pgapp_control.apps")?;
@@ -279,8 +307,8 @@ mod tests {
         assert_eq!(
             enabled,
             vec![
-                (1, "alpha".to_string(), "alpha.pgapp".to_string(), "acme_schema".to_string(), Some(ws)),
-                (2, "beta".to_string(), "beta/".to_string(), "acme_schema".to_string(), Some(ws))
+                (1, "alpha".to_string(), "alpha.pgapp".to_string(), "acme_schema".to_string(), Some(ws), Some("acme".to_string())),
+                (2, "beta".to_string(), "beta/".to_string(), "acme_schema".to_string(), Some(ws), Some("acme".to_string()))
             ]
         );
     }
@@ -291,22 +319,22 @@ mod tests {
         let pool = test_pool().await;
         let ws = register_workspace(&pool, "acme", "acme_schema", Some("acme_schema")).await.unwrap();
         register_in_workspace(&pool, "alpha", "alpha.pgapp", "Alpha", ws, "acme_schema").await.unwrap();
-        assert!(disable(&pool, "alpha").await.unwrap());
+        assert!(disable(&pool, 1).await.unwrap());
         assert!(list_enabled(&pool).await.unwrap().is_empty());
 
         register_in_workspace(&pool, "alpha", "alpha2.pgapp", "Alpha", ws, "acme_schema").await.unwrap();
         let enabled = list_enabled(&pool).await.unwrap();
         assert_eq!(
             enabled,
-            vec![(1, "alpha".to_string(), "alpha2.pgapp".to_string(), "acme_schema".to_string(), Some(ws))]
+            vec![(1, "alpha".to_string(), "alpha2.pgapp".to_string(), "acme_schema".to_string(), Some(ws), Some("acme".to_string()))]
         );
     }
 
     #[tokio::test]
     #[ignore = "needs a live Postgres; run with `cargo test -- --ignored` and PGAPP_TEST_DATABASE_URL set"]
-    async fn disabling_an_unknown_slug_reports_no_match() {
+    async fn disabling_an_unknown_id_reports_no_match() {
         let pool = test_pool().await;
-        assert!(!disable(&pool, "nope").await.unwrap());
+        assert!(!disable(&pool, 999999).await.unwrap());
     }
 
     #[tokio::test]
@@ -324,9 +352,17 @@ mod tests {
         register_in_workspace(&pool, "widgets", "widgets.pgapp", "Widgets", id, "acme_schema").await.unwrap();
         assert_eq!(workspace_app_count(&pool, id).await.unwrap(), 1);
 
-        let app = find_app(&pool, "widgets").await.unwrap().unwrap();
+        let app = find_app(&pool, "widgets", None).await.unwrap().unwrap();
         assert_eq!(app.data_schema, "acme_schema");
         assert_eq!(app.workspace_slug.as_deref(), Some("acme"));
+
+        // Two different workspaces can each register an app under the
+        // same slug now — only unique per workspace, not instance-wide.
+        let acme2 = register_workspace(&pool, "acme2", "acme2_schema", Some("acme2_schema")).await.unwrap();
+        register_in_workspace(&pool, "widgets", "widgets2.pgapp", "Widgets Two", acme2, "acme2_schema").await.unwrap();
+        assert!(find_app(&pool, "widgets", None).await.is_err(), "ambiguous slug across workspaces should error");
+        let disambiguated = find_app(&pool, "widgets", Some("acme2")).await.unwrap().unwrap();
+        assert_eq!(disambiguated.data_schema, "acme2_schema");
 
         assert!(disable_workspace(&pool, "acme").await.unwrap());
         assert!(!find_workspace(&pool, "acme").await.unwrap().unwrap().enabled);

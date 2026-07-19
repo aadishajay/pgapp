@@ -3,16 +3,19 @@
 //! regions, paginated query rows) lives in `server::query_engine`,
 //! which this module just calls into.
 //!
-//! Every route is scoped under `/:app` — an app's URL slug, resolved
-//! against [`AppState::apps`] once per request. A single shared
-//! `PgPool` backs every app in the process (see `src/control.rs`);
-//! what's per-app is only the in-memory [`AppEntry`] (the reloadable
-//! markup-derived snapshot) and the rows that snapshot's queries touch.
+//! Every route is scoped under `/:workspace/:app` — the workspace an
+//! app is registered into, plus its own URL slug — resolved against
+//! [`AppState::apps`] (keyed by that combined `"workspace/app"` string)
+//! once per request. A single shared `PgPool` backs every app in the
+//! process (see `src/control.rs`); what's per-app is only the in-memory
+//! [`AppEntry`] (the reloadable markup-derived snapshot) and the rows
+//! that snapshot's queries touch.
 //!
 //! A page is an ordered list of components, rendered top to bottom by
-//! `show` (`GET /:app/:page`). `Form` and `EditableTable` are the only
-//! *writable* component kinds; both are addressed by their index on the
-//! page (`/:app/:page/c/:idx/...`) since a page may have more than one.
+//! `show` (`GET /:workspace/:app/:page`). `Form` and `EditableTable`
+//! are the only *writable* component kinds; both are addressed by
+//! their index on the page (`/:workspace/:app/:page/c/:idx/...`) since
+//! a page may have more than one.
 //! A `Report`'s row actions (Edit/Delete) only appear when the same page
 //! also has a `Form` bound to the same entity — `sibling_form_idx`
 //! finds it by scanning the page's own components, no extra metadata
@@ -63,9 +66,12 @@ pub struct AppData {
 }
 
 /// One app being served: where its markup lives on disk, and the
-/// current reloadable snapshot of what's synced from it. Keyed by URL
-/// slug in [`AppState::apps`] — see `src/control.rs` for where that
-/// registry itself lives (`pgapp_control.apps`).
+/// current reloadable snapshot of what's synced from it. Keyed by
+/// `"<workspace_slug>/<slug>"` — its full URL path prefix — in
+/// [`AppState::apps`], not just `slug`, so two apps of the same slug
+/// in different workspaces route independently instead of colliding.
+/// See `src/control.rs` for where the registry itself lives
+/// (`pgapp_control.apps`/`.workspaces`).
 pub struct AppEntry {
     pub markup_path: String,
     pub data: RwLock<Arc<AppData>>,
@@ -122,10 +128,13 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn app_or_404<'a>(&'a self, slug: &str) -> Result<&'a AppEntry, AppError> {
+    /// `key` is `"<workspace_slug>/<app_slug>"` — every route handler
+    /// builds this from its two leading path segments before looking
+    /// an app up (see `build_router`'s `/:workspace/:app/...` routes).
+    pub fn app_or_404<'a>(&'a self, key: &str) -> Result<&'a AppEntry, AppError> {
         self.apps
-            .get(slug)
-            .ok_or_else(|| (StatusCode::NOT_FOUND, format!("no such app '{slug}'")))
+            .get(key)
+            .ok_or_else(|| (StatusCode::NOT_FOUND, format!("no such app '{key}'")))
     }
 }
 
@@ -151,32 +160,32 @@ fn concurrency_limit() -> usize {
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(landing))
-        .route("/:app", get(index))
-        .route("/:app/theme.css", get(theme_css))
-        .route("/:app/runtime.js", get(runtime_js))
-        .route("/:app/chart-lib.js", get(chart_lib_js))
-        .route("/:app/assets/*path", get(asset))
-        .route("/:app/api/:entity", get(api_list))
-        .route("/:app/login", get(auth::login_form).post(auth::login))
-        .route("/:app/setup", post(auth::setup))
-        .route("/:app/logout", post(auth::logout))
-        .route("/:app/users", get(auth::users_page).post(auth::users_create))
-        .route("/:app/users/:id/delete", post(auth::users_delete))
-        .route("/:app/admin/reload", get(admin_reload_page).post(admin_reload))
-        .route("/:app/:page", get(show))
-        .route("/:app/:page/region/:query", get(region_fragment))
-        .route("/:app/:page/c/:idx/create", post(create))
-        .route("/:app/:page/c/:idx/update/:id", post(update))
-        .route("/:app/:page/c/:idx/delete/:id", post(delete))
-        .route("/:app/:page/c/:idx/run", post(run_action))
-        .route("/:app/:page/c/:idx/views", post(save_view))
-        .route("/:app/:page/c/:idx/views/:vid/delete", post(delete_view))
+        .route("/:workspace/:app", get(index))
+        .route("/:workspace/:app/theme.css", get(theme_css))
+        .route("/:workspace/:app/runtime.js", get(runtime_js))
+        .route("/:workspace/:app/chart-lib.js", get(chart_lib_js))
+        .route("/:workspace/:app/assets/*path", get(asset))
+        .route("/:workspace/:app/api/:entity", get(api_list))
+        .route("/:workspace/:app/login", get(auth::login_form).post(auth::login))
+        .route("/:workspace/:app/setup", post(auth::setup))
+        .route("/:workspace/:app/logout", post(auth::logout))
+        .route("/:workspace/:app/users", get(auth::users_page).post(auth::users_create))
+        .route("/:workspace/:app/users/:id/delete", post(auth::users_delete))
+        .route("/:workspace/:app/admin/reload", get(admin_reload_page).post(admin_reload))
+        .route("/:workspace/:app/:page", get(show))
+        .route("/:workspace/:app/:page/region/:query", get(region_fragment))
+        .route("/:workspace/:app/:page/c/:idx/create", post(create))
+        .route("/:workspace/:app/:page/c/:idx/update/:id", post(update))
+        .route("/:workspace/:app/:page/c/:idx/delete/:id", post(delete))
+        .route("/:workspace/:app/:page/c/:idx/run", post(run_action))
+        .route("/:workspace/:app/:page/c/:idx/views", post(save_view))
+        .route("/:workspace/:app/:page/c/:idx/views/:vid/delete", post(delete_view))
         .layer(middleware::from_fn_with_state(state.clone(), auth::require_login))
         .with_state(state)
         .layer(ConcurrencyLimitLayer::new(concurrency_limit()))
 }
 
-/// Gate for `/:app/admin/reload`: same "everyone's an admin" fallback as
+/// Gate for `/:workspace/:app/admin/reload`: same "everyone's an admin" fallback as
 /// the rest of the app when there's no `auth { }` block at all (see
 /// `report_extras`'s `can_delete`), since reload isn't part of the
 /// user model — it should work in the common no-auth demo apps too.
@@ -583,31 +592,41 @@ fn build_value_exprs(
 /// app; a multi-app server shows a plain list of what's registered.
 async fn landing(State(state): State<Arc<AppState>>) -> Response {
     if state.apps.len() == 1 {
-        let slug = state.apps.keys().next().expect("checked len() == 1 above");
-        return Redirect::to(&format!("/{}", url_encode(slug))).into_response();
+        let key = state.apps.keys().next().expect("checked len() == 1 above");
+        // `key` is "<workspace>/<app>" — encode each segment on its
+        // own, never the whole key as one unit (that would turn its
+        // internal "/" into "%2F" and break the redirect).
+        let (workspace, app) = key.split_once('/').unwrap_or((key.as_str(), ""));
+        return Redirect::to(&format!("/{}/{}", url_encode(workspace), url_encode(app))).into_response();
     }
-    let mut slugs: Vec<String> = state.apps.keys().cloned().collect();
-    slugs.sort();
-    Html(render::workspace_landing(&slugs)).into_response()
+    let mut keys: Vec<String> = state.apps.keys().cloned().collect();
+    keys.sort();
+    Html(render::workspace_landing(&keys)).into_response()
 }
 
-/// `/:app` is just a redirect to that app's first page — there's no
-/// separate "homepage" content to render, so nothing here needs
-/// `auth_ctx`; `show` (the `/:app/:page` handler) re-checks login/role
-/// requirements on the page it lands on.
-async fn index(State(state): State<Arc<AppState>>, Path(app): Path<String>) -> Result<Redirect, AppError> {
-    let entry = state.app_or_404(&app)?;
+/// `/:workspace/:app` is just a redirect to that app's first page —
+/// there's no separate "homepage" content to render, so nothing here
+/// needs `auth_ctx`; `show` (the `/:workspace/:app/:page` handler)
+/// re-checks login/role requirements on the page it lands on.
+async fn index(State(state): State<Arc<AppState>>, Path((workspace, app)): Path<(String, String)>) -> Result<Redirect, AppError> {
+    let key = format!("{workspace}/{app}");
+    let entry = state.app_or_404(&key)?;
     let data = entry.data();
     let first = data
         .app
         .pages
         .first()
         .ok_or_else(|| (StatusCode::NOT_FOUND, "this app has no pages".to_string()))?;
-    Ok(Redirect::to(&format!("/{}/{}", url_encode(&app), url_encode(&first.name))))
+    Ok(Redirect::to(&format!(
+        "/{}/{}/{}",
+        url_encode(&workspace),
+        url_encode(&app),
+        url_encode(&first.name)
+    )))
 }
 
-async fn theme_css(State(state): State<Arc<AppState>>, Path(app): Path<String>) -> Response {
-    let Ok(entry) = state.app_or_404(&app) else {
+async fn theme_css(State(state): State<Arc<AppState>>, Path((workspace, app)): Path<(String, String)>) -> Response {
+    let Ok(entry) = state.app_or_404(&format!("{workspace}/{app}")) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     match tokio::fs::read(&entry.data().theme.css_path).await {
@@ -619,8 +638,8 @@ async fn theme_css(State(state): State<Arc<AppState>>, Path(app): Path<String>) 
 /// The pgapp runtime JS library — stored in `pgapp_meta`, not a static
 /// file (see `AppData::runtime_js` / `main.rs`), so it's part of the
 /// same in-database metadata as everything else.
-async fn runtime_js(State(state): State<Arc<AppState>>, Path(app): Path<String>) -> Response {
-    let Ok(entry) = state.app_or_404(&app) else {
+async fn runtime_js(State(state): State<Arc<AppState>>, Path((workspace, app)): Path<(String, String)>) -> Response {
+    let Ok(entry) = state.app_or_404(&format!("{workspace}/{app}")) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     (
@@ -633,8 +652,8 @@ async fn runtime_js(State(state): State<Arc<AppState>>, Path(app): Path<String>)
 /// The active pluggable chart library's JS, if one is configured
 /// (`PGAPP_CHART_LIB` other than the built-in "inline" backend, which
 /// needs no JS at all — see `src/chart_lib.rs`).
-async fn chart_lib_js(State(state): State<Arc<AppState>>, Path(app): Path<String>) -> Response {
-    let Ok(entry) = state.app_or_404(&app) else {
+async fn chart_lib_js(State(state): State<Arc<AppState>>, Path((workspace, app)): Path<(String, String)>) -> Response {
+    let Ok(entry) = state.app_or_404(&format!("{workspace}/{app}")) else {
         return StatusCode::NOT_FOUND.into_response();
     };
     match &entry.data().chart_lib.js_path {
@@ -649,8 +668,8 @@ async fn chart_lib_js(State(state): State<Arc<AppState>>, Path(app): Path<String
 /// Static app-level asset override (`assets/app.css`/`assets/app.js`),
 /// served from one shared directory regardless of which app asked —
 /// there's no per-app asset directory (yet); only the URL is app-scoped,
-/// to keep every path consistently rooted at `/:app`.
-async fn asset(Path((_app, path)): Path<(String, String)>) -> Response {
+/// to keep every path consistently rooted at `/:workspace/:app`.
+async fn asset(Path((_workspace, _app, path)): Path<(String, String, String)>) -> Response {
     let safe = path.rsplit('/').next().unwrap_or("");
     if safe != "app.css" && safe != "app.js" {
         return StatusCode::NOT_FOUND.into_response();
@@ -964,9 +983,10 @@ async fn show(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
     Extension(caller): Extension<auth::CallerKey>,
-    Path((app, page_name)): Path<(String, String)>,
+    Path((workspace, app, page_name)): Path<(String, String, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
+    let app = format!("{workspace}/{app}");
     let entry = state.app_or_404(&app)?;
     let data = entry.data();
     let page = page_or_404(&data.app, &page_name)?;
@@ -1025,10 +1045,10 @@ async fn show(
 async fn region_fragment(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
-    Path((app, page_name, query_name)): Path<(String, String, String)>,
+    Path((workspace, app, page_name, query_name)): Path<(String, String, String, String)>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
-    let entry = state.app_or_404(&app)?;
+    let entry = state.app_or_404(&format!("{workspace}/{app}"))?;
     let data = entry.data();
     let page = page_or_404(&data.app, &page_name)?;
     auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
@@ -1058,10 +1078,11 @@ async fn run_action(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
     Extension(caller): Extension<auth::CallerKey>,
-    Path((app, page_name, idx)): Path<(String, String, usize)>,
+    Path((workspace, app, page_name, idx)): Path<(String, String, String, usize)>,
     Query(query): Query<HashMap<String, String>>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    let app = format!("{workspace}/{app}");
     let entry = state.app_or_404(&app)?;
     let data = entry.data();
     let page = page_or_404(&data.app, &page_name)?;
@@ -1108,9 +1129,10 @@ async fn run_action(
 async fn save_view(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
-    Path((app, page_name, idx)): Path<(String, String, usize)>,
+    Path((workspace, app, page_name, idx)): Path<(String, String, String, usize)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    let app = format!("{workspace}/{app}");
     let entry = state.app_or_404(&app)?;
     let data = entry.data();
     let page = page_or_404(&data.app, &page_name)?;
@@ -1160,8 +1182,9 @@ async fn save_view(
 async fn delete_view(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
-    Path((app, page_name, idx, view_id)): Path<(String, String, usize, i32)>,
+    Path((workspace, app, page_name, idx, view_id)): Path<(String, String, String, usize, i32)>,
 ) -> Result<Response, AppError> {
+    let app = format!("{workspace}/{app}");
     let entry = state.app_or_404(&app)?;
     let data = entry.data();
     let page = page_or_404(&data.app, &page_name)?;
@@ -1196,9 +1219,10 @@ async fn delete_view(
 async fn create(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
-    Path((app, page_name, idx)): Path<(String, String, usize)>,
+    Path((workspace, app, page_name, idx)): Path<(String, String, String, usize)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    let app = format!("{workspace}/{app}");
     let entry = state.app_or_404(&app)?;
     let data = entry.data();
     let page = page_or_404(&data.app, &page_name)?;
@@ -1238,9 +1262,10 @@ async fn create(
 async fn update(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
-    Path((app, page_name, idx, id)): Path<(String, String, usize, String)>,
+    Path((workspace, app, page_name, idx, id)): Path<(String, String, String, usize, String)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    let app = format!("{workspace}/{app}");
     let entry = state.app_or_404(&app)?;
     let data = entry.data();
     let page = page_or_404(&data.app, &page_name)?;
@@ -1291,8 +1316,9 @@ async fn update(
 async fn delete(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
-    Path((app, page_name, idx, id)): Path<(String, String, usize, String)>,
+    Path((workspace, app, page_name, idx, id)): Path<(String, String, String, usize, String)>,
 ) -> Result<Response, AppError> {
+    let app = format!("{workspace}/{app}");
     let entry = state.app_or_404(&app)?;
     let data = entry.data();
     let page = page_or_404(&data.app, &page_name)?;
@@ -1316,9 +1342,9 @@ async fn delete(
 async fn api_list(
     State(state): State<Arc<AppState>>,
     Extension(caller): Extension<auth::CallerKey>,
-    Path((app, entity_name)): Path<(String, String)>,
+    Path((workspace, app, entity_name)): Path<(String, String, String)>,
 ) -> Result<Response, AppError> {
-    let entry = state.app_or_404(&app)?;
+    let entry = state.app_or_404(&format!("{workspace}/{app}"))?;
     let data = entry.data();
     let entity = data
         .app
@@ -1358,15 +1384,16 @@ async fn api_list(
     Ok(axum::Json(json!(rows)).into_response())
 }
 
-/// GET /:app/admin/reload — shows the current markup (editable inline
+/// GET /:workspace/:app/admin/reload — shows the current markup (editable inline
 /// when it's a single file) plus a button to re-sync it into
 /// `pgapp_meta` without restarting the process. See `AppEntry::reload`.
 async fn admin_reload_page(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
-    Path(app): Path<String>,
+    Path((workspace, app)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
+    let app = format!("{workspace}/{app}");
     let entry = state.app_or_404(&app)?;
     let data = entry.data();
     require_reload_access(&data, &auth_ctx)?;
@@ -1395,16 +1422,17 @@ async fn admin_reload_page(
     )))
 }
 
-/// POST /:app/admin/reload — optionally writes edited markup back to
+/// POST /:workspace/:app/admin/reload — optionally writes edited markup back to
 /// disk (`do=save`, single-file apps only), then always re-runs the
 /// full parse/sync/load pipeline and atomically swaps in the result —
 /// only for this one app; every other app in the process is untouched.
 async fn admin_reload(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
-    Path(app): Path<String>,
+    Path((workspace, app)): Path<(String, String)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    let app = format!("{workspace}/{app}");
     let entry = state.app_or_404(&app)?;
     {
         let data = entry.data();
