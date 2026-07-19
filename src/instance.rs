@@ -62,27 +62,28 @@ pub fn max_connections() -> u32 {
 /// request load and don't need any of this.
 ///
 /// Cycling the fixed-size pool "smartly" across concurrent requests is
-/// mostly sqlx's job, not this function's: every query in server.rs is
-/// issued against a borrowed `&PgPool` (`fetch_all`, `execute`, ...),
-/// which acquires a connection just for that one query and returns it
+/// sqlx's job, not this function's: every query in server.rs is issued
+/// against a borrowed `&PgPool` (`fetch_all`, `execute`, ...), which
+/// acquires a connection just for that one query and returns it
 /// immediately after — never held across a whole request — and sqlx's
 /// internal wait queue for a busy pool is FIFO, so concurrent requests
-/// are served in arrival order rather than one starving another. What
-/// *is* this function's job is the two knobs sqlx doesn't default
-/// usefully on its own:
-/// - `min_connections`: keeps a quarter of the pool already connected
-///   and authenticated, so the first burst after a cold start doesn't
-///   pay a fresh TCP+auth handshake per connection (the likely cause
-///   of the one anomalously slow low-concurrency data point seen when
-///   load-testing straight after a restart).
-/// - `acquire_timeout`: a request that's waited 30s for a connection
-///   fails loudly instead of queuing silently forever — a visible
-///   error under sustained overload beats an invisible hang.
+/// are served in arrival order rather than one starving another.
+///
+/// No `min_connections` floor: keeping idle connections pre-warmed
+/// only pays off in the first moments after a restart, and it's a
+/// permanent cost the rest of the time — every idle connection is a
+/// live Postgres backend process, counted against Postgres's own
+/// `max_connections`, for as long as the server runs. That adds up
+/// fast once several apps share one Postgres instance (pgapp's own
+/// multi-app mode does exactly this), so connections are left to grow
+/// from zero on demand instead, same as sqlx's own default.
+///
+/// `acquire_timeout` is kept explicit: a request that's waited 30s for
+/// a connection fails loudly instead of queuing silently forever — a
+/// visible error under sustained overload beats an invisible hang.
 pub fn pool_options() -> PgPoolOptions {
-    let max = max_connections();
     PgPoolOptions::new()
-        .max_connections(max)
-        .min_connections((max / 4).max(1))
+        .max_connections(max_connections())
         .acquire_timeout(std::time::Duration::from_secs(30))
 }
 
