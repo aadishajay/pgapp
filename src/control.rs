@@ -84,12 +84,14 @@ pub async fn register_in_workspace(
     Ok(())
 }
 
-/// (slug, markup_path, data_schema) for every enabled app, in a stable
-/// order — the full set a server process loads and serves on startup,
-/// classic and workspace-scoped apps alike.
-pub async fn list_enabled(pool: &PgPool) -> Result<Vec<(String, String, String)>> {
-    let rows: Vec<(String, String, String)> = sqlx::query_as(
-        "select slug, markup_path, data_schema from pgapp_control.apps where enabled order by slug",
+/// (id, slug, markup_path, data_schema, workspace_id) for every enabled
+/// app, in a stable order — the full set a server process loads and
+/// serves on startup, classic and workspace-scoped apps alike. `id` and
+/// `workspace_id` (this table's own, not `pgapp_meta.apps`') are what
+/// `secrets::resolve` scopes a `{{secret...}}` lookup by.
+pub async fn list_enabled(pool: &PgPool) -> Result<Vec<(i32, String, String, String, Option<i32>)>> {
+    let rows: Vec<(i32, String, String, String, Option<i32>)> = sqlx::query_as(
+        "select id, slug, markup_path, data_schema, workspace_id from pgapp_control.apps where enabled order by slug",
     )
     .fetch_all(pool)
     .await
@@ -98,10 +100,12 @@ pub async fn list_enabled(pool: &PgPool) -> Result<Vec<(String, String, String)>
 }
 
 pub struct AppRow {
+    pub id: i32,
     pub slug: String,
     pub app_name: String,
     pub markup_path: String,
     pub data_schema: String,
+    pub workspace_id: Option<i32>,
     pub workspace_slug: Option<String>,
     pub enabled: bool,
 }
@@ -109,8 +113,8 @@ pub struct AppRow {
 /// Every registered app, including disabled ones — what `pgapp apps`
 /// prints.
 pub async fn list_all(pool: &PgPool) -> Result<Vec<AppRow>> {
-    let rows: Vec<(String, String, String, String, Option<String>, bool)> = sqlx::query_as(
-        "select a.slug, a.app_name, a.markup_path, a.data_schema, w.slug, a.enabled
+    let rows: Vec<(i32, String, String, String, String, Option<i32>, Option<String>, bool)> = sqlx::query_as(
+        "select a.id, a.slug, a.app_name, a.markup_path, a.data_schema, a.workspace_id, w.slug, a.enabled
            from pgapp_control.apps a
            left join pgapp_control.workspaces w on w.id = a.workspace_id
           order by a.slug",
@@ -120,11 +124,13 @@ pub async fn list_all(pool: &PgPool) -> Result<Vec<AppRow>> {
     .context("failed to list registered apps")?;
     Ok(rows
         .into_iter()
-        .map(|(slug, app_name, markup_path, data_schema, workspace_slug, enabled)| AppRow {
+        .map(|(id, slug, app_name, markup_path, data_schema, workspace_id, workspace_slug, enabled)| AppRow {
+            id,
             slug,
             app_name,
             markup_path,
             data_schema,
+            workspace_id,
             workspace_slug,
             enabled,
         })
@@ -132,8 +138,8 @@ pub async fn list_all(pool: &PgPool) -> Result<Vec<AppRow>> {
 }
 
 pub async fn find_app(pool: &PgPool, slug: &str) -> Result<Option<AppRow>> {
-    let row: Option<(String, String, String, String, Option<String>, bool)> = sqlx::query_as(
-        "select a.slug, a.app_name, a.markup_path, a.data_schema, w.slug, a.enabled
+    let row: Option<(i32, String, String, String, String, Option<i32>, Option<String>, bool)> = sqlx::query_as(
+        "select a.id, a.slug, a.app_name, a.markup_path, a.data_schema, a.workspace_id, w.slug, a.enabled
            from pgapp_control.apps a
            left join pgapp_control.workspaces w on w.id = a.workspace_id
           where a.slug = $1",
@@ -142,11 +148,13 @@ pub async fn find_app(pool: &PgPool, slug: &str) -> Result<Option<AppRow>> {
     .fetch_optional(pool)
     .await
     .context("failed to look up app")?;
-    Ok(row.map(|(slug, app_name, markup_path, data_schema, workspace_slug, enabled)| AppRow {
+    Ok(row.map(|(id, slug, app_name, markup_path, data_schema, workspace_id, workspace_slug, enabled)| AppRow {
+        id,
         slug,
         app_name,
         markup_path,
         data_schema,
+        workspace_id,
         workspace_slug,
         enabled,
     }))
@@ -296,8 +304,8 @@ mod tests {
         assert_eq!(
             enabled,
             vec![
-                ("alpha".to_string(), "alpha.pgapp".to_string(), "pgapp_data".to_string()),
-                ("beta".to_string(), "beta/".to_string(), "pgapp_data".to_string())
+                (1, "alpha".to_string(), "alpha.pgapp".to_string(), "pgapp_data".to_string(), None),
+                (2, "beta".to_string(), "beta/".to_string(), "pgapp_data".to_string(), None)
             ]
         );
     }
@@ -312,7 +320,7 @@ mod tests {
 
         register(&pool, "alpha", "alpha2.pgapp", "Alpha").await.unwrap();
         let enabled = list_enabled(&pool).await.unwrap();
-        assert_eq!(enabled, vec![("alpha".to_string(), "alpha2.pgapp".to_string(), "pgapp_data".to_string())]);
+        assert_eq!(enabled, vec![(1, "alpha".to_string(), "alpha2.pgapp".to_string(), "pgapp_data".to_string(), None)]);
     }
 
     #[tokio::test]

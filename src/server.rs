@@ -93,10 +93,18 @@ impl AppEntry {
         let app_def = crate::source::load(&self.markup_path)?;
         // A reload keeps this app in whatever schema it's already
         // synced into — it never migrates an app's data tables to a
-        // different schema on its own.
+        // different schema on its own. Same story for control_app_id/
+        // workspace_id: pgapp_control isn't touched by a markup
+        // resync, so carry the current snapshot's values forward
+        // rather than re-deriving them (load_app doesn't know them at
+        // all — see RuntimeApp's doc comment).
         let data_schema = self.data().app.data_schema.clone();
+        let control_app_id = self.data().app.control_app_id;
+        let workspace_id = self.data().app.workspace_id;
         meta::sync_app(pool, &app_def, item_types, actions, &data_schema).await?;
-        let app = meta::load_app(pool, &app_def.name).await?;
+        let mut app = meta::load_app(pool, &app_def.name).await?;
+        app.control_app_id = control_app_id;
+        app.workspace_id = workspace_id;
         let runtime_js = meta::load_runtime_js(pool, &app_def.name).await?;
         let theme = crate::theme::load(app.theme.as_deref().unwrap_or("shadcn"))?;
         let icons = crate::icons::load(app.icons.as_deref().unwrap_or("builtin"))?;

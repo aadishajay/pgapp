@@ -5,7 +5,7 @@ use anyhow::Context;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 
-use pgapp::{actions, chart_lib, control, icons, instance, item_types, meta, scaffold, server, source, theme};
+use pgapp::{actions, chart_lib, control, icons, instance, item_types, meta, scaffold, secrets, server, source, theme};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -15,6 +15,7 @@ async fn main() -> anyhow::Result<()> {
         Some("instance") => return cmd_instance(&cli_args[2..]).await,
         Some("workspace") => return cmd_workspace(&cli_args[2..]).await,
         Some("app") => return cmd_app(&cli_args[2..]).await,
+        Some("secret") => return cmd_secret(&cli_args[2..]).await,
         Some("run") => return cmd_run(&cli_args[2..]).await,
         _ => {}
     }
@@ -73,12 +74,16 @@ async fn load_one_app(
     pool: &PgPool,
     markup_path: &str,
     data_schema: &str,
+    control_app_id: i32,
+    workspace_id: Option<i32>,
     item_types: &item_types::Registry,
     action_registry: &actions::Registry,
 ) -> anyhow::Result<server::AppEntry> {
     let app_def = source::load(markup_path)?;
     meta::sync_app(pool, &app_def, item_types, action_registry, data_schema).await?;
-    let runtime_app = meta::load_app(pool, &app_def.name).await?;
+    let mut runtime_app = meta::load_app(pool, &app_def.name).await?;
+    runtime_app.control_app_id = control_app_id;
+    runtime_app.workspace_id = workspace_id;
     let runtime_js = meta::load_runtime_js(pool, &app_def.name).await?;
     let theme = theme::load(runtime_app.theme.as_deref().unwrap_or("shadcn"))?;
     let icons = icons::load(runtime_app.icons.as_deref().unwrap_or("builtin"))?;
@@ -105,8 +110,8 @@ async fn serve_registered_apps(pool: PgPool, bind_addr: &str) -> anyhow::Result<
 
     let registered = control::list_enabled(&pool).await?;
     let mut apps: HashMap<String, server::AppEntry> = HashMap::new();
-    for (slug, path, data_schema) in registered {
-        match load_one_app(&pool, &path, &data_schema, &item_types, &action_registry).await {
+    for (control_app_id, slug, path, data_schema, workspace_id) in registered {
+        match load_one_app(&pool, &path, &data_schema, control_app_id, workspace_id, &item_types, &action_registry).await {
             Ok(entry) => {
                 apps.insert(slug, entry);
             }
@@ -710,6 +715,113 @@ async fn cmd_app(args: &[String]) -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+/// `pgapp secret set|list|rm <dbname> ...` — a workspace- or app-scoped
+/// named secret, referenced from markup as `{{secret.<name>}}` (see
+/// `src/secrets.rs`). Exactly one of `--workspace <slug>` / `--app
+/// <slug>` picks the scope; an app-scoped secret shadows a workspace-
+/// scoped one of the same name at resolve time.
+async fn cmd_secret(args: &[String]) -> anyhow::Result<()> {
+    const USAGE: &str = "usage: pgapp secret set|list|rm <dbname> <name> (--workspace <slug> | --app <slug>) [--value <value>]\n\
+                          (\"set\"'s <name> is required; \"list\" takes no name — omit it to list every secret in scope)";
+    match args.first().map(|s| s.as_str()) {
+        Some("set") => {
+            let dbname = args.get(1).cloned().ok_or_else(|| anyhow::anyhow!(USAGE))?;
+            let name = args.get(2).cloned().ok_or_else(|| anyhow::anyhow!(USAGE))?;
+            secret_set(&dbname, &name, flag(args, "--workspace"), flag(args, "--app"), flag(args, "--value")).await
+        }
+        Some("list") => {
+            let dbname = args.get(1).cloned().ok_or_else(|| anyhow::anyhow!(USAGE))?;
+            secret_list(&dbname, flag(args, "--workspace"), flag(args, "--app")).await
+        }
+        Some("rm") => {
+            let dbname = args.get(1).cloned().ok_or_else(|| anyhow::anyhow!(USAGE))?;
+            let name = args.get(2).cloned().ok_or_else(|| anyhow::anyhow!(USAGE))?;
+            secret_rm(&dbname, &name, flag(args, "--workspace"), flag(args, "--app")).await
+        }
+        _ => {
+            println!("{USAGE}");
+            Ok(())
+        }
+    }
+}
+
+/// Exactly one of `--workspace`/`--app` names the scope; resolved
+/// against the control-plane registry (`pgapp_control.workspaces`/
+/// `.apps`), not `pgapp_meta`, since that's what `secrets::Scope`
+/// keys off of.
+async fn secret_scope(pool: &PgPool, workspace_arg: Option<String>, app_arg: Option<String>) -> anyhow::Result<secrets::Scope> {
+    match (workspace_arg, app_arg) {
+        (Some(_), Some(_)) => anyhow::bail!("pass exactly one of --workspace or --app, not both"),
+        (Some(slug), None) => {
+            let ws = control::find_workspace(pool, &slug)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("no workspace '{slug}' registered (see `pgapp workspace list <dbname>`)"))?;
+            Ok(secrets::Scope::Workspace(ws.id))
+        }
+        (None, Some(slug)) => {
+            let app = control::find_app(pool, &slug)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("no app '{slug}' registered"))?;
+            Ok(secrets::Scope::App(app.id))
+        }
+        (None, None) => anyhow::bail!("pass one of --workspace <slug> or --app <slug>"),
+    }
+}
+
+async fn secret_set(
+    dbname: &str,
+    name: &str,
+    workspace_arg: Option<String>,
+    app_arg: Option<String>,
+    value_arg: Option<String>,
+) -> anyhow::Result<()> {
+    let inst = instance::load(dbname)?;
+    instance::verify_operator(&inst)?;
+    let pool = instance::connect_as_admin(&inst).await?;
+    let scope = secret_scope(&pool, workspace_arg, app_arg).await?;
+    let key = secrets::load_key()?;
+    // `--value` exists for scripts, but it lands in shell history and
+    // `ps` like any other argument — the interactive prompt (typed,
+    // not masked, same as the CLI operator password prompt) is the
+    // one that doesn't.
+    let value = match value_arg {
+        Some(v) => v,
+        None => scaffold::prompt_required(&format!("Value for secret '{name}'"))?,
+    };
+    secrets::set(&pool, &key, scope, name, &value).await?;
+    println!("Secret '{name}' saved.");
+    Ok(())
+}
+
+async fn secret_list(dbname: &str, workspace_arg: Option<String>, app_arg: Option<String>) -> anyhow::Result<()> {
+    let inst = instance::load(dbname)?;
+    instance::verify_operator(&inst)?;
+    let pool = instance::connect_as_admin(&inst).await?;
+    let scope = secret_scope(&pool, workspace_arg, app_arg).await?;
+    let names = secrets::list(&pool, scope).await?;
+    if names.is_empty() {
+        println!("(no secrets in this scope)");
+    } else {
+        for name in names {
+            println!("{name}");
+        }
+    }
+    Ok(())
+}
+
+async fn secret_rm(dbname: &str, name: &str, workspace_arg: Option<String>, app_arg: Option<String>) -> anyhow::Result<()> {
+    let inst = instance::load(dbname)?;
+    instance::verify_operator(&inst)?;
+    let pool = instance::connect_as_admin(&inst).await?;
+    let scope = secret_scope(&pool, workspace_arg, app_arg).await?;
+    if secrets::remove(&pool, scope, name).await? {
+        println!("Secret '{name}' removed.");
+    } else {
+        println!("No secret '{name}' found in that scope.");
+    }
+    Ok(())
 }
 
 async fn app_create(dbname: &str, workspace_arg: Option<String>) -> anyhow::Result<()> {

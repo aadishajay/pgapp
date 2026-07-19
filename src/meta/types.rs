@@ -200,6 +200,19 @@ pub struct RuntimeApp {
     pub footer: Vec<RuntimeComponent>,
     /// Queries visible from every page.
     pub queries: HashMap<String, RuntimeQuery>,
+    /// This app's row id in `pgapp_control.apps` — a different table
+    /// (and a different id) from `id` above (`pgapp_meta.apps`, rebuilt
+    /// by every markup resync). `load_app` doesn't know this; it's set
+    /// afterward by whoever's loading the app (`main.rs`'s
+    /// `load_one_app`, `server::AppEntry::reload`) from the control-
+    /// plane registry, and only exists to scope a `{{secret...}}`
+    /// lookup (`secrets::resolve`) — 0 if never set.
+    pub control_app_id: i32,
+    /// This app's workspace, if any (`pgapp_control.apps.workspace_id`)
+    /// — same "set after the fact" story as `control_app_id`, and the
+    /// same use: a workspace-scoped secret is the fallback when no
+    /// app-scoped secret of that name exists.
+    pub workspace_id: Option<i32>,
 }
 
 impl RuntimeApp {

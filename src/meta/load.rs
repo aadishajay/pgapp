@@ -221,6 +221,12 @@ pub async fn load_app(pool: &PgPool, app_name: &str) -> Result<RuntimeApp> {
         header,
         footer,
         queries: app_queries,
+        // Neither is known here — pgapp_control isn't this function's
+        // concern (see RuntimeApp's doc comment). Whoever calls
+        // load_app sets these from the control-plane registry
+        // afterward.
+        control_app_id: 0,
+        workspace_id: None,
     })
 }
 

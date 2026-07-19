@@ -21,6 +21,11 @@
 //! same `ctx.values` map dynamic actions and named-query binds read
 //! from) before the request is built — so a page can post its own
 //! current state to an external endpoint with no extra wiring.
+//! `{{secret.<name>}}` works the same way in the same fields, except
+//! the value comes from `pgapp_control.secrets` (`pgapp secret set`,
+//! see `src/secrets.rs`) instead of a page item — for a fixed
+//! credential (an API key, a service account token) that isn't
+//! user-typed and shouldn't sit in plaintext in the markup file.
 //!
 //! `auth`: `none` (default) | `basic` (`username`/`password`) |
 //! `bearer` (`token`) | `api_key_header` (`key_name`/`key_value`, sent
@@ -62,7 +67,34 @@ impl ServerAction for HttpRequest {
     fn run<'a>(&'a self, ctx: ActionContext<'a>) -> BoxFuture<'a, anyhow::Result<String>> {
         Box::pin(async move {
             let cfg = |key: &str| ctx.config.get(key).and_then(|v| v.as_str()).unwrap_or("");
-            let interp = |s: &str| interpolate(s, ctx.values);
+
+            // {{secret.name}} can appear anywhere {{item}} can; resolve
+            // every one referenced by this config into a combined map
+            // up front, so `interpolate` itself stays a plain, sync
+            // string substitution over one map — same lookup either
+            // way, `secret.` is just a naming convention, not special
+            // syntax to the interpolator.
+            let templated_fields =
+                [cfg("url"), cfg("body"), cfg("headers"), cfg("token"), cfg("username"), cfg("password"), cfg("key_value")];
+            let secret_names = secret_placeholders(&templated_fields);
+            let mut values = ctx.values.clone();
+            if !secret_names.is_empty() {
+                let key = crate::secrets::load_key().map_err(|e| anyhow::anyhow!("http_request: {e}"))?;
+                for name in &secret_names {
+                    let value =
+                        crate::secrets::resolve(ctx.pool, &key, ctx.app.control_app_id, ctx.app.workspace_id, name)
+                            .await
+                            .map_err(|e| anyhow::anyhow!("http_request: failed to resolve secret '{name}': {e}"))?
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "http_request: no secret named '{name}' is set for this app or its workspace \
+                                     (see `pgapp secret list <dbname> --app <slug>`)"
+                                )
+                            })?;
+                    values.insert(format!("secret.{name}"), value);
+                }
+            }
+            let interp = |s: &str| interpolate(s, &values);
 
             let url = cfg("url");
             if url.is_empty() {
@@ -209,6 +241,33 @@ async fn write_collection(
     Ok(())
 }
 
+/// Every distinct `secret.<name>` referenced across a set of config
+/// strings, with the `secret.` prefix stripped — what `run` resolves
+/// against `pgapp_control.secrets` before interpolating. A plain
+/// `{{item}}` placeholder (no `secret.` prefix) is left alone here;
+/// `interpolate` still handles those from `ctx.values` as always.
+fn secret_placeholders(templates: &[&str]) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    for template in templates {
+        let bytes = template.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            if bytes[i] == b'{' && bytes.get(i + 1) == Some(&b'{') {
+                if let Some(end) = template[i + 2..].find("}}") {
+                    let name = template[i + 2..i + 2 + end].trim();
+                    if let Some(secret_name) = name.strip_prefix("secret.") {
+                        names.insert(secret_name.to_string());
+                    }
+                    i += 2 + end + 2;
+                    continue;
+                }
+            }
+            i += 1;
+        }
+    }
+    names
+}
+
 /// `{{item}}` → that item's current value from the page's bind
 /// context (empty string if unset) — a plain string substitution, not
 /// SQL-bind casting, since this has nothing to do with Postgres.
@@ -277,6 +336,17 @@ mod tests {
     #[test]
     fn interpolate_is_a_no_op_with_no_placeholders() {
         assert_eq!(interpolate("https://api.example.com/health", &Default::default()), "https://api.example.com/health");
+    }
+
+    #[test]
+    fn secret_placeholders_finds_names_across_multiple_templates_and_dedupes() {
+        let names = secret_placeholders(&["Bearer {{secret.api_token}}", "{\"key\": \"{{secret.api_token}}\"}", "{{item}}"]);
+        assert_eq!(names, ["api_token".to_string()].into_iter().collect());
+    }
+
+    #[test]
+    fn secret_placeholders_is_empty_with_no_secret_references() {
+        assert!(secret_placeholders(&["{{id}}", "no placeholders here"]).is_empty());
     }
 
     #[test]

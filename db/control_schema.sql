@@ -44,3 +44,41 @@ alter table pgapp_control.apps add column if not exists data_schema text not nul
 -- needed to look up its pgapp_meta.apps row (keyed by that name) when
 -- hard-deleting an app, without re-parsing its markup file from disk.
 alter table pgapp_control.apps add column if not exists app_name text not null default '';
+
+-- `pgapp secret set/list/rm` (see src/secrets.rs) — a workspace- or
+-- app-scoped named secret, referenced from markup as
+-- `{{secret.<name>}}` (same interpolation `http_request` already does
+-- for page items, just resolved from here instead of `ctx.values`).
+-- Lives in pgapp_control, not pgapp_meta, for the same reason the
+-- workspace/app registry does: it's pgapp managing itself, untouched
+-- by an app's own markup resync, so it survives every rebuild/upgrade
+-- for free — nothing here is ever derived from a `.pgapp` file.
+--
+-- `ciphertext`/`nonce` are AES-256-GCM output, never a hash: a secret
+-- has to be sent back out in plaintext (e.g. an Authorization header),
+-- so a one-way hash — right for a login password, which is only ever
+-- compared — would be useless here. The key that decrypts these never
+-- lives in this database; see `secrets::load_key` (read fresh from
+-- `PGAPP_SECRET_KEY` at process start, same pattern
+-- `PGAPP_ADMIN_DB_PASSWORD` already uses for the `pgapp_admin` role's
+-- own password).
+create table if not exists pgapp_control.secrets (
+    id           serial primary key,
+    workspace_id integer references pgapp_control.workspaces(id) on delete cascade,
+    app_id       integer references pgapp_control.apps(id) on delete cascade,
+    name         text not null,
+    ciphertext   bytea not null,
+    nonce        bytea not null,
+    created_at   timestamptz not null default now(),
+    updated_at   timestamptz not null default now(),
+    constraint secrets_exactly_one_scope check (
+        (workspace_id is not null and app_id is null) or
+        (workspace_id is null and app_id is not null)
+    )
+);
+-- Partial (not plain) unique indexes: a plain `unique (workspace_id,
+-- name)` would treat every app-scoped row (workspace_id null) as
+-- equal to every other on that column, wrongly colliding names across
+-- unrelated apps.
+create unique index if not exists secrets_workspace_name on pgapp_control.secrets (workspace_id, name) where workspace_id is not null;
+create unique index if not exists secrets_app_name on pgapp_control.secrets (app_id, name) where app_id is not null;

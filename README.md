@@ -450,6 +450,9 @@ Ships four modules:
   becomes the page's error banner, same as a PL/pgSQL exception would.
   A `collection: "name"` config captures the (JSON) response body into
   a collection instead of just echoing it back — see [Collections](#collections).
+  A fixed credential (an API key, a service token) that isn't
+  user-typed belongs in `{{secret.<name>}}` instead of a literal in the
+  markup — see [Secrets](#secrets).
 
 Rust and PL/pgSQL aren't a migration path away from each other: HTTP
 calls belong in Rust (`http_request`) since Postgres has no native
@@ -972,6 +975,52 @@ pgapp run <file>.pgapp --instance <dbname> [--workspace <slug>]
 
 `pgapp workspace list <dbname>` and `pgapp apps` show what's currently
 registered.
+
+## Secrets
+
+A fixed credential an action needs — an API key, a service account
+token — that isn't user-typed and shouldn't sit in plaintext in the
+markup file. Managed with the same instance-mode CLI:
+
+```bash
+pgapp secret set <dbname> <name> (--workspace <slug> | --app <slug>)
+pgapp secret list <dbname> (--workspace <slug> | --app <slug>)
+pgapp secret rm <dbname> <name> (--workspace <slug> | --app <slug>)
+```
+
+`set` prompts for the value interactively rather than taking it as an
+argument (`--value` exists for scripts, but — unlike the prompt — it
+lands in shell history and `ps`). Referenced from markup as
+`{{secret.<name>}}`, anywhere `http_request` already accepts
+`{{item}}` (`url`/`body`/`headers`/`token`/`username`/`password`/
+`key_value`):
+
+```text
+action "Create ticket" calls http_request (
+  url: "https://api.example.com/tickets",
+  auth: "bearer",
+  token: "{{secret.api_token}}"
+)
+```
+
+An app-scoped secret shadows a workspace-scoped one of the same name —
+same precedent a page-scoped named query already sets over an
+app-scoped one. Storage lives in `pgapp_control` (pgapp managing
+itself, the same registry `workspace`/`app` commands use), not
+`pgapp_meta` — untouched by a markup resync, so a secret survives
+every `admin/reload` and app rebuild for free, exactly like the
+workspace/app registry itself does.
+
+**Encrypted, never hashed.** A hash is one-way — right for the CLI
+admin password above, which is only ever *compared*, but useless for a
+secret that has to be sent back out in plaintext (an `Authorization`
+header). Secrets are AES-256-GCM encrypted at rest instead. The key
+itself never touches this database — same "never written to disk"
+story as `pgapp_admin`'s own Postgres password: it's read fresh from
+`PGAPP_SECRET_KEY` (64 hex characters — `openssl rand -hex 32`) by
+every command or request that actually needs a value, and isn't
+required at all otherwise (`secret list`/`rm`, or an app with no
+`{{secret...}}` references, work fine without it ever being set).
 
 ## Roadmap (not in this slice)
 

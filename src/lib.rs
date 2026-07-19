@@ -18,6 +18,7 @@ pub mod meta;
 pub mod model;
 pub mod render;
 pub mod scaffold;
+pub mod secrets;
 pub mod server;
 pub mod source;
 pub mod theme;
