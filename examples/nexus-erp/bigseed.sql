@@ -3,7 +3,10 @@
 -- no per-row correlated subqueries for linked fields — those don't
 -- scale; this uses one array_agg CTE per linked entity instead).
 -- Run against a *fresh* synced database (truncates first), against
--- the workspace schema the app was registered into:
+-- the workspace schema the app was registered into ($DATABASE_URL
+-- isn't set by pgapp itself — export it yourself first, the same
+-- connection string you gave `pgapp instance init`):
+--   export DATABASE_URL=postgres://user:pass@host:5432/<dbname>
 --   psql "$DATABASE_URL" -v schema=<workspace_schema> -f examples/nexus-erp/bigseed.sql
 set search_path to :"schema", public;
 

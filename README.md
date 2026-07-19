@@ -6,7 +6,13 @@ Postgres, written in Rust.
 ## Quickstart
 
 All you need is Postgres reachable somewhere (any role that can
-`CREATE DATABASE`) and Rust installed. Build and install the `pgapp`
+`CREATE DATABASE`) and Rust installed. `pgapp` itself talks to Postgres
+directly (via `sqlx`, no client binary required), but the `psql`/
+`createdb` client tools are still handy for the seed-data steps below —
+on macOS via Postgres.app or Homebrew's `libpq`/`postgresql` formulas,
+they aren't on `PATH` by default, so add them yourself (e.g.
+`export PATH="/Applications/Postgres.app/Contents/Versions/latest/bin:$PATH"`
+or `brew link --force libpq`). Build and install the `pgapp`
 binary once — cargo's only job here is compiling it, every command
 after this is `pgapp` itself, never `cargo run`:
 
@@ -43,14 +49,28 @@ pgapp run <generated-file>.pgapp --workspace <slug>
 ```
 
 It prints the app's URL — `http://127.0.0.1:8080/<workspace>/<slug>` —
-and opening the bare `http://127.0.0.1:8080` redirects there too.
+and, as long as this is the *only* app registered, opening the bare
+`http://127.0.0.1:8080` redirects there too. Once a second app is
+registered (see "Multi-app routing" below), `/` instead serves a plain
+index page listing every registered app as a link — there's no single
+app left to redirect to.
 
 For scripts/CI, skip the prompts entirely: `pgapp new <AppName>`
 scaffolds a `.pgapp` file with no database interaction (see
 "Scaffolding a new app" below), then register it explicitly with `app
 create`/`run` above. To try the richer bundled demo instead of a blank
-scaffold, point `run` at `examples/helpdesk.pgapp` (needs
-`examples/helpdesk_functions.sql` run first — see its header comment).
+scaffold, point `run` at `examples/helpdesk.pgapp` — but its
+`call_function` action needs a PL/pgSQL function that has to exist
+*before* the first sync, so run these in order (`$DATABASE_URL` isn't
+set by pgapp itself — export it as the same connection string you gave
+`pgapp instance init`):
+
+```bash
+export DATABASE_URL=postgres://user:pass@host:5432/<dbname>
+psql "$DATABASE_URL" -v schema=<workspace_schema> -f examples/helpdesk_functions.sql
+pgapp run examples/helpdesk.pgapp --workspace <slug>
+psql "$DATABASE_URL" -v schema=<workspace_schema> -f examples/helpdesk_seed.sql   # after, once the tables exist
+```
 
 Running `pgapp run` again with a *different* `.pgapp` path adds a
 second app alongside the first, in the same or a different workspace —
@@ -255,10 +275,11 @@ operations, facilities, compliance) across 15 files under one
 `app.pgapp` — every entity gets a list+form, detail, and quick-edit
 page, plus 12 module dashboards, cross-module reports, and admin
 pages. Seed it with `examples/nexus-erp/seed.sql` after the first sync
-(run `pgapp run examples/nexus-erp --workspace
-<slug>` first so the tables exist, then `psql "$DATABASE_URL" -v
-schema=<workspace_schema> -f examples/nexus-erp/seed.sql`). It's also
-the fixture used to
+(run `pgapp run examples/nexus-erp --workspace <slug>` first so the
+tables exist, then — with `$DATABASE_URL` exported to the same
+connection string you gave `pgapp instance init`, since pgapp itself
+never sets it — `psql "$DATABASE_URL" -v schema=<workspace_schema> -f
+examples/nexus-erp/seed.sql`). It's also the fixture used to
 confirm the server holds up under load: 30 parallel threads sweeping
 all 200 pages sustained ~900 req/s with zero errors (p50 ~27ms, p99
 ~94ms on a single shared connection pool), and 30 threads doing
@@ -871,11 +892,18 @@ registers (or re-points) one slug into that workspace and then serves
 *every enabled row across every workspace in the instance*, not just
 that one — so pointing the server at a new app one run adds it
 alongside whatever was already registered, without needing to name
-every app again each time:
+every app again each time. There's no register-only command, though —
+`run` always binds a port and blocks — so laying out several apps that
+don't already live under one directory (see below for the case where
+they do) means registering them one at a time, stopping each before
+starting the next since two `run`s can't hold the same port at once,
+and leaving only the *last* one up (it serves everything registered so
+far, including the ones from the runs you already killed):
 
 ```bash
-pgapp run helpdesk.pgapp --workspace erp   # registers + serves "helpdesk"
-pgapp run inventory.pgapp --workspace erp  # registers "inventory" too; both now serve
+pgapp run helpdesk.pgapp --workspace erp &   # registers "helpdesk", starts serving it
+sleep 1 && kill %1                           # stop it — just needed the registration
+pgapp run inventory.pgapp --workspace erp    # registers "inventory" too, then serves BOTH — leave this one running
 pgapp app list   # slug  enabled/disabled  name  workspace=...  schema=...  markup_path, one per line
 pgapp app destroy inventory --soft   # disables it — helpdesk keeps serving
 ```
@@ -888,7 +916,9 @@ mutually exclusive with `--app`), so an ambiguous slug there just
 errors — give the app a workspace-unique slug if you need to
 secret-scope it.
 
-A single `pgapp run` invocation can also register several apps at once:
+If the apps you're laying out can be arranged under one parent
+directory, there's a way to skip the run+kill dance above entirely —
+a single `pgapp run` invocation can also register several apps at once:
 if the given path is a directory containing only subdirectories (no
 loose `.pgapp` files of its own), each subdirectory is loaded as an
 independent app, slugged from its own declared name — `pgapp run

@@ -1,6 +1,9 @@
 -- Seed data for examples/nexus-erp. Run after the app's first sync
 -- (tables must already exist), against the workspace schema it was
--- registered into:
+-- registered into ($DATABASE_URL isn't set by pgapp itself — export it
+-- yourself first, the same connection string you gave `pgapp instance
+-- init`):
+--   export DATABASE_URL=postgres://user:pass@host:5432/<dbname>
 --   psql "$DATABASE_URL" -v schema=<workspace_schema> -f examples/nexus-erp/seed.sql
 -- Idempotent-ish: re-running adds more rows rather than erroring,
 -- since there's no natural unique key here.

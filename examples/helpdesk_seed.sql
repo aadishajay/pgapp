@@ -1,5 +1,8 @@
 -- Seed data for the Nova Helpdesk demo app. Run against the workspace
--- schema the app was registered into:
+-- schema the app was registered into ($DATABASE_URL isn't set by
+-- pgapp itself — export it yourself first, the same connection
+-- string you gave `pgapp instance init`):
+--   export DATABASE_URL=postgres://user:pass@host:5432/<dbname>
 --   psql "$DATABASE_URL" -v schema=<workspace_schema> -f examples/helpdesk_seed.sql
 set search_path to :"schema", public;
 

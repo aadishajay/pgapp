@@ -13,10 +13,13 @@
 -- (no schema prefix) since pgapp always calls it on a connection whose
 -- `search_path` is already pinned to the app's workspace schema (see
 -- `meta::scoped_conn`) — pass `-v schema=<your workspace's schema>` so
--- this script's own `search_path` matches when you run it directly:
+-- this script's own `search_path` matches when you run it directly.
+-- $DATABASE_URL isn't set by pgapp itself — export it yourself first,
+-- the same connection string you gave `pgapp instance init`:
 --
+--   export DATABASE_URL=postgres://user:pass@host:5432/<dbname>
 --   psql "$DATABASE_URL" -v schema=<workspace_schema> -f examples/helpdesk_functions.sql
---   pgapp run examples/helpdesk.pgapp --instance <dbname> --workspace <slug>
+--   pgapp run examples/helpdesk.pgapp --workspace <slug>
 --   psql "$DATABASE_URL" -v schema=<workspace_schema> -f examples/helpdesk_seed.sql   # after, once the tables exist
 
 set search_path to :"schema", public;
