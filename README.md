@@ -713,6 +713,61 @@ Not covered: new item types/actions, or the routing table itself, are
 still Rust code — those need `cargo build` + restart. Markup changes
 (new page/field/entity, a changed `theme:`, a new dynamic action) don't.
 
+## App Builder
+
+`examples/app_builder.pgapp` is a pgapp app, like any other, that lists
+every app registered across every workspace in the instance and lets
+you drag-and-drop reorder any of their pages' components — an
+Oracle-APEX-App-Builder-flavored way to rearrange a page without
+hand-editing its markup. Every entity in it is query-backed, reading
+`pgapp_control.*`/`pgapp_meta.*` directly (no core changes needed for
+that: a named query can reference any schema the shared `pgapp_admin`
+connection can see) — it owns no data tables of its own, so it's a good
+fit for a small dedicated workspace:
+
+```bash
+pgapp workspace create --schema builder   # once — a home for this app (owns no tables of its own)
+pgapp app create --workspace builder --slug app_builder   # or just `pgapp run examples/app_builder.pgapp --workspace builder`
+```
+
+Click through Apps → Pages → a page to see its components as a plain
+table; dragging a row and dropping it POSTs the new order to
+`/:workspace/:app/admin/pages/:page/reorder` — *that other app's* own
+route, not the App Builder's — which:
+
+1. Updates `pgapp_meta.components.ordinal` for that page.
+2. Rewrites the target app's own `.pgapp` file to match, via
+   `src/page_reorder.rs`: `markup::page_component_start_lines` (a thin,
+   additive reuse of the real parser's page-body walk — not a
+   parallel hand-rolled grammar) gives each component's real start
+   line, and the file is spliced along those lines rather than
+   regenerated from a parsed model, so every component's own
+   formatting and inline comments survive untouched — only its
+   position moves. A comment directly above a component (no blank
+   line between) travels with it; anything else between two
+   components (a page-scoped `query`, blank lines) stays wherever it
+   physically sits, attached to whichever component preceded it.
+3. Hot-reloads that one app in place, same as `admin/reload`.
+
+Single-file apps only for now — a directory app's page lives across
+more than one file, and splicing across files isn't implemented yet.
+Gated the same way `admin/reload` is (the `admin` role, when the target
+app has auth enabled).
+
+The drag itself is `runtime.js`'s `bindDraggableRows` — any element
+carrying the `pgapp-draggable-rows` class (added via the region's own
+`attrs (class: "...")`, appending to `pgapp-region` rather than
+replacing it) becomes a plain HTML5 drag-and-drop reorderable table:
+each row's first cell is read as its `pgapp_meta.components.id` (so a
+region showing this needs `columns: id, ...` with `id` first), and on
+drop the whole `tbody`'s top-to-bottom id order is POSTed. Since the
+row list describes some *other* app's page, the reorder target's own
+`/:workspace/:app/...` URL is built from `?target_workspace=` /
+`?target_app=`/`?target_page=` on the **current** (App Builder) page's
+own URL, not from anything baked into the markup — forwarded
+page-to-page the same way any other cross-page parameter is (a
+report's `link: <field> -> page <Name> (<row column>: <param name>)`).
+
 ## Report edit/create popup
 
 A `Form` that's a `Report`'s edit/create companion (same entity, same
@@ -793,6 +848,7 @@ src/
   server/
     query_engine.rs   named-query execution (+ paginated), bind context, LOV/region resolution
   render.rs           HTML generation; delegates field widgets to item_types, charts to chart_lib
+  page_reorder.rs     splices a page's components into a new order in its own .pgapp file (see "App Builder")
 themes/               pluggable design systems (see "Theming")
 icons/                pluggable icon packs: fontawesome/, material/
 chart-libs/           pluggable chart libraries: canvas-bars/
@@ -858,6 +914,7 @@ component kinds, e.g.
 - `POST /:workspace/:app/logout`                        — deletes the server-side session
 - `GET  /:workspace/:app/users` (+ create/delete POSTs) — built-in user management, admin role only
 - `GET  /:workspace/:app/admin/reload` (+ POST)         — re-syncs that app's markup file into `pgapp_meta` and reloads it, no restart
+- `POST /:workspace/:app/admin/pages/:page/reorder`     — the App Builder's drag-and-drop save (see "App Builder")
 - `GET  /:workspace/:app/runtime.js`                    — the DB-stored `pgapp` JS runtime
 - `GET  /:workspace/:app/chart-lib.js`                  — the active pluggable chart library's JS (404 when `chart_lib` is the built-in `inline`)
 

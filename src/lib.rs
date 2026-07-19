@@ -16,6 +16,7 @@ pub mod item_types;
 pub mod markup;
 pub mod meta;
 pub mod model;
+pub mod page_reorder;
 pub mod render;
 pub mod scaffold;
 pub mod secrets;

@@ -27,6 +27,7 @@ mod query_engine;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, RwLock};
 
+use anyhow::Context as _;
 use axum::extract::{Form, Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::middleware;
@@ -172,6 +173,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/:workspace/:app/users", get(auth::users_page).post(auth::users_create))
         .route("/:workspace/:app/users/:id/delete", post(auth::users_delete))
         .route("/:workspace/:app/admin/reload", get(admin_reload_page).post(admin_reload))
+        .route("/:workspace/:app/admin/pages/:page/reorder", post(admin_reorder_page))
         .route("/:workspace/:app/:page", get(show))
         .route("/:workspace/:app/:page/region/:query", get(region_fragment))
         .route("/:workspace/:app/:page/c/:idx/create", post(create))
@@ -1465,4 +1467,100 @@ async fn admin_reload(
         .into_response()),
         Err(e) => Ok(Redirect::to(&format!("/{app}/admin/reload?error={}", url_encode(&e.to_string()))).into_response()),
     }
+}
+
+/// POST /:workspace/:app/admin/pages/:page/reorder — the App Builder's
+/// drag-and-drop save: `order` (form-encoded) is the page's
+/// `pgapp_meta.components.id`s in their new order. Updates the
+/// database *and* the app's own `.pgapp` file (see `page_reorder.rs`)
+/// so the two never drift apart, then hot-reloads this one app in
+/// place — same "no restart" story as `admin/reload`. JSON in, JSON
+/// out (`{"ok":true}` / `{"ok":false,"error":"..."}"`), since this is
+/// called from `fetch()`, not submitted as a browser form. Single-file
+/// apps only for now — a directory app's page lives across more than
+/// one file, and splicing across files isn't implemented yet.
+async fn admin_reorder_page(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, page)): Path<(String, String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let app_key = format!("{workspace}/{app}");
+    let entry = state.app_or_404(&app_key)?;
+    let data = entry.data();
+    require_reload_access(&data, &auth_ctx)?;
+
+    let reorder_result = reorder_page_impl(&state.pool, &data.app, &entry.markup_path, &page, &values).await;
+    match reorder_result {
+        Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
+            Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+            Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("reordered, but reload failed: {e:#}")})).into_response()),
+        },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+async fn reorder_page_impl(
+    pool: &PgPool,
+    app: &RuntimeApp,
+    markup_path: &str,
+    page_name: &str,
+    values: &HashMap<String, String>,
+) -> anyhow::Result<()> {
+    if std::path::Path::new(markup_path).is_dir() {
+        anyhow::bail!("this app's markup is a directory of files — drag-and-drop reordering only supports single-file apps right now");
+    }
+
+    let page_id: i32 = sqlx::query_scalar("select id from pgapp_meta.pages where app_id = $1 and name = $2")
+        .bind(app.id)
+        .bind(page_name)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no page named '{page_name}' in this app's metadata"))?;
+
+    let old_order: Vec<i32> =
+        sqlx::query_scalar("select id from pgapp_meta.components where page_id = $1 order by ordinal")
+            .bind(page_id)
+            .fetch_all(pool)
+            .await?;
+
+    let posted: Vec<i32> = values
+        .get("order")
+        .map(|s| s.as_str())
+        .unwrap_or("")
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse::<i32>().context("'order' must be a comma-separated list of component ids"))
+        .collect::<anyhow::Result<Vec<i32>>>()?;
+
+    if posted.len() != old_order.len() {
+        anyhow::bail!("'order' names {} components but this page has {}", posted.len(), old_order.len());
+    }
+    let new_order_indices: Vec<usize> = posted
+        .iter()
+        .map(|id| {
+            old_order
+                .iter()
+                .position(|old_id| old_id == id)
+                .ok_or_else(|| anyhow::anyhow!("component id {id} isn't one of this page's current components"))
+        })
+        .collect::<anyhow::Result<Vec<usize>>>()?;
+
+    let markup_text = tokio::fs::read_to_string(markup_path)
+        .await
+        .with_context(|| format!("failed to read '{markup_path}'"))?;
+    let reordered = crate::page_reorder::reorder_page(&markup_text, page_name, &new_order_indices)?;
+    tokio::fs::write(markup_path, reordered)
+        .await
+        .with_context(|| format!("failed to write '{markup_path}'"))?;
+
+    for (ordinal, id) in posted.iter().enumerate() {
+        sqlx::query("update pgapp_meta.components set ordinal = $1 where id = $2")
+            .bind(ordinal as i32)
+            .bind(id)
+            .execute(pool)
+            .await
+            .context("failed to update component ordinal")?;
+    }
+    Ok(())
 }

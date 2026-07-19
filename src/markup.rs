@@ -518,6 +518,38 @@ impl Parser {
         })
     }
 
+    /// Same walk as `parse_page`, but records each top-level component's
+    /// start line instead of building `ComponentDef`s — see
+    /// `page_component_start_lines`'s doc for why this exists as its own
+    /// near-duplicate rather than adding an output parameter to
+    /// `parse_page` itself (used by every other caller, which has no use
+    /// for line numbers).
+    fn parse_page_component_lines(&mut self) -> Result<(Vec<u32>, u32)> {
+        self.expect_keyword("page")?;
+        self.expect_string()?;
+        self.expect_symbol('{')?;
+
+        let mut lines = Vec::new();
+        while !self.at_symbol('}') {
+            if self.at_keyword("query") {
+                self.parse_query()?;
+            } else if self.at_keyword("requires") {
+                self.advance()?;
+                self.expect_symbol(':')?;
+                self.expect_ident()?;
+            } else if self.at_keyword("on") {
+                lines.push(self.cur_line());
+                self.parse_dynamic_action()?;
+            } else {
+                lines.push(self.cur_line());
+                self.parse_component()?;
+            }
+        }
+        let closing_line = self.cur_line();
+        self.expect_symbol('}')?;
+        Ok((lines, closing_line))
+    }
+
     /// Parses one component, then an optional trailing `attrs (...)`
     /// suffix (see `parse_html_attrs`) shared by every kind — so a new
     /// component variant never has to reimplement id/class/attribute
@@ -1009,6 +1041,62 @@ pub fn parse_app(src: &str) -> Result<AppDef> {
     Ok(app)
 }
 
+/// The 1-based start line of each of `page_name`'s top-level components
+/// (in file order), plus the line its closing `}` is on — everything
+/// `src/page_reorder.rs` needs to cut the page's component blocks out of
+/// the file's raw text and splice them back in a different order,
+/// without regenerating markup text from a parsed model (which would
+/// throw away hand-written formatting/comments this parser already
+/// discards). Reuses the exact same top-level dispatch `parse_app`
+/// does, so a valid file is walked identically here — every non-target
+/// construct is parsed and discarded purely to advance past it
+/// correctly. Single-file apps only, same as `parse_app`; a directory
+/// app's fragments aren't addressed by this (see `source.rs`).
+pub fn page_component_start_lines(source: &str, page_name: &str) -> Result<(Vec<u32>, u32)> {
+    let mut parser = Parser::new(source)?;
+    parser.expect_keyword("app")?;
+    parser.expect_string()?;
+    parser.expect_symbol('{')?;
+    while !parser.at_symbol('}') {
+        if parser.at_keyword("entity") {
+            parser.parse_entity()?;
+        } else if parser.at_keyword("page") {
+            // Peek the page's name (without consuming) to decide whether
+            // this is the one we want before committing to either path.
+            let save = parser.pos;
+            parser.advance()?; // "page"
+            let name = parser.expect_string()?;
+            parser.pos = save;
+            if name == page_name {
+                return parser.parse_page_component_lines();
+            }
+            parser.parse_page()?;
+        } else if parser.at_keyword("nav") {
+            parser.parse_nav()?;
+        } else if parser.at_keyword("header") {
+            parser.parse_component_block("header")?;
+        } else if parser.at_keyword("footer") {
+            parser.parse_component_block("footer")?;
+        } else if parser.at_keyword("query") {
+            parser.parse_query()?;
+        } else if parser.at_keyword("theme") || parser.at_keyword("icons") || parser.at_keyword("chart_lib") {
+            parser.parse_app_prop()?;
+        } else if parser.at_keyword("auth") {
+            parser.advance()?;
+            parser.expect_symbol('{')?;
+            parser.expect_symbol('}')?;
+        } else {
+            bail!(
+                "expected 'entity', 'page', 'nav', 'header', 'footer', 'query', 'auth', \
+                 'theme', 'icons', or 'chart_lib', found {:?} (line {})",
+                parser.peek(),
+                parser.cur_line()
+            );
+        }
+    }
+    bail!("no page named '{page_name}' in this markup")
+}
+
 /// The top-level blocks a non-`app` file in a directory-based app may
 /// contain — see [`parse_fragment`] and `src/source.rs`.
 #[derive(Debug, Default)]
@@ -1057,6 +1145,35 @@ pub fn starts_app_block(src: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_component_start_lines_finds_the_right_page_and_closing_line() {
+        let src = r#"
+app "Demo" {
+  entity "t" { field id: id field name: text }
+
+  page "Other" {
+    text "not this one"
+  }
+
+  page "Target" {
+    text "first"
+    text "second"
+    report "R" of t {
+      columns: name
+    }
+  }
+}
+"#;
+        let (lines, closing_line) = page_component_start_lines(src, "Target").unwrap();
+        assert_eq!(lines.len(), 3);
+        // Line 1 is the leading blank line in the raw string above, so
+        // "page \"Target\" {" is line 9, its three components on 10/11/12.
+        assert_eq!(lines, vec![10, 11, 12]);
+        assert_eq!(closing_line, 15);
+
+        assert!(page_component_start_lines(src, "Nonexistent").is_err());
+    }
 
     #[test]
     fn parses_todo_example() {
@@ -1178,6 +1295,30 @@ mod tests {
         assert!(app.nav[3].target_page.is_none());
         assert_eq!(app.nav[3].children.len(), 1);
         assert_eq!(app.nav[3].children[0].label, "About");
+    }
+
+    #[test]
+    fn parses_app_builder_example() {
+        let src = include_str!("../examples/app_builder.pgapp");
+        let app = parse_app(src).unwrap();
+        assert_eq!(app.name, "App Builder");
+        assert_eq!(app.queries.len(), 3);
+        assert_eq!(app.entities.len(), 2);
+        assert_eq!(app.pages.len(), 3);
+
+        let edit_page = app.pages.iter().find(|p| p.name == "EditPage").unwrap();
+        assert_eq!(edit_page.components.len(), 2); // text, region
+        let region = edit_page
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Region { query, columns, html, .. } => Some((query, columns, html)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(region.0, "components_list");
+        assert_eq!(*region.1, vec!["id", "kind", "ordinal"]);
+        assert_eq!(region.2.class.as_deref(), Some("pgapp-draggable-rows"));
     }
 
     #[test]

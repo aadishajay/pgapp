@@ -184,6 +184,80 @@ window.pgapp = (function () {
     if (search) search.focus();
   }
 
+  // ---- App Builder: drag-and-drop row reordering ----
+  //
+  // A region/report table wrapped in a ".pgapp-draggable-rows" element
+  // (see the App Builder app's "Edit page" page) becomes a reorderable
+  // list: every <tbody> row becomes draggable, and dropping one row
+  // reorders the DOM. On drop, each row's first cell (by convention the
+  // component's id) is read top-to-bottom and POSTed as a comma-
+  // separated `order` param — to a URL built from *this page's own*
+  // query string (?target_workspace=&target_app=&target_page=), since
+  // the row list describes some *other* app's page, not the one
+  // currently being viewed (the App Builder itself).
+  function saveDraggedOrder(tbody) {
+    var params = new URLSearchParams(location.search);
+    var workspace = params.get("target_workspace");
+    var app = params.get("target_app");
+    var page = params.get("target_page");
+    if (!workspace || !app || !page) {
+      console.error("pgapp: draggable rows need ?target_workspace=&target_app=&target_page= on this page's own URL");
+      return;
+    }
+    var ids = [];
+    var rows = tbody.querySelectorAll("tr");
+    for (var i = 0; i < rows.length; i++) {
+      var firstCell = rows[i].querySelector("td");
+      if (firstCell) ids.push(firstCell.textContent.trim());
+    }
+    var url =
+      "/" + encodeURIComponent(workspace) + "/" + encodeURIComponent(app) + "/admin/pages/" + encodeURIComponent(page) + "/reorder";
+    fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "order=" + encodeURIComponent(ids.join(",")),
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        if (!data.ok) console.error("pgapp: reorder failed:", data.error);
+      })
+      .catch(function (e) {
+        console.error("pgapp:", e);
+      });
+  }
+
+  function bindDraggableRows() {
+    var tbodies = document.querySelectorAll(".pgapp-draggable-rows tbody");
+    for (var t = 0; t < tbodies.length; t++) {
+      (function (tbody) {
+        var dragging = null;
+        var rows = tbody.querySelectorAll("tr");
+        for (var i = 0; i < rows.length; i++) {
+          rows[i].setAttribute("draggable", "true");
+        }
+        tbody.addEventListener("dragstart", function (ev) {
+          dragging = ev.target.closest("tr");
+          if (ev.dataTransfer) ev.dataTransfer.effectAllowed = "move";
+        });
+        tbody.addEventListener("dragover", function (ev) {
+          ev.preventDefault();
+          var target = ev.target.closest("tr");
+          if (!target || target === dragging || !tbody.contains(target)) return;
+          var rect = target.getBoundingClientRect();
+          var before = (ev.clientY - rect.top) / rect.height < 0.5;
+          tbody.insertBefore(dragging, before ? target : target.nextSibling);
+        });
+        tbody.addEventListener("drop", function (ev) {
+          ev.preventDefault();
+          if (dragging) saveDraggedOrder(tbody);
+          dragging = null;
+        });
+      })(tbodies[t]);
+    }
+  }
+
   // Nested nav: a click-to-toggle affordance on the caret button, since
   // CSS-only :hover has no equivalent on touch devices and a submenu is
   // otherwise unreachable there.
@@ -323,11 +397,13 @@ window.pgapp = (function () {
     document.addEventListener("DOMContentLoaded", bindNavToggles);
     document.addEventListener("DOMContentLoaded", bindMobileNavToggle);
     document.addEventListener("DOMContentLoaded", bindConfirmForms);
+    document.addEventListener("DOMContentLoaded", bindDraggableRows);
   } else {
     bindDynamicActions();
     bindNavToggles();
     bindMobileNavToggle();
     bindConfirmForms();
+    bindDraggableRows();
   }
 
   return {

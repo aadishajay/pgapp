@@ -1,0 +1,95 @@
+# The App Builder — a pgapp app, like any other, that lists every
+# app/page registered across every workspace in this instance and lets
+# you drag-and-drop reorder any of them. Every entity here is
+# query-backed, reading pgapp_control.*/pgapp_meta.* directly — no core
+# framework changes were needed for that read side: a named query can
+# reference any schema this connection can see, and the shared
+# pgapp_admin pool this app runs through already can. This app itself
+# owns no data tables of its own, which is why it lives in its own tiny
+# workspace (see README's "App Builder" section for the exact
+# `pgapp workspace create`/`pgapp app create` commands to stand it up).
+#
+# The actual save-on-drop mechanics — updating pgapp_meta.components'
+# ordering *and* rewriting the target app's own .pgapp file so the two
+# never drift apart — live in src/page_reorder.rs and the
+# `/:workspace/:app/admin/pages/:page/reorder` route in server.rs, not
+# here; this app is only the picker + the draggable list.
+
+app "App Builder" {
+  theme: shadcn
+
+  nav {
+    item "Apps" -> page Apps
+  }
+
+  query apps_list {
+    sql: "select ca.id as id, w.slug as workspace_slug, ca.slug as app_slug,
+                 ma.id as meta_app_id, ca.app_name as app_name
+            from pgapp_control.apps ca
+            join pgapp_control.workspaces w on w.id = ca.workspace_id
+            left join pgapp_meta.apps ma on ma.name = ca.app_name
+           where ca.enabled
+           order by w.slug, ca.slug"
+  }
+
+  entity "apps_list" from query apps_list {
+    field id: integer
+    field workspace_slug: text
+    field app_slug: text
+    field meta_app_id: integer
+    field app_name: text
+  }
+
+  # :target_workspace/:target_app arrive from the Apps page's link
+  # below, purely to be carried forward again on the next hop (this
+  # query's own WHERE only needs :meta_app_id) — the explicit `::text`
+  # cast is needed since nothing here gives Postgres another typed
+  # column to infer them from.
+  query pages_list {
+    sql: "select p.id as id, p.name as page_name,
+                 :target_workspace::text as target_workspace,
+                 :target_app::text as target_app
+            from pgapp_meta.pages p
+           where p.app_id = :meta_app_id
+           order by p.name"
+  }
+
+  entity "pages_list" from query pages_list {
+    field id: integer
+    field page_name: text
+    field target_workspace: text
+    field target_app: text
+  }
+
+  # :id is the page's own pgapp_meta.pages.id — forwarded automatically
+  # as ?id= by the Pages page's link below (every report link carries
+  # the row's own id this way, not just its declared extra params).
+  query components_list {
+    sql: "select id, kind, ordinal from pgapp_meta.components where page_id = :id order by ordinal"
+  }
+
+  page "Apps" {
+    text "Every app registered in this instance. Pick one to edit its pages."
+    report "Apps" of apps_list {
+      columns: workspace_slug, app_slug, app_name
+      link: app_name -> page Pages (workspace_slug: target_workspace, app_slug: target_app, meta_app_id: meta_app_id)
+      page_size: 50
+    }
+  }
+
+  page "Pages" {
+    text "Pick a page to edit its components."
+    report "Pages" of pages_list {
+      columns: page_name
+      link: page_name -> page EditPage (target_workspace: target_workspace, target_app: target_app, page_name: target_page)
+      page_size: 50
+    }
+  }
+
+  page "EditPage" {
+    text "Drag rows to reorder this page's components, then drop it — saved immediately, in the database and in the app's own .pgapp file."
+    region "Components" from query components_list {
+      columns: id, kind, ordinal
+    } attrs (class: "pgapp-draggable-rows")
+  }
+}
