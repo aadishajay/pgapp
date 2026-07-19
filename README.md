@@ -6,15 +6,27 @@ Postgres, written in Rust.
 ## Quickstart
 
 All you need is Postgres reachable somewhere (any role that can
-`CREATE DATABASE`) and Rust installed. Every app pgapp serves lives in
-exactly one **instance** (a Postgres database) → **workspace** (a
-schema its tables live in) → **app** (a registered `.pgapp` file) —
-there's no lighter-weight mode than this, but each step is one command:
+`CREATE DATABASE`) and Rust installed. Build and install the `pgapp`
+binary once — cargo's only job here is compiling it, every command
+after this is `pgapp` itself, never `cargo run`:
 
 ```bash
-cargo run -- instance init          # once per Postgres database
-cargo run -- workspace create <dbname>   # once per schema
-cargo run -- app create <dbname> --workspace <slug>
+cargo install --path .
+```
+
+(installs `cargo-pgapp` too, reachable as `cargo pgapp` — see
+"Scaffolding a new app"; `cargo install --path . --bin pgapp` skips
+that second binary if you don't want it.)
+
+Every app pgapp serves lives in exactly one **instance** (a Postgres
+database) → **workspace** (a schema its tables live in) → **app** (a
+registered `.pgapp` file) — there's no lighter-weight mode than this,
+but each step is one command:
+
+```bash
+pgapp instance init                       # once per Postgres database
+pgapp workspace create <dbname>           # once per schema
+pgapp app create <dbname> --workspace <slug>
 ```
 
 `instance init` prompts for a superuser-capable connection string, the
@@ -27,13 +39,13 @@ directory) the same way `pgapp new` does, then registers it into the
 workspace you picked and prints the exact next command:
 
 ```bash
-cargo run -- run <generated-file>.pgapp --instance <dbname> --workspace <slug>
+pgapp run <generated-file>.pgapp --instance <dbname> --workspace <slug>
 ```
 
 It prints the app's URL — `http://127.0.0.1:8080/<slug>` — and opening
 the bare `http://127.0.0.1:8080` redirects there too.
 
-For scripts/CI, skip the prompts entirely: `cargo run -- new <AppName>`
+For scripts/CI, skip the prompts entirely: `pgapp new <AppName>`
 scaffolds a `.pgapp` file with no database interaction (see
 "Scaffolding a new app" below), then register it explicitly with `app
 create`/`run` above. To try the richer bundled demo instead of a blank
@@ -893,12 +905,12 @@ see "Instance mode" below) before it's actually served:
 
 ```bash
 # Non-interactive — for scripts/CI:
-cargo run -- new "My Project"                    # -> my_project.pgapp
-cargo run -- new Inventory inventory.pgapp        # explicit path
-cargo run -- new Inventory --dir --theme vivid    # a directory scaffold instead
+pgapp new "My Project"                    # -> my_project.pgapp
+pgapp new Inventory inventory.pgapp        # explicit path
+pgapp new Inventory --dir --theme vivid    # a directory scaffold instead
 
 # Interactive (prompts for name/theme/single-file-or-directory):
-cargo run -- create
+pgapp create
 ```
 
 `pgapp app create <dbname> [--workspace <slug>]` runs this same
@@ -906,19 +918,10 @@ interactive scaffold and registers the result into a workspace in one
 step — the more direct path for anything beyond scripts/CI (see
 "Instance mode").
 
-`cargo install --path .` builds and installs **both** binaries this
-crate defines — `pgapp` itself (so every `cargo run -- <args>` example
-in this README becomes just `pgapp <args>`, no `cargo run --` needed)
-and `cargo-pgapp`, reachable as a real `cargo` subcommand:
-
-```bash
-cargo install --path .
-pgapp new "My Project"          # same as `cargo run -- new "My Project"`
-pgapp create                    # or: cargo pgapp create
-```
-
-(`cargo install --path . --bin cargo-pgapp` installs just the `cargo
-pgapp` alias, if that's all you want.)
+`cargo pgapp create` (the `cargo-pgapp` binary `cargo install --path .`
+also installs — see Quickstart) is the exact same `pgapp create`, just
+reachable as a `cargo` subcommand for anyone who'd rather type it that
+way.
 
 See `pgapp new --help` for every flag.
 
@@ -931,8 +934,7 @@ access grants — not just a separate `pgapp_control` row). There's no
 lighter-weight, workspace-less way to run pgapp.
 
 The commands below assume `pgapp` is installed (`cargo install --path
-.` — see "Scaffolding a new app"); swap in `cargo run --` if you'd
-rather not install it (e.g. `cargo run -- instance init`).
+.` — see "Quickstart").
 
 **Instance** = one target database, one dedicated `pgapp_admin`
 Postgres login role the server operates as from then on:
@@ -941,10 +943,16 @@ Postgres login role the server operates as from then on:
 pgapp instance init
 ```
 
-Prompts for a superuser-capable connection string, the database name
-(auto-created if missing), a password to set for the new `pgapp_admin`
-role, and a separate local CLI admin password. Two different secrets,
-two different fates:
+Prompts for a superuser-capable connection string, the database name,
+a password to set for the new `pgapp_admin` role, and a separate local
+CLI admin password. The database name can name a **brand-new or an
+already-existing** database — either way `instance init` only ever
+*adds* to it: a missing database is auto-created, an existing one is
+connected to as-is and left otherwise untouched, and either way `pgapp`
+only ever creates its own `pgapp_meta`/`pgapp_control` schemas and
+`pgapp_admin` role in it — nothing already in that database (other
+schemas, other applications' tables) is read, altered, or dropped by
+`instance init` itself. Two different secrets, two different fates:
 
 - `pgapp_admin`'s Postgres password is **never written to disk** — a
   one-way hash can't be used to reconnect, so every later command reads
