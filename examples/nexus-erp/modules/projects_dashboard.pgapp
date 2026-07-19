@@ -1,19 +1,19 @@
 # Projects dashboard: status split + recent activity for the module's two lead entities.
 
 query projects_hero_by_status {
-  sql: "select status as label, count(*) as value from pgapp_data.nexus_erp_projects group by status order by 1"
+  sql: "select status as label, count(*) as value from nexus_erp_projects group by status order by 1"
 }
 
 query projects_second_by_status {
-  sql: "select status as label, count(*) as value from pgapp_data.nexus_erp_tasks group by status order by 1"
+  sql: "select status as label, count(*) as value from nexus_erp_tasks group by status order by 1"
 }
 
 query projects_hero_recent {
-  sql: "select id, project_name, status from pgapp_data.nexus_erp_projects order by id desc limit 6"
+  sql: "select id, project_name, status from nexus_erp_projects order by id desc limit 6"
 }
 
 query projects_second_recent {
-  sql: "select id, task_name, status from pgapp_data.nexus_erp_tasks order by id desc limit 6"
+  sql: "select id, task_name, status from nexus_erp_tasks order by id desc limit 6"
 }
 
 page "ProjectsDashboard" {

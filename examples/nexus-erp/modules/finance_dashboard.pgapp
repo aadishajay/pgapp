@@ -1,19 +1,19 @@
 # Finance dashboard: status split + recent activity for the module's two lead entities.
 
 query finance_hero_by_status {
-  sql: "select status as label, count(*) as value from pgapp_data.nexus_erp_ledger_accounts group by status order by 1"
+  sql: "select status as label, count(*) as value from nexus_erp_ledger_accounts group by status order by 1"
 }
 
 query finance_second_by_status {
-  sql: "select status as label, count(*) as value from pgapp_data.nexus_erp_expenses group by status order by 1"
+  sql: "select status as label, count(*) as value from nexus_erp_expenses group by status order by 1"
 }
 
 query finance_hero_recent {
-  sql: "select id, account_name, status from pgapp_data.nexus_erp_ledger_accounts order by id desc limit 6"
+  sql: "select id, account_name, status from nexus_erp_ledger_accounts order by id desc limit 6"
 }
 
 query finance_second_recent {
-  sql: "select id, expense_reference, status from pgapp_data.nexus_erp_expenses order by id desc limit 6"
+  sql: "select id, expense_reference, status from nexus_erp_expenses order by id desc limit 6"
 }
 
 page "FinanceDashboard" {

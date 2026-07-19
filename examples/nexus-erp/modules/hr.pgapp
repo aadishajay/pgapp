@@ -11,7 +11,7 @@ entity "employees" {
 }
 
 query employees_names {
-  sql: "select full_name as value from pgapp_data.nexus_erp_employees order by 1"
+  sql: "select full_name as value from nexus_erp_employees order by 1"
 }
 
 entity "departments" {
@@ -25,7 +25,7 @@ entity "departments" {
 }
 
 query departments_names {
-  sql: "select department_name as value from pgapp_data.nexus_erp_departments order by 1"
+  sql: "select department_name as value from nexus_erp_departments order by 1"
 }
 
 entity "positions" {
@@ -40,7 +40,7 @@ entity "positions" {
 }
 
 query positions_names {
-  sql: "select title as value from pgapp_data.nexus_erp_positions order by 1"
+  sql: "select title as value from nexus_erp_positions order by 1"
 }
 
 entity "leave_requests" {
@@ -54,7 +54,7 @@ entity "leave_requests" {
 }
 
 query leave_requests_names {
-  sql: "select request_reference as value from pgapp_data.nexus_erp_leave_requests order by 1"
+  sql: "select request_reference as value from nexus_erp_leave_requests order by 1"
 }
 
 entity "attendance" {
@@ -68,7 +68,7 @@ entity "attendance" {
 }
 
 query attendance_names {
-  sql: "select attendance_reference as value from pgapp_data.nexus_erp_attendance order by 1"
+  sql: "select attendance_reference as value from nexus_erp_attendance order by 1"
 }
 
 page "Employees" {
@@ -89,7 +89,7 @@ page "Employees" {
 }
 
 query employees_peer_status {
-  sql: "select id, full_name, status, annual_salary from pgapp_data.nexus_erp_employees
+  sql: "select id, full_name, status, annual_salary from nexus_erp_employees
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -123,7 +123,7 @@ page "Departments" {
 }
 
 query departments_peer_status {
-  sql: "select id, department_name, status, headcount from pgapp_data.nexus_erp_departments
+  sql: "select id, department_name, status, headcount from nexus_erp_departments
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -158,7 +158,7 @@ page "Positions" {
 }
 
 query positions_peer_status {
-  sql: "select id, title, status, pay_grade from pgapp_data.nexus_erp_positions
+  sql: "select id, title, status, pay_grade from nexus_erp_positions
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -192,7 +192,7 @@ page "LeaveRequests" {
 }
 
 query leave_requests_peer_status {
-  sql: "select id, request_reference, status, days_requested from pgapp_data.nexus_erp_leave_requests
+  sql: "select id, request_reference, status, days_requested from nexus_erp_leave_requests
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -226,7 +226,7 @@ page "Attendance" {
 }
 
 query attendance_peer_status {
-  sql: "select id, attendance_reference, status, hours_worked from pgapp_data.nexus_erp_attendance
+  sql: "select id, attendance_reference, status, hours_worked from nexus_erp_attendance
         where status = :status and id != :id order by id desc limit 8"
 }
 

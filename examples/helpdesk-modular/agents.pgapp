@@ -8,5 +8,5 @@ entity "agents" {
 }
 
 query agent_names {
-  sql: "select name as value from pgapp_data.helpdesk_agents where active = true order by 1"
+  sql: "select name as value from helpdesk_agents where active = true order by 1"
 }

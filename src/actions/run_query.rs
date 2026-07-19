@@ -33,7 +33,11 @@ impl ServerAction for RunQuery {
             for name in &rq.bind_names {
                 query = query.bind(ctx.values.get(name).map(|s| s.as_str()));
             }
-            let result = query.execute(ctx.pool).await.map_err(clean_db_error)?;
+            // search_path-scoped (see meta::scoped_conn): the query's own
+            // SQL may reference this app's tables unqualified, and one
+            // pool serves every app/workspace in the process.
+            let mut conn = crate::meta::scoped_conn(ctx.pool, &ctx.app.data_schema).await?;
+            let result = query.execute(&mut *conn).await.map_err(clean_db_error)?;
             Ok(format!("Done — {} row(s) affected.", result.rows_affected()))
         })
     }

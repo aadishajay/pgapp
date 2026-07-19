@@ -3,7 +3,7 @@
 
 query revenue_by_status {
   sql: "select status as label, count(*) as records, sum(deal_value) as total_value
-        from pgapp_data.nexus_erp_opportunities group by status order by 1"
+        from nexus_erp_opportunities group by status order by 1"
 }
 entity "revenue_summary" from query revenue_by_status {
   field label: text
@@ -20,7 +20,7 @@ page "RevenueReport" {
 
 query headcount_by_status {
   sql: "select status as label, count(*) as records, sum(annual_salary) as total_salary
-        from pgapp_data.nexus_erp_employees group by status order by 1"
+        from nexus_erp_employees group by status order by 1"
 }
 entity "headcount_summary" from query headcount_by_status {
   field label: text
@@ -37,7 +37,7 @@ page "HeadcountReport" {
 
 query inventory_by_status {
   sql: "select status as label, count(*) as records, sum(quantity_on_hand) as total_quantity
-        from pgapp_data.nexus_erp_stock_levels group by status order by 1"
+        from nexus_erp_stock_levels group by status order by 1"
 }
 entity "inventory_valuation" from query inventory_by_status {
   field label: text
@@ -54,7 +54,7 @@ page "InventoryValuationReport" {
 
 query ticket_sla_by_status {
   sql: "select status as label, count(*) as records, avg(satisfaction_score)::int as avg_satisfaction
-        from pgapp_data.nexus_erp_tickets group by status order by 1"
+        from nexus_erp_tickets group by status order by 1"
 }
 entity "ticket_sla_summary" from query ticket_sla_by_status {
   field label: text
@@ -71,7 +71,7 @@ page "TicketSlaReport" {
 
 query project_health_by_status {
   sql: "select status as label, count(*) as records, sum(budget_allocated) as total_budget
-        from pgapp_data.nexus_erp_projects group by status order by 1"
+        from nexus_erp_projects group by status order by 1"
 }
 entity "project_health" from query project_health_by_status {
   field label: text

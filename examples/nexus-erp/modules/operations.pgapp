@@ -11,7 +11,7 @@ entity "work_orders" {
 }
 
 query work_orders_names {
-  sql: "select work_order_number as value from pgapp_data.nexus_erp_work_orders order by 1"
+  sql: "select work_order_number as value from nexus_erp_work_orders order by 1"
 }
 
 entity "boms" {
@@ -25,7 +25,7 @@ entity "boms" {
 }
 
 query boms_names {
-  sql: "select bom_name as value from pgapp_data.nexus_erp_boms order by 1"
+  sql: "select bom_name as value from nexus_erp_boms order by 1"
 }
 
 entity "machines" {
@@ -39,7 +39,7 @@ entity "machines" {
 }
 
 query machines_names {
-  sql: "select machine_name as value from pgapp_data.nexus_erp_machines order by 1"
+  sql: "select machine_name as value from nexus_erp_machines order by 1"
 }
 
 entity "maintenance_logs" {
@@ -54,7 +54,7 @@ entity "maintenance_logs" {
 }
 
 query maintenance_logs_names {
-  sql: "select log_reference as value from pgapp_data.nexus_erp_maintenance_logs order by 1"
+  sql: "select log_reference as value from nexus_erp_maintenance_logs order by 1"
 }
 
 entity "quality_checks" {
@@ -68,7 +68,7 @@ entity "quality_checks" {
 }
 
 query quality_checks_names {
-  sql: "select check_reference as value from pgapp_data.nexus_erp_quality_checks order by 1"
+  sql: "select check_reference as value from nexus_erp_quality_checks order by 1"
 }
 
 page "WorkOrders" {
@@ -89,7 +89,7 @@ page "WorkOrders" {
 }
 
 query work_orders_peer_status {
-  sql: "select id, work_order_number, status, estimated_hours from pgapp_data.nexus_erp_work_orders
+  sql: "select id, work_order_number, status, estimated_hours from nexus_erp_work_orders
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -123,7 +123,7 @@ page "Boms" {
 }
 
 query boms_peer_status {
-  sql: "select id, bom_name, status, component_count from pgapp_data.nexus_erp_boms
+  sql: "select id, bom_name, status, component_count from nexus_erp_boms
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -157,7 +157,7 @@ page "Machines" {
 }
 
 query machines_peer_status {
-  sql: "select id, machine_name, status, uptime_percent from pgapp_data.nexus_erp_machines
+  sql: "select id, machine_name, status, uptime_percent from nexus_erp_machines
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -192,7 +192,7 @@ page "MaintenanceLogs" {
 }
 
 query maintenance_logs_peer_status {
-  sql: "select id, log_reference, status, downtime_minutes from pgapp_data.nexus_erp_maintenance_logs
+  sql: "select id, log_reference, status, downtime_minutes from nexus_erp_maintenance_logs
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -226,7 +226,7 @@ page "QualityChecks" {
 }
 
 query quality_checks_peer_status {
-  sql: "select id, check_reference, status, defect_count from pgapp_data.nexus_erp_quality_checks
+  sql: "select id, check_reference, status, defect_count from nexus_erp_quality_checks
         where status = :status and id != :id order by id desc limit 8"
 }
 

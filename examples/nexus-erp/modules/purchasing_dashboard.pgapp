@@ -1,19 +1,19 @@
 # Purchasing dashboard: status split + recent activity for the module's two lead entities.
 
 query purchasing_hero_by_status {
-  sql: "select status as label, count(*) as value from pgapp_data.nexus_erp_suppliers group by status order by 1"
+  sql: "select status as label, count(*) as value from nexus_erp_suppliers group by status order by 1"
 }
 
 query purchasing_second_by_status {
-  sql: "select status as label, count(*) as value from pgapp_data.nexus_erp_purchase_orders group by status order by 1"
+  sql: "select status as label, count(*) as value from nexus_erp_purchase_orders group by status order by 1"
 }
 
 query purchasing_hero_recent {
-  sql: "select id, supplier_name, status from pgapp_data.nexus_erp_suppliers order by id desc limit 6"
+  sql: "select id, supplier_name, status from nexus_erp_suppliers order by id desc limit 6"
 }
 
 query purchasing_second_recent {
-  sql: "select id, po_number, status from pgapp_data.nexus_erp_purchase_orders order by id desc limit 6"
+  sql: "select id, po_number, status from nexus_erp_purchase_orders order by id desc limit 6"
 }
 
 page "PurchasingDashboard" {

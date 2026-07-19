@@ -11,7 +11,7 @@ entity "campaigns" {
 }
 
 query campaigns_names {
-  sql: "select campaign_name as value from pgapp_data.nexus_erp_campaigns order by 1"
+  sql: "select campaign_name as value from nexus_erp_campaigns order by 1"
 }
 
 entity "marketing_leads" {
@@ -26,7 +26,7 @@ entity "marketing_leads" {
 }
 
 query marketing_leads_names {
-  sql: "select lead_name as value from pgapp_data.nexus_erp_marketing_leads order by 1"
+  sql: "select lead_name as value from nexus_erp_marketing_leads order by 1"
 }
 
 entity "email_templates" {
@@ -40,7 +40,7 @@ entity "email_templates" {
 }
 
 query email_templates_names {
-  sql: "select template_name as value from pgapp_data.nexus_erp_email_templates order by 1"
+  sql: "select template_name as value from nexus_erp_email_templates order by 1"
 }
 
 entity "segments" {
@@ -54,7 +54,7 @@ entity "segments" {
 }
 
 query segments_names {
-  sql: "select segment_name as value from pgapp_data.nexus_erp_segments order by 1"
+  sql: "select segment_name as value from nexus_erp_segments order by 1"
 }
 
 entity "events" {
@@ -68,7 +68,7 @@ entity "events" {
 }
 
 query events_names {
-  sql: "select event_name as value from pgapp_data.nexus_erp_events order by 1"
+  sql: "select event_name as value from nexus_erp_events order by 1"
 }
 
 page "Campaigns" {
@@ -89,7 +89,7 @@ page "Campaigns" {
 }
 
 query campaigns_peer_status {
-  sql: "select id, campaign_name, status, budget_spent from pgapp_data.nexus_erp_campaigns
+  sql: "select id, campaign_name, status, budget_spent from nexus_erp_campaigns
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -124,7 +124,7 @@ page "MarketingLeads" {
 }
 
 query marketing_leads_peer_status {
-  sql: "select id, lead_name, status, lead_score from pgapp_data.nexus_erp_marketing_leads
+  sql: "select id, lead_name, status, lead_score from nexus_erp_marketing_leads
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -158,7 +158,7 @@ page "EmailTemplates" {
 }
 
 query email_templates_peer_status {
-  sql: "select id, template_name, status, open_rate_percent from pgapp_data.nexus_erp_email_templates
+  sql: "select id, template_name, status, open_rate_percent from nexus_erp_email_templates
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -192,7 +192,7 @@ page "Segments" {
 }
 
 query segments_peer_status {
-  sql: "select id, segment_name, status, audience_size from pgapp_data.nexus_erp_segments
+  sql: "select id, segment_name, status, audience_size from nexus_erp_segments
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -226,7 +226,7 @@ page "Events" {
 }
 
 query events_peer_status {
-  sql: "select id, event_name, status, attendee_count from pgapp_data.nexus_erp_events
+  sql: "select id, event_name, status, attendee_count from nexus_erp_events
         where status = :status and id != :id order by id desc limit 8"
 }
 

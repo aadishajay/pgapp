@@ -109,14 +109,20 @@ fn render_segments(segments: &[Segment], names: &[String], casts: Option<&[Strin
 /// hand-written cast (`:project_id::integer`, the old style) still
 /// works exactly as before: it's just a redundant no-op layered under
 /// the auto-detected one.
-pub async fn compile_named_query(pool: &PgPool, sql: &str) -> Result<(String, Vec<String>)> {
+pub async fn compile_named_query(pool: &PgPool, data_schema: &str, sql: &str) -> Result<(String, Vec<String>)> {
     let (segments, names) = tokenize_binds(sql);
     if names.is_empty() {
         return Ok((sql.to_string(), names));
     }
 
     let bare = render_segments(&segments, &names, None);
-    let described = pool
+    // search_path-scoped (see meta::scoped_conn): an unqualified table
+    // reference in the query's own SQL only resolves to this app's
+    // tables if the connection Describe runs on has this set — the
+    // classic `pool.describe(...)` call used the pool's own default
+    // search_path, which knows nothing about any particular app.
+    let mut conn = crate::meta::scoped_conn(pool, data_schema).await?;
+    let described = (&mut *conn)
         .describe(&wrap_to_jsonb(&bare))
         .await
         .with_context(|| {
@@ -183,7 +189,7 @@ pub async fn load_app(pool: &PgPool, app_name: &str) -> Result<RuntimeApp> {
     let page_names: HashMap<i32, String> =
         page_rows.iter().map(|(id, name, _)| (*id, name.clone())).collect();
 
-    let (app_queries, mut page_queries) = load_queries(pool, app_id).await?;
+    let (app_queries, mut page_queries) = load_queries(pool, app_id, &data_schema).await?;
 
     let mut pages = Vec::new();
     for (page_id, name, required_role) in &page_rows {
@@ -271,6 +277,7 @@ async fn load_entities(pool: &PgPool, app_id: i32) -> Result<HashMap<String, Run
 async fn load_queries(
     pool: &PgPool,
     app_id: i32,
+    data_schema: &str,
 ) -> Result<(HashMap<String, RuntimeQuery>, HashMap<i32, HashMap<String, RuntimeQuery>>)> {
     let rows: Vec<(Option<i32>, String, String)> = sqlx::query_as(
         "select page_id, name, sql_text from pgapp_meta.named_queries where app_id = $1",
@@ -282,7 +289,7 @@ async fn load_queries(
     let mut app_queries = HashMap::new();
     let mut page_queries: HashMap<i32, HashMap<String, RuntimeQuery>> = HashMap::new();
     for (page_id, name, sql_text) in rows {
-        let (sql, bind_names) = compile_named_query(pool, &sql_text)
+        let (sql, bind_names) = compile_named_query(pool, data_schema, &sql_text)
             .await
             .with_context(|| format!("named query '{name}'"))?;
         let rq = RuntimeQuery { sql, bind_names };

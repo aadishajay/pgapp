@@ -5,7 +5,7 @@ query server_info {
 }
 
 query high_risk_audits {
-  sql: "select id, audit_reference, status, finding_count from pgapp_data.nexus_erp_audit_logs
+  sql: "select id, audit_reference, status, finding_count from nexus_erp_audit_logs
         where is_high_risk = true order by id desc limit 20"
 }
 

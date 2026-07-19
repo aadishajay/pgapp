@@ -748,7 +748,7 @@ async fn render_component(
                 .resolve_query(&data.app, qname)
                 .ok_or_else(|| anyhow::anyhow!("chart '{title}' references unknown query '{qname}'"))?;
             let ctx = bind_context(query, None);
-            let rows = run_named_query_rows(&state.pool, rq, &ctx).await?;
+            let rows = run_named_query_rows(&state.pool, &data.app.data_schema, rq, &ctx).await?;
             Ok(render::chart_html(title, chart_type, x, y, &rows, &data.chart_lib, html))
         }
 
@@ -794,7 +794,7 @@ async fn render_component(
                     format!("where {}", conditions.join(" and "))
                 };
                 let (json_rows, has_next) =
-                    run_named_query_page(&state.pool, rq, &ctx, &where_clause, &binds, *page_size, page_num).await?;
+                    run_named_query_page(&state.pool, &data.app.data_schema, rq, &ctx, &where_clause, &binds, *page_size, page_num).await?;
                 let rows: Vec<_> = json_rows.into_iter().map(query_engine::json_row_to_map).collect();
                 let prev_href = (page_num > 1).then(|| format!("/{app}/{page_name}?{p_page}={}{filter_qs}", page_num - 1));
                 let next_href = has_next.then(|| format!("/{app}/{page_name}?{p_page}={}{filter_qs}", page_num + 1));
@@ -1037,7 +1037,7 @@ async fn region_fragment(
     })?;
 
     let ctx = bind_context(&params, None);
-    let rows = run_named_query_rows(&state.pool, rq, &ctx).await.map_err(err_response)?;
+    let rows = run_named_query_rows(&state.pool, &data.app.data_schema, rq, &ctx).await.map_err(err_response)?;
 
     let region = page.components.iter().find_map(|c| match c {
         RuntimeComponent::Region { label, query, columns, html } if *query == query_name => {
@@ -1341,7 +1341,7 @@ async fn api_list(
             )
         })?;
         let ctx = HashMap::new();
-        run_named_query_rows(&state.pool, rq, &ctx).await.map_err(err_response)?
+        run_named_query_rows(&state.pool, &data.app.data_schema, rq, &ctx).await.map_err(err_response)?
     } else if let Some(coll_name) = &entity.source_collection {
         // No pagination here (unlike the Report component) — the /api
         // route always returns every row, same as a table-backed

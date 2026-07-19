@@ -25,8 +25,12 @@ fn json_to_display(value: &serde_json::Value) -> Option<String> {
 /// name missing from `ctx` binds SQL NULL). The query is wrapped in
 /// `to_jsonb` so its result can be decoded generically regardless of
 /// what columns it selects or what Postgres types they are.
+/// `data_schema` scopes the connection's `search_path` (see
+/// `meta::scoped_conn`) so a bare table reference in the query's own
+/// SQL resolves to this app's tables specifically.
 pub async fn run_named_query(
     pool: &PgPool,
+    data_schema: &str,
     rq: &RuntimeQuery,
     ctx: &HashMap<String, String>,
 ) -> anyhow::Result<Vec<serde_json::Value>> {
@@ -35,7 +39,8 @@ pub async fn run_named_query(
     for name in &rq.bind_names {
         query = query.bind(ctx.get(name).map(|s| s.as_str()));
     }
-    Ok(query.fetch_all(pool).await?)
+    let mut conn = crate::meta::scoped_conn(pool, data_schema).await?;
+    Ok(query.fetch_all(&mut *conn).await?)
 }
 
 /// Like [`run_named_query`], but paginated with a zero-extra-query
@@ -51,8 +56,10 @@ pub async fn run_named_query(
 /// `extra_binds` supplies their values in order. The clause's column
 /// references are `t.<name>` where `<name>` came from markup
 /// identifiers (lexer-restricted charset), never from request input.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_named_query_page(
     pool: &PgPool,
+    data_schema: &str,
     rq: &RuntimeQuery,
     ctx: &HashMap<String, String>,
     where_clause: &str,
@@ -75,7 +82,8 @@ pub async fn run_named_query_page(
     for bind in extra_binds {
         query = query.bind(bind.as_str());
     }
-    let mut rows = query.fetch_all(pool).await?;
+    let mut conn = crate::meta::scoped_conn(pool, data_schema).await?;
+    let mut rows = query.fetch_all(&mut *conn).await?;
     let has_next = rows.len() as i64 > page_size;
     rows.truncate(page_size as usize);
     Ok((rows, has_next))
@@ -83,10 +91,11 @@ pub async fn run_named_query_page(
 
 pub async fn run_named_query_rows(
     pool: &PgPool,
+    data_schema: &str,
     rq: &RuntimeQuery,
     ctx: &HashMap<String, String>,
 ) -> anyhow::Result<Vec<BTreeMap<String, Option<String>>>> {
-    let rows = run_named_query(pool, rq, ctx).await?;
+    let rows = run_named_query(pool, data_schema, rq, ctx).await?;
     Ok(rows.into_iter().map(json_row_to_map).collect())
 }
 
@@ -125,7 +134,7 @@ pub async fn resolve_regions(
             .and_then(|p| p.resolve_query(app, query))
             .or_else(|| app.queries.get(query))
             .ok_or_else(|| anyhow::anyhow!("region references unknown query '{query}'"))?;
-        out.insert(query.clone(), run_named_query_rows(pool, rq, ctx).await?);
+        out.insert(query.clone(), run_named_query_rows(pool, &app.data_schema, rq, ctx).await?);
     }
 
     Ok(out)
@@ -151,7 +160,7 @@ pub async fn resolve_field_choices(
             let rq = page.resolve_query(app, query_name).ok_or_else(|| {
                 anyhow::anyhow!("field '{field_name}' references unknown query '{query_name}'")
             })?;
-            run_named_query(pool, rq, ctx)
+            run_named_query(pool, &app.data_schema, rq, ctx)
                 .await?
                 .into_iter()
                 .filter_map(|row| {

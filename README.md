@@ -585,10 +585,20 @@ under the automatic one).
 (defaults to `value`). A `report`'s `source:` query needs an `id`
 column plus whatever `columns` reference. A `region` has no
 requirements. A `chart` needs whatever `x`/`y` name. Query SQL
-references the entity's real physical table
-(`pgapp_data.<app>_<entity>`, printed at startup) and is decoded
-generically via `to_jsonb`, so there's no compile-time column-type
-checking beyond what Postgres itself enforces.
+references the entity's real physical table (`<app>_<entity>`, printed
+at startup) and is decoded generically via `to_jsonb`, so there's no
+compile-time column-type checking beyond what Postgres itself enforces.
+
+**Write the table name bare (`<app>_<entity>`), never schema-qualified
+(`pgapp_data.<app>_<entity>`).** Every connection a named query runs on
+— at sync time (type inference) and at request time alike — has its
+`search_path` pinned to this app's own `data_schema` first (`pgapp_data`
+for the classic flow, a workspace's own schema otherwise; see
+[Instance mode](#instance-mode)), specifically so the same query text
+works unchanged in either. A schema-qualified reference still works
+(qualified names ignore `search_path` entirely) but stops working the
+moment the app is re-registered into a different workspace — its
+tables move, but a hardcoded schema prefix doesn't.
 
 ## Authentication & authorization
 
@@ -939,7 +949,12 @@ A new schema gets its own owning login role (password prompted,
 `pgapp_admin` is granted membership + USAGE/CREATE); an existing schema
 just asks whether to grant `pgapp_admin` USAGE/CREATE into it (using a
 connection that can actually perform that grant — `pgapp_admin` has no
-privileges of its own on a schema it didn't create).
+privileges of its own on a schema it didn't create). An app registered
+into a workspace gets its entity tables there instead of the classic
+flow's global `pgapp_data` — transparently to its own markup: named
+queries keep referencing their tables by bare name (see [Named
+queries](#named-queries)), never the schema, so the same app runs
+unmodified in either mode.
 
 **App** = scaffolded and registered into a chosen workspace:
 

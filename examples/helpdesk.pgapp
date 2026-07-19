@@ -34,30 +34,30 @@ app "Helpdesk" {
   # ---- App-scoped named queries (visible from every page) ----
 
   query agent_names {
-    sql: "select name as value from pgapp_data.helpdesk_agents where active = true order by 1"
+    sql: "select name as value from helpdesk_agents where active = true order by 1"
   }
 
   query by_status {
-    sql: "select status as label, count(*) as value from pgapp_data.helpdesk_tickets group by status order by 1"
+    sql: "select status as label, count(*) as value from helpdesk_tickets group by status order by 1"
   }
 
   query by_day {
     sql: "select to_char(created_at, 'MM-DD') as label, count(*) as value
-          from pgapp_data.helpdesk_tickets group by 1 order by 1"
+          from helpdesk_tickets group by 1 order by 1"
   }
 
   query top_agents {
-    sql: "select agent as label, count(*) as value from pgapp_data.helpdesk_tickets
+    sql: "select agent as label, count(*) as value from helpdesk_tickets
           where agent is not null group by agent order by 2 desc limit 6"
   }
 
   query recent {
-    sql: "select id, subject, status, priority, agent from pgapp_data.helpdesk_tickets
+    sql: "select id, subject, status, priority, agent from helpdesk_tickets
           order by id desc limit 6"
   }
 
   query open_backlog {
-    sql: "select id, subject, priority, agent, satisfaction from pgapp_data.helpdesk_tickets
+    sql: "select id, subject, priority, agent, satisfaction from helpdesk_tickets
           where status = 'Open' order by id"
   }
 
@@ -156,7 +156,7 @@ app "Helpdesk" {
     # to the module, which executes this named query raw — so it may be
     # a plain UPDATE. The outcome comes back as a notice banner.
     query close_nonurgent {
-      sql: "update pgapp_data.helpdesk_tickets set status = 'Resolved' where status = 'Open' and urgent = false"
+      sql: "update helpdesk_tickets set status = 'Resolved' where status = 'Open' and urgent = false"
     }
     action "Close all non-urgent open tickets" calls run_query (query: "close_nonurgent")
 
@@ -177,7 +177,7 @@ app "Helpdesk" {
     # re-fetches a region with the page's current item values as binds
     # (so :agent below follows the popup LOV).
     query agent_load {
-      sql: "select count(*) as open_tickets from pgapp_data.helpdesk_tickets
+      sql: "select count(*) as open_tickets from helpdesk_tickets
             where agent = :agent and status = 'Open'"
     }
     region "Open tickets for the selected agent" from query agent_load
@@ -199,7 +199,7 @@ app "Helpdesk" {
     # No casts needed on :status/:id — compile_named_query asks
     # Postgres what type each column actually is and casts accordingly.
     query same_status {
-      sql: "select id, subject, priority, agent from pgapp_data.helpdesk_tickets
+      sql: "select id, subject, priority, agent from helpdesk_tickets
             where status = :status and id != :id
             order by id desc limit 8"
     }

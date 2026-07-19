@@ -11,7 +11,7 @@ entity "tickets" {
 }
 
 query tickets_names {
-  sql: "select subject as value from pgapp_data.nexus_erp_tickets order by 1"
+  sql: "select subject as value from nexus_erp_tickets order by 1"
 }
 
 entity "agents" {
@@ -25,7 +25,7 @@ entity "agents" {
 }
 
 query agents_names {
-  sql: "select agent_name as value from pgapp_data.nexus_erp_agents order by 1"
+  sql: "select agent_name as value from nexus_erp_agents order by 1"
 }
 
 entity "knowledge_articles" {
@@ -39,7 +39,7 @@ entity "knowledge_articles" {
 }
 
 query knowledge_articles_names {
-  sql: "select article_title as value from pgapp_data.nexus_erp_knowledge_articles order by 1"
+  sql: "select article_title as value from nexus_erp_knowledge_articles order by 1"
 }
 
 entity "slas" {
@@ -53,7 +53,7 @@ entity "slas" {
 }
 
 query slas_names {
-  sql: "select sla_name as value from pgapp_data.nexus_erp_slas order by 1"
+  sql: "select sla_name as value from nexus_erp_slas order by 1"
 }
 
 entity "escalations" {
@@ -68,7 +68,7 @@ entity "escalations" {
 }
 
 query escalations_names {
-  sql: "select escalation_reference as value from pgapp_data.nexus_erp_escalations order by 1"
+  sql: "select escalation_reference as value from nexus_erp_escalations order by 1"
 }
 
 page "Tickets" {
@@ -89,7 +89,7 @@ page "Tickets" {
 }
 
 query tickets_peer_status {
-  sql: "select id, subject, status, satisfaction_score from pgapp_data.nexus_erp_tickets
+  sql: "select id, subject, status, satisfaction_score from nexus_erp_tickets
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -123,7 +123,7 @@ page "Agents" {
 }
 
 query agents_peer_status {
-  sql: "select id, agent_name, status, tickets_closed from pgapp_data.nexus_erp_agents
+  sql: "select id, agent_name, status, tickets_closed from nexus_erp_agents
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -157,7 +157,7 @@ page "KnowledgeArticles" {
 }
 
 query knowledge_articles_peer_status {
-  sql: "select id, article_title, status, view_count from pgapp_data.nexus_erp_knowledge_articles
+  sql: "select id, article_title, status, view_count from nexus_erp_knowledge_articles
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -191,7 +191,7 @@ page "Slas" {
 }
 
 query slas_peer_status {
-  sql: "select id, sla_name, status, response_minutes from pgapp_data.nexus_erp_slas
+  sql: "select id, sla_name, status, response_minutes from nexus_erp_slas
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -226,7 +226,7 @@ page "Escalations" {
 }
 
 query escalations_peer_status {
-  sql: "select id, escalation_reference, status, severity_level from pgapp_data.nexus_erp_escalations
+  sql: "select id, escalation_reference, status, severity_level from nexus_erp_escalations
         where status = :status and id != :id order by id desc limit 8"
 }
 
