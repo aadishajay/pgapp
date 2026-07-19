@@ -80,9 +80,9 @@ impl AppEntry {
         self.data.read().unwrap().clone()
     }
 
-    /// Re-parses `markup_path`, re-syncs it into `pgapp_meta`/
-    /// `pgapp_data` (an idempotent upsert — see `meta::sync_app`), and
-    /// atomically swaps in the freshly loaded app/theme/runtime.js/
+    /// Re-parses `markup_path`, re-syncs it into `pgapp_meta` and its
+    /// workspace schema (an idempotent upsert — see `meta::sync_app`),
+    /// and atomically swaps in the freshly loaded app/theme/runtime.js/
     /// icons/chart_lib. No process restart: in-flight requests keep
     /// whatever snapshot they already took via `data()`, and the very
     /// next request sees the update. If anything here fails (bad

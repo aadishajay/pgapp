@@ -1,9 +1,9 @@
 -- pgapp's own control plane: which apps this server serves, and where
 -- their markup lives on disk. Deliberately a separate schema from
--- pgapp_meta (the synced runtime metadata *of* an app) and pgapp_data
--- (an app's own rows) — this table is pgapp managing itself, closer to
--- what an APEX workspace/application registry is than to anything an
--- app author's markup ever touches.
+-- pgapp_meta (the synced runtime metadata *of* an app) and a
+-- workspace's own schema (an app's rows) — this table is pgapp
+-- managing itself, closer to what an APEX workspace/application
+-- registry is than to anything an app author's markup ever touches.
 create schema if not exists pgapp_control;
 
 -- A workspace is a Postgres schema an app's data tables live in —
@@ -30,15 +30,14 @@ create table if not exists pgapp_control.apps (
     created_at  timestamptz not null default now(),
     updated_at  timestamptz not null default now()
 );
--- Null = the classic single-workspace flow (data tables in the global
--- pgapp_data schema, data_schema defaults accordingly). Set = this
--- app's data tables live in that workspace's own schema instead. `on
--- delete cascade`: a hard-deleted workspace drops its schema (and
--- every table in it) outright, so an app row still pointing at it
--- would only be stale bookkeeping — removing it too keeps
--- pgapp_control.apps from ever naming a workspace that no longer
--- exists.
+-- Every app belongs to exactly one workspace — its data tables live in
+-- that workspace's own schema (`data_schema`). `on delete cascade`: a
+-- hard-deleted workspace drops its schema (and every table in it)
+-- outright, so an app row still pointing at it would only be stale
+-- bookkeeping — removing it too keeps pgapp_control.apps from ever
+-- naming a workspace that no longer exists.
 alter table pgapp_control.apps add column if not exists workspace_id integer references pgapp_control.workspaces(id) on delete cascade;
+alter table pgapp_control.apps alter column workspace_id set not null;
 alter table pgapp_control.apps add column if not exists data_schema text not null default 'pgapp_data';
 -- The app's declared name (app "Name" { ... }), not its URL slug —
 -- needed to look up its pgapp_meta.apps row (keyed by that name) when

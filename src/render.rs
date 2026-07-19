@@ -632,8 +632,8 @@ pub fn users_page(
 }
 
 /// The built-in /{app}/admin/reload page: re-parses the markup file and
-/// re-syncs it into `pgapp_meta`/`pgapp_data` without restarting the
-/// process (see `server::AppEntry::reload`). A single `.pgapp` file
+/// re-syncs it into `pgapp_meta` and its workspace schema without
+/// restarting the process (see `server::AppEntry::reload`). A single `.pgapp` file
 /// can be edited in place here; a directory-based app (multiple
 /// files merged, see `src/source.rs`) can only be re-read from disk,
 /// since there's no one file to hand back to the browser.

@@ -2,18 +2,15 @@
 //! which apps a server process serves and where each one's markup
 //! lives on disk (`pgapp_control.apps`) — deliberately its own schema,
 //! separate from `pgapp_meta` (an app's synced runtime metadata) and
-//! `pgapp_data`/a workspace's own schema (an app's rows). This is what
-//! makes the app list survive across restarts and across which
-//! `.pgapp` path happens to be on the command line this time: `cargo
-//! run -- <path>` registers (or re-points) one slug, but every enabled
-//! row in this table gets loaded and served, not just that one.
+//! a workspace's own schema (an app's rows). This is what makes the
+//! app list survive across restarts and across which `.pgapp` path
+//! happens to be on the command line this time: `pgapp run` registers
+//! (or re-points) one slug, but every enabled row in this table gets
+//! loaded and served, not just that one.
 //!
-//! [`register`]/[`list_enabled`] serve the classic single-workspace
-//! flow (every app's data tables in the global `pgapp_data` schema).
-//! [`register_in_workspace`] is the same idea for an app created via
-//! `pgapp app create`/`pgapp run --workspace`, whose data tables live
-//! in that workspace's own schema instead — see `src/instance.rs` for
-//! how a workspace's schema/owning role get set up.
+//! Every app belongs to exactly one workspace — see
+//! [`register_in_workspace`] and `src/instance.rs` for how a
+//! workspace's schema/owning role get set up.
 
 use anyhow::{Context, Result};
 use sqlx::PgPool;
@@ -28,32 +25,9 @@ pub async fn ensure_schema(pool: &PgPool) -> Result<()> {
 
 // ---- apps ----
 
-/// Upserts a slug's markup path, enabling it if it had been disabled —
-/// re-registering an app (e.g. running `cargo run -- <path>` again
-/// after `remove`) brings it back. Classic flow only: data tables stay
-/// in the global `pgapp_data` schema, no workspace attached.
-pub async fn register(pool: &PgPool, slug: &str, markup_path: &str, app_name: &str) -> Result<()> {
-    sqlx::query(
-        "insert into pgapp_control.apps (slug, markup_path, app_name)
-         values ($1, $2, $3)
-         on conflict (slug) do update set
-            markup_path = excluded.markup_path,
-            app_name = excluded.app_name,
-            enabled = true,
-            updated_at = now()",
-    )
-    .bind(slug)
-    .bind(markup_path)
-    .bind(app_name)
-    .execute(pool)
-    .await
-    .context("failed to register app in pgapp_control.apps")?;
-    Ok(())
-}
-
-/// Same as [`register`], but for an app that lives inside a workspace
-/// — its data tables are created in `data_schema` (that workspace's own
-/// schema) instead of the global `pgapp_data`.
+/// Upserts a slug's markup path, enabling it if it had been disabled,
+/// scoping it to a workspace's own schema — an app registered via
+/// `pgapp app create`/`pgapp run --workspace`.
 pub async fn register_in_workspace(
     pool: &PgPool,
     slug: &str,
@@ -86,9 +60,9 @@ pub async fn register_in_workspace(
 
 /// (id, slug, markup_path, data_schema, workspace_id) for every enabled
 /// app, in a stable order — the full set a server process loads and
-/// serves on startup, classic and workspace-scoped apps alike. `id` and
-/// `workspace_id` (this table's own, not `pgapp_meta.apps`') are what
-/// `secrets::resolve` scopes a `{{secret...}}` lookup by.
+/// serves on startup. `id` and `workspace_id` (this table's own, not
+/// `pgapp_meta.apps`') are what `secrets::resolve` scopes a
+/// `{{secret...}}` lookup by.
 pub async fn list_enabled(pool: &PgPool) -> Result<Vec<(i32, String, String, String, Option<i32>)>> {
     let rows: Vec<(i32, String, String, String, Option<i32>)> = sqlx::query_as(
         "select id, slug, markup_path, data_schema, workspace_id from pgapp_control.apps where enabled order by slug",
@@ -298,14 +272,15 @@ mod tests {
     #[ignore = "needs a live Postgres; run with `cargo test -- --ignored` and PGAPP_TEST_DATABASE_URL set"]
     async fn register_then_list_enabled_roundtrips() {
         let pool = test_pool().await;
-        register(&pool, "alpha", "alpha.pgapp", "Alpha").await.unwrap();
-        register(&pool, "beta", "beta/", "Beta").await.unwrap();
+        let ws = register_workspace(&pool, "acme", "acme_schema", Some("acme_schema")).await.unwrap();
+        register_in_workspace(&pool, "alpha", "alpha.pgapp", "Alpha", ws, "acme_schema").await.unwrap();
+        register_in_workspace(&pool, "beta", "beta/", "Beta", ws, "acme_schema").await.unwrap();
         let enabled = list_enabled(&pool).await.unwrap();
         assert_eq!(
             enabled,
             vec![
-                (1, "alpha".to_string(), "alpha.pgapp".to_string(), "pgapp_data".to_string(), None),
-                (2, "beta".to_string(), "beta/".to_string(), "pgapp_data".to_string(), None)
+                (1, "alpha".to_string(), "alpha.pgapp".to_string(), "acme_schema".to_string(), Some(ws)),
+                (2, "beta".to_string(), "beta/".to_string(), "acme_schema".to_string(), Some(ws))
             ]
         );
     }
@@ -314,13 +289,17 @@ mod tests {
     #[ignore = "needs a live Postgres; run with `cargo test -- --ignored` and PGAPP_TEST_DATABASE_URL set"]
     async fn re_registering_updates_path_and_reenables() {
         let pool = test_pool().await;
-        register(&pool, "alpha", "alpha.pgapp", "Alpha").await.unwrap();
+        let ws = register_workspace(&pool, "acme", "acme_schema", Some("acme_schema")).await.unwrap();
+        register_in_workspace(&pool, "alpha", "alpha.pgapp", "Alpha", ws, "acme_schema").await.unwrap();
         assert!(disable(&pool, "alpha").await.unwrap());
         assert!(list_enabled(&pool).await.unwrap().is_empty());
 
-        register(&pool, "alpha", "alpha2.pgapp", "Alpha").await.unwrap();
+        register_in_workspace(&pool, "alpha", "alpha2.pgapp", "Alpha", ws, "acme_schema").await.unwrap();
         let enabled = list_enabled(&pool).await.unwrap();
-        assert_eq!(enabled, vec![(1, "alpha".to_string(), "alpha2.pgapp".to_string(), "pgapp_data".to_string(), None)]);
+        assert_eq!(
+            enabled,
+            vec![(1, "alpha".to_string(), "alpha2.pgapp".to_string(), "acme_schema".to_string(), Some(ws))]
+        );
     }
 
     #[tokio::test]

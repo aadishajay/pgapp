@@ -17,53 +17,26 @@ async fn main() -> anyhow::Result<()> {
         Some("app") => return cmd_app(&cli_args[2..]).await,
         Some("secret") => return cmd_secret(&cli_args[2..]).await,
         Some("run") => return cmd_run(&cli_args[2..]).await,
-        _ => {}
-    }
-
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://postgres:postgres@localhost:5432/pgapp".to_string());
-
-    match cli_args.get(1).map(|s| s.as_str()) {
-        Some("apps") => return list_registered_apps(&database_url).await,
-        Some("remove") => {
-            let slug = cli_args
-                .get(2)
-                .cloned()
-                .ok_or_else(|| anyhow::anyhow!("usage: pgapp remove <slug> (see `pgapp apps` for slugs)"))?;
-            return remove_app(&database_url, &slug).await;
+        _ => {
+            print_usage();
+            Ok(())
         }
-        _ => {}
     }
+}
 
-    // ---- classic mode: one shared global pgapp_meta/pgapp_data, no instance/workspace ceremony ----
-    let markup_path = cli_args.get(1).cloned().unwrap_or_else(|| "examples/todo.pgapp".to_string());
-    let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
-
-    let pool = instance::pool_options()
-        .connect(&database_url)
-        .await
-        .with_context(|| format!("failed to connect to database '{database_url}'"))?;
-
-    // `pgapp_control` is pgapp's own control plane (which apps this
-    // server serves, and where each one's markup lives — see
-    // src/control.rs); `pgapp_meta`/`pgapp_data` are the per-app
-    // runtime metadata/rows synced from each app's own markup.
-    control::ensure_schema(&pool).await?;
-    meta::ensure_schema(&pool).await?;
-
-    // A single file/directory is one app; a directory of subdirectories
-    // is a workspace of several (see source::load_workspace). Either
-    // way, every app found this run gets (re-)registered — but what
-    // actually gets *served* below is every enabled row in the control
-    // table, not just these, so a previous `cargo run -- other.pgapp`
-    // keeps serving alongside whatever's registered this time.
-    let discovered = source::load_workspace(&markup_path)
-        .with_context(|| format!("failed to load '{markup_path}'"))?;
-    for (slug, path, app_def) in &discovered {
-        control::register(&pool, slug, path, &app_def.name).await?;
-    }
-
-    serve_registered_apps(pool, &bind_addr).await
+fn print_usage() {
+    println!("pgapp — a Postgres-native, database-backed application server.");
+    println!();
+    println!("usage:");
+    println!("  pgapp new|create [<AppName>] [path] [--dir] [--theme <name>]   scaffold a .pgapp file");
+    println!("  pgapp instance init | destroy <dbname>                        one Postgres database per instance");
+    println!("  pgapp workspace create|destroy|list <dbname>                  a schema an app's tables live in");
+    println!("  pgapp app create|destroy|list <dbname> [--workspace <slug>]   scaffold/register an app in a workspace");
+    println!("  pgapp secret set|list|rm <dbname> <name> (--workspace <slug> | --app <slug>)");
+    println!("  pgapp run <file>.pgapp --instance <dbname> [--workspace <slug>]   serve every registered app");
+    println!();
+    println!("Every app lives in exactly one workspace's schema — see README's \"Instance mode\" section.");
+    println!("Start with `pgapp instance init`.");
 }
 
 /// Parses, syncs, and loads one app into a fresh [`server::AppEntry`] —
@@ -100,9 +73,9 @@ async fn load_one_app(
     })
 }
 
-/// The shared tail of every server start, classic or instance-mode:
-/// load every enabled row in `pgapp_control.apps` (each already knows
-/// its own `data_schema`), print the banner, and serve. One bad app is
+/// The shared tail of `pgapp run`: load every enabled row in
+/// `pgapp_control.apps` across every workspace (each already knows its
+/// own `data_schema`), print the banner, and serve. One bad app is
 /// skipped with a warning rather than taking the whole process down.
 async fn serve_registered_apps(pool: PgPool, bind_addr: &str) -> anyhow::Result<()> {
     let item_types = item_types::registry();
@@ -188,58 +161,11 @@ async fn print_banner(bind_addr: &str, apps: &HashMap<String, server::AppEntry>)
     }
 }
 
-async fn control_pool(database_url: &str) -> anyhow::Result<PgPool> {
-    let pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect(database_url)
-        .await
-        .with_context(|| format!("failed to connect to database '{database_url}'"))?;
-    control::ensure_schema(&pool).await?;
-    Ok(pool)
-}
-
-/// `pgapp apps` — lists every app registered in `pgapp_control.apps`
-/// (including disabled ones), for a server this database has already
-/// been serving apps from.
-async fn list_registered_apps(database_url: &str) -> anyhow::Result<()> {
-    let pool = control_pool(database_url).await?;
-    let apps = control::list_all(&pool).await?;
-    if apps.is_empty() {
-        println!("no apps registered yet — `cargo run -- <path>` registers one");
-        return Ok(());
-    }
-    for a in apps {
-        let ws = a.workspace_slug.as_deref().unwrap_or("-");
-        println!(
-            "{}\t{}\t{}\tworkspace={ws}\tschema={}\t{}",
-            a.slug,
-            if a.enabled { "enabled" } else { "disabled" },
-            a.app_name,
-            a.data_schema,
-            a.markup_path,
-        );
-    }
-    Ok(())
-}
-
-/// `pgapp remove <slug>` — disables an app so the next server start
-/// stops serving it (its markup/rows aren't touched; re-running
-/// `cargo run -- <its path>` re-enables it).
-async fn remove_app(database_url: &str, slug: &str) -> anyhow::Result<()> {
-    let pool = control_pool(database_url).await?;
-    if control::disable(&pool, slug).await? {
-        println!("removed '{slug}' — it will no longer be served (re-register it by running against its markup path again)");
-    } else {
-        println!("no app registered under slug '{slug}' (see `pgapp apps`)");
-    }
-    Ok(())
-}
-
 // ============================================================
 // Instance mode: `pgapp instance/workspace/app/run` — a durable,
-// database-backed multi-workspace deployment with a dedicated
-// `pgapp_admin` Postgres role, on top of the classic single-schema
-// flow above (which stays completely unchanged). See README's
+// database-backed deployment with a dedicated `pgapp_admin` Postgres
+// role. Every app is registered into exactly one workspace's schema —
+// there is no workspace-less/global-schema fallback. See README's
 // "Instance mode" section for the full picture.
 // ============================================================
 
@@ -312,9 +238,8 @@ async fn grant_admin_on_schema(pool: &PgPool, schema: &str) -> anyhow::Result<()
 
 /// Connects `opts` and, if the target database doesn't exist yet
 /// (Postgres error 3D000), creates it via the same host/credentials
-/// against the `postgres` maintenance database and retries once — the
-/// same auto-create behavior `pgapp create`'s interactive scaffold
-/// already gives the classic flow, extended to instance init.
+/// against the `postgres` maintenance database and retries once,
+/// rather than requiring a manual `createdb` step first.
 async fn connect_with_auto_create(opts: PgConnectOptions) -> anyhow::Result<PgPool> {
     match PgPoolOptions::new().max_connections(5).connect_with(opts.clone()).await {
         Ok(pool) => Ok(pool),
@@ -399,7 +324,10 @@ async fn instance_init() -> anyhow::Result<()> {
 
     control::ensure_schema(&pool).await?;
     meta::ensure_schema(&pool).await?;
-    for schema in ["pgapp_meta", "pgapp_data", "pgapp_control"] {
+    // Not `pgapp_data`: every app's entity tables live in a workspace's
+    // own schema (`pgapp workspace create`) — there's no workspace-less
+    // global schema to grant access to.
+    for schema in ["pgapp_meta", "pgapp_control"] {
         grant_admin_on_schema(&pool, schema).await?;
     }
 
@@ -422,22 +350,22 @@ async fn instance_init() -> anyhow::Result<()> {
     println!("pgapp instance '{dbname}' is ready.");
     println!("Every future instance/workspace/app/run command against it needs:");
     println!("  export PGAPP_ADMIN_DB_PASSWORD=<the password you just set for '{}'>", instance::ADMIN_ROLE);
-    println!("Next: `pgapp workspace create {dbname}`, or `pgapp run <file>.pgapp --instance {dbname}` to serve an app in the classic global schema.");
+    println!("Next: `pgapp workspace create {dbname}` to create a schema for your first app's tables.");
     Ok(())
 }
 
 /// `pgapp instance destroy <dbname>` — always a hard delete: drops
 /// every workspace schema/role pgapp itself created, pgapp_meta/
-/// pgapp_data/pgapp_control, the `pgapp_admin` role, and the local
-/// instance file. Needs a superuser-capable connection supplied fresh
-/// (never the stored `pgapp_admin` credential, which can't drop its
-/// own role or schemas it doesn't own).
+/// pgapp_control, the `pgapp_admin` role, and the local instance file.
+/// Needs a superuser-capable connection supplied fresh (never the
+/// stored `pgapp_admin` credential, which can't drop its own role or
+/// schemas it doesn't own).
 async fn instance_destroy(dbname: &str) -> anyhow::Result<()> {
     let inst = instance::load(dbname)?;
     instance::verify_operator(&inst)?;
 
     println!("This permanently destroys pgapp instance '{dbname}':");
-    println!("every workspace schema/role pgapp created, pgapp_meta/pgapp_data/pgapp_control, and the '{}' role.", inst.admin_role);
+    println!("every workspace schema/role pgapp created, pgapp_meta/pgapp_control, and the '{}' role.", inst.admin_role);
     let conn = scaffold::prompt(
         "Superuser-capable connection string to perform this (never stored)",
         &format!("postgres://postgres:postgres@{}:{}/{}", inst.host, inst.port, inst.dbname),
@@ -462,6 +390,8 @@ async fn instance_destroy(dbname: &str) -> anyhow::Result<()> {
     }
     try_drop(&pool, "drop schema if exists pgapp_control cascade", "schema 'pgapp_control'").await;
     try_drop(&pool, "drop schema if exists pgapp_meta cascade", "schema 'pgapp_meta'").await;
+    // `pgapp_data` is never created by current instance init, but a
+    // pre-instance-mode database may still have one — drop it too if so.
     try_drop(&pool, "drop schema if exists pgapp_data cascade", "schema 'pgapp_data'").await;
     // DROP ROLE refuses while the role still holds *any* privilege
     // anywhere in this database (e.g. the CREATE ON DATABASE grant from
@@ -710,11 +640,43 @@ async fn cmd_app(args: &[String]) -> anyhow::Result<()> {
             let soft = args.iter().any(|a| a == "--soft");
             app_destroy(&dbname, &slug, hard, soft).await
         }
+        Some("list") => {
+            let dbname = args
+                .get(1)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("usage: pgapp app list <dbname>"))?;
+            app_list(&dbname).await
+        }
         _ => {
-            println!("usage: pgapp app create|destroy <dbname> ...");
+            println!("usage: pgapp app create|destroy|list <dbname> ...");
             Ok(())
         }
     }
+}
+
+/// `pgapp app list <dbname>` — every app registered across every
+/// workspace in this instance (including disabled ones).
+async fn app_list(dbname: &str) -> anyhow::Result<()> {
+    let inst = instance::load(dbname)?;
+    instance::verify_operator(&inst)?;
+    let pool = instance::connect_as_admin(&inst).await?;
+    let apps = control::list_all(&pool).await?;
+    if apps.is_empty() {
+        println!("no apps registered yet — `pgapp app create {dbname}`");
+        return Ok(());
+    }
+    for a in apps {
+        let ws = a.workspace_slug.as_deref().unwrap_or("-");
+        println!(
+            "{}\t{}\t{}\tworkspace={ws}\tschema={}\t{}",
+            a.slug,
+            if a.enabled { "enabled" } else { "disabled" },
+            a.app_name,
+            a.data_schema,
+            a.markup_path,
+        );
+    }
+    Ok(())
 }
 
 /// `pgapp secret set|list|rm <dbname> ...` — a workspace- or app-scoped
@@ -922,9 +884,9 @@ async fn app_destroy(dbname: &str, slug: &str, hard: bool, soft: bool) -> anyhow
 
 /// `pgapp run <file>.pgapp --instance <dbname> [--workspace <slug>]` —
 /// registers/re-points the given app into the chosen workspace, then
-/// serves every enabled app in the whole instance (classic-flow apps
-/// and every workspace's apps alike), same "the registry decides"
-/// behavior the classic flow already has.
+/// serves every enabled app across every workspace in the instance —
+/// the registry, not just this one invocation's markup path, decides
+/// what's actually served.
 async fn cmd_run(args: &[String]) -> anyhow::Result<()> {
     let markup_path = args
         .first()

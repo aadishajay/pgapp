@@ -2,27 +2,26 @@
 //! `src/bin/cargo-pgapp.rs`) — generates a minimal, runnable starter
 //! app so a new project begins with real (if generic) markup to edit,
 //! instead of a blank file and the README open in another tab.
-//! Hand-rolled arg parsing and prompts, no CLI/prompt crate: this is
-//! the only subcommand either binary has, everything else is still
-//! just a markup path (see `main.rs`).
+//! Hand-rolled arg parsing and prompts, no CLI/prompt crate.
+//!
+//! Purely a file scaffolder — it never touches a database. Every app
+//! is registered into a workspace's schema (`pgapp workspace create`,
+//! `pgapp app create`; see `main.rs` and README's "Instance mode"
+//! section), so there's no "sync this to a database" step that
+//! belongs here.
 //!
 //! Two modes, chosen by whether an app name was already given:
 //! - **Flag-driven** (`pgapp new <AppName> [path] [--dir] [--theme
-//!   <name>]`): non-interactive and DB-free, for scripts/CI — only
-//!   ever touches the filesystem.
+//!   <name>]`): every value already on the command line, no prompts —
+//!   for scripts/CI.
 //! - **Interactive** (`pgapp new`/`pgapp create` bare, or `--create`):
-//!   prompts for whatever wasn't already given on the command line —
-//!   app name, database URL, theme, single-file vs. directory — like
-//!   `create-react-app`'s questionnaire. After writing the scaffold it
-//!   also connects to the given database and runs the same
-//!   `ensure_schema`/`sync_app` the server does on startup, so the app
-//!   is fully synced and immediately runnable, not just files on disk.
+//!   prompts for whatever wasn't already given — app name, theme,
+//!   single-file vs. directory — like `create-react-app`'s
+//!   questionnaire.
 
 use std::io::Write;
 
 use anyhow::{bail, Context, Result};
-
-const DEFAULT_DATABASE_URL: &str = "postgres://postgres:postgres@localhost:5432/pgapp";
 
 struct ParsedArgs {
     name: Option<String>,
@@ -85,7 +84,7 @@ pub async fn run(args: &[String]) -> Result<()> {
 
 /// The scriptable path: every value must already be on the command
 /// line (an absent one falls back to a fixed default, never a
-/// prompt), and it never touches a database — only ever writes files.
+/// prompt) — only ever writes files.
 fn run_noninteractive(parsed: ParsedArgs) -> Result<()> {
     let name = parsed.name.expect("run() only takes this path once a name is present");
     let theme = parsed.theme.unwrap_or_else(|| "shadcn".to_string());
@@ -100,16 +99,14 @@ fn run_noninteractive(parsed: ParsedArgs) -> Result<()> {
 
     println!("Created {target}");
     println!();
-    println!("Next steps:");
-    println!("  export DATABASE_URL={DEFAULT_DATABASE_URL}");
-    println!("  cargo run -- {target}");
+    print_next_steps(&target);
     Ok(())
 }
 
-/// The `create-react-app`-style path: prompts for anything not
-/// already given, then — unlike the non-interactive path — tries to
-/// connect to the resulting database and sync the new app into it
-/// immediately, so there's nothing left to do but open a browser.
+/// The `create-react-app`-style path: prompts for anything not already
+/// given (app name, theme, single-file vs. directory), then writes the
+/// scaffold — registering it into an instance/workspace is a separate
+/// step (`pgapp app create`), not this command's job.
 async fn run_interactive(parsed: ParsedArgs) -> Result<()> {
     println!("Let's scaffold a new pgapp app.");
     println!();
@@ -118,8 +115,6 @@ async fn run_interactive(parsed: ParsedArgs) -> Result<()> {
         Some(n) => n,
         None => prompt_required("App name")?,
     };
-    let env_default = std::env::var("DATABASE_URL").unwrap_or_else(|_| DEFAULT_DATABASE_URL.to_string());
-    let database_url = prompt("Database URL", &env_default)?;
     let theme = match parsed.theme {
         Some(t) => t,
         None => prompt("Theme (plain/shadcn/vivid/google_m3)", "shadcn")?,
@@ -140,56 +135,16 @@ async fn run_interactive(parsed: ParsedArgs) -> Result<()> {
     }
     println!();
     println!("Created {target}");
-
-    println!("Connecting to {database_url} ...");
-    match provision(&target, &database_url).await {
-        Ok(()) => {
-            println!("Synced '{name}' into pgapp_meta/pgapp_data — it's ready to run:");
-            println!();
-            println!("  export DATABASE_URL={database_url}");
-            println!("  cargo run -- {target}");
-        }
-        Err(e) => {
-            println!("Couldn't reach that database ({e:#}).");
-            println!("The scaffold at {target} is still ready — sync it once Postgres is reachable:");
-            println!();
-            println!("  export DATABASE_URL={database_url}");
-            println!("  cargo run -- {target}");
-        }
-    }
+    println!();
+    print_next_steps(&target);
     Ok(())
 }
 
-/// Connects to `database_url` and runs exactly what `main.rs` runs on
-/// every server startup — `ensure_schema` then `sync_app` — so an
-/// interactively-scaffolded app is immediately synced, not just
-/// written to disk.
-/// Connects to `database_url` and runs exactly what `main.rs` runs on
-/// every server startup — `ensure_schema` then `sync_app` — so an
-/// interactively-scaffolded app is immediately synced, not just
-/// written to disk. If the target database itself doesn't exist yet
-/// (the single most common first-run snag for someone who only knows
-/// Postgres, not this project's own setup steps), creates it and
-/// retries once instead of making that a manual `createdb` step.
-async fn provision(target: &str, database_url: &str) -> Result<()> {
-    let app_def = crate::source::load(target)?;
-    let pool = match connect(database_url).await {
-        Ok(pool) => pool,
-        Err(e) if is_missing_database_error(&e) => {
-            create_database(database_url).await?;
-            connect(database_url).await.with_context(|| format!("failed to connect to '{database_url}'"))?
-        }
-        Err(e) => return Err(e).with_context(|| format!("failed to connect to '{database_url}'")),
-    };
-    crate::meta::ensure_schema(&pool).await?;
-    let item_types = crate::item_types::registry();
-    let action_registry = crate::actions::registry();
-    crate::meta::sync_app(&pool, &app_def, &item_types, &action_registry, "pgapp_data").await?;
-    Ok(())
-}
-
-pub async fn connect(database_url: &str) -> sqlx::Result<sqlx::PgPool> {
-    sqlx::postgres::PgPoolOptions::new().max_connections(2).connect(database_url).await
+fn print_next_steps(target: &str) {
+    println!("Next steps — every app is registered into a workspace's schema (see README's \"Instance mode\" section):");
+    println!("  pgapp instance init                 (once per Postgres database)");
+    println!("  pgapp workspace create <dbname>      (once per schema)");
+    println!("  pgapp run {target} --instance <dbname> --workspace <slug>");
 }
 
 /// Postgres error code 3D000 = `invalid_catalog_name`, raised when the
@@ -198,33 +153,6 @@ pub async fn connect(database_url: &str) -> sqlx::Result<sqlx::PgPool> {
 /// a real problem the user needs to see, not paper over.
 pub fn is_missing_database_error(e: &sqlx::Error) -> bool {
     e.as_database_error().and_then(|db_err| db_err.code()).as_deref() == Some("3D000")
-}
-
-/// Connects to the same server's `postgres` maintenance database and
-/// issues `CREATE DATABASE` for whatever database `database_url`
-/// names — the one piece of setup a plain `cargo run`/`pgapp create`
-/// can't do for itself otherwise, since a brand new Postgres install
-/// only ever has `postgres`/template databases to begin with.
-pub async fn create_database(database_url: &str) -> Result<()> {
-    let target_opts: sqlx::postgres::PgConnectOptions =
-        database_url.parse().with_context(|| format!("'{database_url}' isn't a valid Postgres URL"))?;
-    let db_name = target_opts
-        .get_database()
-        .ok_or_else(|| anyhow::anyhow!("'{database_url}' doesn't name a database to create"))?
-        .to_string();
-    let maintenance_opts = target_opts.database("postgres");
-
-    println!("Database '{db_name}' doesn't exist yet — creating it...");
-    let pool = sqlx::postgres::PgPoolOptions::new()
-        .max_connections(1)
-        .connect_with(maintenance_opts)
-        .await
-        .context("failed to connect to the 'postgres' maintenance database to create it")?;
-    sqlx::query(&format!("create database \"{}\"", db_name.replace('"', "\"\"")))
-        .execute(&pool)
-        .await
-        .with_context(|| format!("failed to create database '{db_name}'"))?;
-    Ok(())
 }
 
 pub fn prompt(label: &str, default: &str) -> Result<String> {

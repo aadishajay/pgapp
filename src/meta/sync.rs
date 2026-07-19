@@ -45,10 +45,10 @@ const DEFAULT_RUNTIME_JS: &str = include_str!("../runtime.js");
 /// `item ... as <kind>` and `action_registry` every `action ... calls
 /// <name>` against the compiled-in modules, so a typo fails at sync
 /// time with a clear message instead of silently rendering nothing.
-/// `data_schema` is where this app's entity tables live — `pgapp_data`
-/// for the classic flow, or a workspace's own schema (see
-/// `src/control.rs`); it's trusted to already be a validated identifier
-/// (see `instance::valid_identifier`), never end-user input.
+/// `data_schema` is where this app's entity tables live — its
+/// workspace's own schema (see `src/control.rs`); it's trusted to
+/// already be a validated identifier (see `instance::valid_identifier`),
+/// never end-user input.
 pub async fn sync_app(
     pool: &PgPool,
     app: &AppDef,
@@ -59,9 +59,9 @@ pub async fn sync_app(
     // Defense in depth: data_schema gets spliced directly into DDL
     // below (Postgres has no bind-parameter form for identifiers), and
     // unlike entity/page/field names it isn't lexer-restricted — it
-    // comes from a workspace's schema_name or the "pgapp_data" literal.
-    // Both are validated where they're chosen (src/instance.rs,
-    // src/control.rs), but this is the one place every path converges.
+    // comes from a workspace's schema_name. That's validated where it's
+    // chosen (src/instance.rs, src/control.rs), but this is the one
+    // place every path converges.
     if !crate::instance::valid_identifier(data_schema) {
         anyhow::bail!("'{data_schema}' is not a valid schema identifier");
     }

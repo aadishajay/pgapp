@@ -35,8 +35,8 @@ use sqlx::PgPool;
 pub const ADMIN_ROLE: &str = "pgapp_admin";
 
 /// Pool size for connections that serve real HTTP traffic — the
-/// classic-mode server pool, and the `pgapp_admin` connection
-/// `pgapp run` reuses to serve an instance. Default is in the same
+/// `pgapp_admin` connection `pgapp run` reuses to serve an instance.
+/// Default is in the same
 /// ballpark as a typical APEX/ORDS pool for one moderately busy
 /// workspace: comfortably above a handful of toy connections, without
 /// assuming "bigger is always faster" (a Postgres backend is a full

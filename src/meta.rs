@@ -36,9 +36,9 @@ pub async fn ensure_schema(pool: &PgPool) -> Result<()> {
 /// connection's previous borrower set it to — the pool recycles
 /// connections across apps/workspaces, so anything less would let one
 /// app's queries silently see another's schema depending on pool
-/// scheduling. An already schema-qualified reference (`pgapp_data.foo`,
-/// still valid for backward compatibility) is unaffected either way,
-/// since `search_path` only ever affects *unqualified* names.
+/// scheduling. An already schema-qualified reference (e.g. `erp.foo`)
+/// is unaffected either way, since `search_path` only ever affects
+/// *unqualified* names.
 pub async fn scoped_conn(pool: &PgPool, data_schema: &str) -> Result<PoolConnection<Postgres>> {
     let mut conn = pool.acquire().await.context("failed to acquire a database connection")?;
     sqlx::query(&format!("set search_path to {data_schema}, public"))

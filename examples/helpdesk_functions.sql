@@ -3,24 +3,30 @@
 -- server-side logic that already lives beside the data, instead of
 -- round-tripping it through Rust.
 --
--- Run this BEFORE the app's first `cargo run` / `/admin/reload`, not
--- after (unlike helpdesk_seed.sql, which needs pgapp_data.* to already
--- exist). A `call_function` action's named query is `select
+-- Run this BEFORE the app's first sync / `/admin/reload`, not after
+-- (unlike helpdesk_seed.sql, which needs the tables to already exist).
+-- A `call_function` action's named query is `select
 -- close_stale_tickets()`, and pgapp resolves that query's bind types
 -- by asking Postgres to describe it at sync time — so the function
 -- has to exist first, the same way any table a query joins against
--- has to exist first:
+-- has to exist first. The function references `helpdesk_tickets` bare
+-- (no schema prefix) since pgapp always calls it on a connection whose
+-- `search_path` is already pinned to the app's workspace schema (see
+-- `meta::scoped_conn`) — pass `-v schema=<your workspace's schema>` so
+-- this script's own `search_path` matches when you run it directly:
 --
---   psql "$DATABASE_URL" -f examples/helpdesk_functions.sql
---   cargo run -- examples/helpdesk.pgapp
---   psql "$DATABASE_URL" -f examples/helpdesk_seed.sql   # after, once pgapp_data exists
+--   psql "$DATABASE_URL" -v schema=<workspace_schema> -f examples/helpdesk_functions.sql
+--   pgapp run examples/helpdesk.pgapp --instance <dbname> --workspace <slug>
+--   psql "$DATABASE_URL" -v schema=<workspace_schema> -f examples/helpdesk_seed.sql   # after, once the tables exist
+
+set search_path to :"schema", public;
 
 create or replace function close_stale_tickets() returns text
 language plpgsql as $$
 declare
   n integer;
 begin
-  update pgapp_data.helpdesk_tickets
+  update helpdesk_tickets
      set status = 'Resolved'
    where status = 'Open'
      and created_at < now() - interval '10 days';

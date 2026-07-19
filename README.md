@@ -6,36 +6,43 @@ Postgres, written in Rust.
 ## Quickstart
 
 All you need is Postgres reachable somewhere (any role that can
-`CREATE DATABASE`) and Rust installed — pgapp creates its own database
-and a working starter app for you.
+`CREATE DATABASE`) and Rust installed. Every app pgapp serves lives in
+exactly one **instance** (a Postgres database) → **workspace** (a
+schema its tables live in) → **app** (a registered `.pgapp` file) —
+there's no lighter-weight mode than this, but each step is one command:
 
 ```bash
-cargo run -- create
+cargo run -- instance init          # once per Postgres database
+cargo run -- workspace create <dbname>   # once per schema
+cargo run -- app create <dbname> --workspace <slug>
 ```
 
-Answer the four prompts (app name, database URL — defaults to
-`postgres://postgres:postgres@localhost:5432/pgapp` and is **created
-automatically if it doesn't exist yet** — theme, single file or
-directory). It syncs the new app into Postgres immediately and prints
-the exact next command:
+`instance init` prompts for a superuser-capable connection string, the
+database name (auto-created if it doesn't exist yet), a Postgres
+password for the new `pgapp_admin` role, and a separate local CLI admin
+password (see "Instance mode" below for what each one guards).
+`workspace create` sets up the schema an app's tables will live in.
+`app create` scaffolds a starter app (name, theme, single file or
+directory) the same way `pgapp new` does, then registers it into the
+workspace you picked and prints the exact next command:
 
 ```bash
-cargo run -- <generated-file>.pgapp
+cargo run -- run <generated-file>.pgapp --instance <dbname> --workspace <slug>
 ```
 
 It prints the app's URL — `http://127.0.0.1:8080/<slug>` — and opening
-the bare `http://127.0.0.1:8080` redirects there too. No manual
-`createdb`, no separate migration step, nothing to hand-edit first.
+the bare `http://127.0.0.1:8080` redirects there too.
 
 For scripts/CI, skip the prompts entirely: `cargo run -- new <AppName>`
-(see "Scaffolding a new app" below). To try the richer bundled demo
-instead of a blank scaffold: `cargo run -- examples/helpdesk.pgapp`
-(needs `examples/helpdesk_functions.sql` run first — see its header
-comment).
+scaffolds a `.pgapp` file with no database interaction (see
+"Scaffolding a new app" below), then register it explicitly with `app
+create`/`run` above. To try the richer bundled demo instead of a blank
+scaffold, point `run` at `examples/helpdesk.pgapp` (needs
+`examples/helpdesk_functions.sql` run first — see its header comment).
 
-Running against the same database again with a *different* `.pgapp`
-path adds a second app alongside the first — see "Multi-app routing"
-below.
+Running `pgapp run` again with a *different* `.pgapp` path adds a
+second app alongside the first, in the same or a different workspace —
+see "Multi-app routing" below.
 
 ## Idea
 
@@ -102,13 +109,13 @@ app "Todo" {
 
   # App-scoped: visible from every page's LOVs/regions/charts.
   query assignees {
-    sql: "select distinct assignee as value from pgapp_data.todo_tasks where assignee is not null order by 1"
+    sql: "select distinct assignee as value from todo_tasks where assignee is not null order by 1"
   }
   query open {
-    sql: "select id, title, priority, assignee from pgapp_data.todo_tasks where done = false order by id"
+    sql: "select id, title, priority, assignee from todo_tasks where done = false order by id"
   }
   query by_priority {
-    sql: "select priority as label, count(*) as value from pgapp_data.todo_tasks group by priority order by 1"
+    sql: "select priority as label, count(*) as value from todo_tasks group by priority order by 1"
   }
 
   entity "tasks" {
@@ -143,14 +150,14 @@ app "Todo" {
 
     # Page-scoped: only this page's items/LOVs can see "recent".
     query recent {
-      sql: "select id, title, priority, done from pgapp_data.todo_tasks order by id desc limit 5"
+      sql: "select id, title, priority, done from todo_tasks order by id desc limit 5"
     }
     region "Recently added" from query recent
   }
 
   page "TaskDetail" {
     query siblings {
-      sql: "select id, title from pgapp_data.todo_tasks
+      sql: "select id, title from todo_tasks
             where priority = :priority and id != :id
             order by id"
     }
@@ -225,8 +232,9 @@ app by name (Terraform-shaped, no `include`, no import graph):
 - The same name declared in two files is a startup error naming both.
 
 `examples/helpdesk-modular/` is the helpdesk app split this way — run
-it with `cargo run -- examples/helpdesk-modular`; it syncs to the same
-metadata as the single-file version.
+it with `pgapp run examples/helpdesk-modular --instance <dbname>
+--workspace <slug>`; it syncs to the same metadata as the single-file
+version.
 
 `examples/nexus-erp/` pushes the same mechanism to scale: a 200-page,
 60-entity app modeling a medium company's core systems (CRM, sales,
@@ -234,9 +242,11 @@ inventory, purchasing, HR, finance, projects, support, marketing,
 operations, facilities, compliance) across 15 files under one
 `app.pgapp` — every entity gets a list+form, detail, and quick-edit
 page, plus 12 module dashboards, cross-module reports, and admin
-pages. Seed it with `examples/nexus-erp/seed.sql` after the first
-sync (run `cargo run -- examples/nexus-erp`, or the installed `pgapp`
-binary, first so the tables exist). It's also the fixture used to
+pages. Seed it with `examples/nexus-erp/seed.sql` after the first sync
+(run `pgapp run examples/nexus-erp --instance <dbname> --workspace
+<slug>` first so the tables exist, then `psql "$DATABASE_URL" -v
+schema=<workspace_schema> -f examples/nexus-erp/seed.sql`). It's also
+the fixture used to
 confirm the server holds up under load: 30 parallel threads sweeping
 all 200 pages sustained ~900 req/s with zero errors (p50 ~27ms, p99
 ~94ms on a single shared connection pool), and 30 threads doing
@@ -589,13 +599,11 @@ references the entity's real physical table (`<app>_<entity>`, printed
 at startup) and is decoded generically via `to_jsonb`, so there's no
 compile-time column-type checking beyond what Postgres itself enforces.
 
-**Write the table name bare (`<app>_<entity>`), never schema-qualified
-(`pgapp_data.<app>_<entity>`).** Every connection a named query runs on
-— at sync time (type inference) and at request time alike — has its
-`search_path` pinned to this app's own `data_schema` first (`pgapp_data`
-for the classic flow, a workspace's own schema otherwise; see
-[Instance mode](#instance-mode)), specifically so the same query text
-works unchanged in either. A schema-qualified reference still works
+**Write the table name bare (`<app>_<entity>`), never schema-qualified.**
+Every connection a named query runs on — at sync time (type inference)
+and at request time alike — has its `search_path` pinned to this app's
+own `data_schema` first (its workspace's own schema; see [Instance
+mode](#instance-mode)). A schema-qualified reference still works
 (qualified names ignore `search_path` entirely) but stops working the
 moment the app is re-registered into a different workspace — its
 tables move, but a hardcoded schema prefix doesn't.
@@ -689,7 +697,7 @@ behavior.
         │  meta::sync_app (validates entity/page/query refs by name,
         │                  item kinds against the item_types registry)
         ▼
- pgapp_meta.* tables  ──creates──▶  pgapp_data.<table> (the real data table)
+ pgapp_meta.* tables  ──creates──▶  <workspace_schema>.<table> (the real data table)
         │  meta::load_app (reloads from the DB, not from AppDef)
         ▼
     RuntimeApp { pages: Vec<RuntimePage { components: Vec<RuntimeComponent> }> }
@@ -813,7 +821,7 @@ A `Form` switches into edit mode via `?edit_<n>=<id>` (`<n>` = its
 One process, one shared `PgPool`, any number of apps — closer to how
 Oracle APEX actually pools connections (one pool per workspace, shared
 by every application in it) than to a separate server per app. Every
-app keeps its own tables (`pgapp_data.<app>_<entity>`), sessions, and
+app keeps its own tables (in its own workspace's schema), sessions, and
 users; only the connection pool and Rust process are shared.
 
 The pool defaults to **20 connections** — comfortably above a
@@ -821,7 +829,7 @@ handful of toy connections without assuming "bigger is always faster"
 (a Postgres backend is a full process, not a lightweight thread, so a
 few dozen is already generous for one server); override with
 `PGAPP_MAX_CONNECTIONS`. Same default and override for the
-`pgapp_admin` connection Instance mode's `pgapp run` serves through.
+`pgapp_admin` connection `pgapp run` serves through.
 
 A `tower::limit::ConcurrencyLimitLayer` wraps the whole router, capped
 at the same number as the pool: since almost every route needs a
@@ -840,54 +848,63 @@ TLS termination is the natural place for connection-level limits too).
 **What's registered, not what's on the command line, decides what's
 served.** `pgapp_control.apps` (a schema of its own — pgapp managing
 itself, distinct from `pgapp_meta`'s per-app metadata) is the durable
-list of `(slug, markup_path, enabled)` rows. `cargo run -- <path>`
-registers (or re-points) one slug and then serves *every enabled row*,
-not just that one — so pointing the server at a new app one run adds
-it alongside whatever was already registered, without needing to name
-every app again each time:
+list of `(slug, markup_path, workspace_id, data_schema, enabled)` rows.
+`pgapp run <path> --instance <dbname> --workspace <slug>` registers (or
+re-points) one slug into that workspace and then serves *every enabled
+row across every workspace in the instance*, not just that one — so
+pointing the server at a new app one run adds it alongside whatever was
+already registered, without needing to name every app again each time:
 
 ```bash
-cargo run -- helpdesk.pgapp   # registers + serves "helpdesk"
-cargo run -- inventory.pgapp  # registers "inventory" too; both now serve
-cargo run -- apps             # slug  enabled/disabled  markup_path, one per line
-cargo run -- remove inventory # disables it — helpdesk keeps serving
+pgapp run helpdesk.pgapp --instance mydb --workspace erp   # registers + serves "helpdesk"
+pgapp run inventory.pgapp --instance mydb --workspace erp  # registers "inventory" too; both now serve
+pgapp app list mydb   # slug  enabled/disabled  name  workspace=...  schema=...  markup_path, one per line
+pgapp app destroy mydb inventory --soft   # disables it — helpdesk keeps serving
 ```
 
-A directory can also declare a whole workspace up front: if it
-contains only subdirectories (no loose `.pgapp` files of its own), each
-subdirectory is loaded as an independent app, slugged from its own
-declared name — `cargo run -- workspace/` where `workspace/helpdesk/`
-and `workspace/inventory/` each look like a normal single-app directory
-(see "Scaffolding a new app"). A directory with any loose `.pgapp` file
-directly inside it is still just one app, exactly as before — this
-only kicks in for a directory of nothing but subdirectories.
+A single `pgapp run` invocation can also register several apps at once:
+if the given path is a directory containing only subdirectories (no
+loose `.pgapp` files of its own), each subdirectory is loaded as an
+independent app, slugged from its own declared name — `pgapp run
+workspace-dir/ --instance mydb --workspace erp` where
+`workspace-dir/helpdesk/` and `workspace-dir/inventory/` each look like
+a normal single-app directory (see "Scaffolding a new app"), and both
+land in the same `erp` Postgres workspace/schema. A directory with any
+loose `.pgapp` file directly inside it is still just one app, exactly
+as before — this only kicks in for a directory of nothing but
+subdirectories. (Note this is a different sense of "workspace" than the
+Postgres-schema one above — it just means "a directory that declares
+several apps at once"; which apps land in which *schema* is still
+whatever `--workspace <slug>` says.)
 
 Sessions are app-scoped even though the cookie name is shared: the
 `Set-Cookie` carries `Path=/<slug>`, so a browser never sends one app's
 token to another's routes, and `pgapp_meta.sessions`/`.users` are
 looked up by `app_id` regardless.
 
-Note: "workspace" above just means "a directory that declares several
-apps at once" — every app still shares the single global `pgapp_data`
-schema. For apps whose *data* actually needs to live in separate
-Postgres schemas (different teams, different access grants), see
-"Instance mode" below, which uses the same word for something stronger.
-
 ## Scaffolding a new app
 
 `pgapp new`/`pgapp create` generates a minimal, runnable starter app —
 one entity, one page with the classic Report+Form CRUD pattern, a nav
-link to it:
+link to it. Both modes are pure file scaffolders: neither touches a
+database, so the generated `.pgapp` file still needs registering into a
+workspace (`pgapp app create`, or `pgapp run --instance --workspace` —
+see "Instance mode" below) before it's actually served:
 
 ```bash
-# Non-interactive, DB-free — for scripts/CI:
+# Non-interactive — for scripts/CI:
 cargo run -- new "My Project"                    # -> my_project.pgapp
 cargo run -- new Inventory inventory.pgapp        # explicit path
 cargo run -- new Inventory --dir --theme vivid    # a directory scaffold instead
 
-# Interactive (see "Quickstart" above):
+# Interactive (prompts for name/theme/single-file-or-directory):
 cargo run -- create
 ```
+
+`pgapp app create <dbname> [--workspace <slug>]` runs this same
+interactive scaffold and registers the result into a workspace in one
+step — the more direct path for anything beyond scripts/CI (see
+"Instance mode").
 
 `cargo install --path .` builds and installs **both** binaries this
 crate defines — `pgapp` itself (so every `cargo run -- <args>` example
@@ -907,11 +924,11 @@ See `pgapp new --help` for every flag.
 
 ## Instance mode
 
-A durable, database-backed deployment model on top of everything
-above — for when apps genuinely need separate Postgres schemas (a
-team's own credentials, different access grants), not just separate
-`pgapp_control` rows. Entirely opt-in: `cargo run -- <path>` and
-friends are unaffected and keep working exactly as documented above.
+The only deployment model: a durable, database-backed instance with a
+dedicated `pgapp_admin` Postgres role, and every app registered into
+exactly one workspace's own schema (a team's own credentials, different
+access grants — not just a separate `pgapp_control` row). There's no
+lighter-weight, workspace-less way to run pgapp.
 
 The commands below assume `pgapp` is installed (`cargo install --path
 .` — see "Scaffolding a new app"); swap in `cargo run --` if you'd
@@ -925,9 +942,9 @@ pgapp instance init
 ```
 
 Prompts for a superuser-capable connection string, the database name
-(auto-created if missing, same as the Quickstart flow), a password to
-set for the new `pgapp_admin` role, and a separate local CLI admin
-password. Two different secrets, two different fates:
+(auto-created if missing), a password to set for the new `pgapp_admin`
+role, and a separate local CLI admin password. Two different secrets,
+two different fates:
 
 - `pgapp_admin`'s Postgres password is **never written to disk** — a
   one-way hash can't be used to reconnect, so every later command reads
@@ -950,11 +967,10 @@ A new schema gets its own owning login role (password prompted,
 just asks whether to grant `pgapp_admin` USAGE/CREATE into it (using a
 connection that can actually perform that grant — `pgapp_admin` has no
 privileges of its own on a schema it didn't create). An app registered
-into a workspace gets its entity tables there instead of the classic
-flow's global `pgapp_data` — transparently to its own markup: named
-queries keep referencing their tables by bare name (see [Named
-queries](#named-queries)), never the schema, so the same app runs
-unmodified in either mode.
+into a workspace gets its entity tables there — transparently to its
+own markup: named queries keep referencing their tables by bare name
+(see [Named queries](#named-queries)), never the schema, so the same
+app runs unmodified regardless of which workspace it's registered into.
 
 **App** = scaffolded and registered into a chosen workspace:
 
@@ -965,8 +981,8 @@ pgapp app create <dbname> [--workspace <slug>]
 Same prompts as `pgapp new`'s interactive flow, plus a workspace
 picker (lists every registered workspace and lets you choose) when
 `--workspace` isn't given. Then serve it — and every other enabled app
-across the whole instance, classic and workspace-scoped alike, same
-"the registry decides what's served" rule as multi-app routing:
+across the whole instance, same "the registry decides what's served"
+rule as multi-app routing:
 
 ```bash
 pgapp run <file>.pgapp --instance <dbname> [--workspace <slug>]
@@ -976,9 +992,9 @@ pgapp run <file>.pgapp --instance <dbname> [--workspace <slug>]
 
 - `pgapp instance destroy <dbname>` — always a hard delete: drops
   every workspace schema/role pgapp itself created, `pgapp_meta`/
-  `pgapp_data`/`pgapp_control`, the `pgapp_admin` role, and the local
-  instance file. Asks for a superuser connection fresh (never stored)
-  and requires typing the database name to confirm.
+  `pgapp_control`, the `pgapp_admin` role, and the local instance file.
+  Asks for a superuser connection fresh (never stored) and requires
+  typing the database name to confirm.
 - `pgapp workspace destroy <dbname> <slug> [--hard|--soft]` — soft
   just disables the registry row (schema/data untouched, reversible);
   hard drops the schema and, if pgapp created it, its owning role too
@@ -988,8 +1004,8 @@ pgapp run <file>.pgapp --instance <dbname> [--workspace <slug>]
   hard drops its entity tables and `pgapp_meta` rows (using
   `pgapp_admin`'s own connection — it already owns whatever it created).
 
-`pgapp workspace list <dbname>` and `pgapp apps` show what's currently
-registered.
+`pgapp workspace list <dbname>` and `pgapp app list <dbname>` show
+what's currently registered.
 
 ## Secrets
 
@@ -1075,3 +1091,17 @@ required at all otherwise (`secret list`/`rm`, or an app with no
 - A `Report`'s row actions only wire to a `Form` on the *same page*
 - CSS-icon packs whose stylesheet is a remote CDN URL need outbound
   network access to actually render glyphs
+- Re-registering an already-registered slug into a *different*
+  workspace re-points it (same "the registry decides" behavior as
+  everywhere else) but doesn't migrate its existing data — the old
+  workspace's physical tables are silently orphaned (not dropped, not
+  moved), and the app starts over with fresh empty tables in the new
+  workspace. Live-verified as part of scrapping classic mode: no
+  automatic detection or warning yet.
+- `pgapp_meta.apps.name` (the declared `app "Name" { }`) is unique
+  **instance-wide**, not per-workspace — two unrelated apps that happen
+  to declare the identical name collide even in different workspaces
+  (the second sync silently repoints the first's metadata row rather
+  than erroring). Give apps distinct names; `pgapp_control.apps.slug`
+  (derived from the name) is what routing actually keys off of, and
+  collides the same way.
