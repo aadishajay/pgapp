@@ -1,0 +1,259 @@
+# VenPay — a pgapp port of a real Oracle APEX application export
+# (apexlang/.apx format; see README's "Migrating from Oracle APEX"
+# section for the concept-by-concept mapping used to do this).
+#
+# The original tracks trips, the vendors who bill against them, the
+# individual line items on each bill, and the payments made to settle
+# them — six APEX pages (Trips, Vendor, Vendor Bills, Bill Details,
+# Payments, Trip Types) plus a handful of admin/access-control pages
+# this port deliberately skips (no pgapp equivalent yet — see the
+# README section above for exactly what that gap is).
+#
+# Deliberate simplifications made porting by hand, not automatically:
+# - The original denormalizes trip/vendor display fields (TRIP_CODE,
+#   TRIP_NAME, VENDOR contact info, etc.) onto Vendor Bills and
+#   Payments for report-speed reasons specific to Oracle. Here, a bill
+#   references its trip/vendor by id and a named query joins back to
+#   the parent row instead — one source of truth, no copies to keep in
+#   sync. Same for Payments referencing a bill by its own key rather
+#   than repeating the vendor/trip on every payment row.
+# - Money fields are `integer` (whole units), not `varchar2` — the
+#   original stored amounts as text; there's no reason to port that
+#   over here.
+# - Date fields are plain `text` (no native date-picker item type in
+#   this build yet) rather than Oracle's `date`/`datePicker`.
+
+app "VenPay" {
+  theme: shadcn
+
+  header {
+    text "VenPay — vendor payment tracking, ported from an Oracle APEX export"
+  }
+
+  footer {
+    text "Built with pgapp. See README's 'Migrating from Oracle APEX' section for how this was ported."
+    link "About" -> page About
+  }
+
+  nav {
+    item "Trips" -> page Trips
+    item "Vendors" -> page Vendors
+    item "Vendor Bills" -> page VendorBills
+    item "Payments" -> page Payments
+    item "More" {
+      item "Trip Types" -> page TripTypes
+      item "About" -> page About
+    }
+  }
+
+  # ---- App-scoped named queries (LOVs + cross-entity lookups) ----
+
+  query trip_types_lov {
+    sql: "select trip_type as value from venpay_trip_types order by 1"
+  }
+
+  query trip_ids_lov {
+    sql: "select trip_id as value from venpay_trips order by 1"
+  }
+
+  query vendor_ids_lov {
+    sql: "select vendor_id as value from venpay_vendors order by 1"
+  }
+
+  query bill_keys_lov {
+    sql: "select bill_key as value from venpay_vendor_bills order by 1"
+  }
+
+  # Vendor Bills, joined back to their trip/vendor for display — the
+  # normalized alternative to the original's denormalized TRIP_CODE/
+  # TRIP_NAME/VENDOR columns (see the module doc above).
+  query vendor_bills_view {
+    sql: "select b.id, b.bill_key, b.bill_amount, b.bill_comment,
+                 v.vendor_name, t.trip_name
+            from venpay_vendor_bills b
+            left join venpay_vendors v on v.vendor_id = b.vendor_id
+            left join venpay_trips t on t.trip_id = b.trip_id
+           order by b.id desc"
+  }
+
+  # A bill's own line items — the original's Bill Details interactive
+  # grid, keyed by :bill_key forwarded from the Vendor Bills report's
+  # link.
+  query bill_line_items {
+    sql: "select seq_no, item, rate, qty, line_total, comments
+            from venpay_bill_details
+           where bill_key = :bill_key
+           order by seq_no"
+  }
+
+  # Every payment made against one bill — same :bill_key forwarding.
+  query bill_payments {
+    sql: "select payment_id, amount, payment_date, payment_status, payment_reference_number
+            from venpay_payments
+           where bill_key = :bill_key
+           order by id desc"
+  }
+
+  query payments_by_status {
+    sql: "select payment_status as label, count(*) as value
+            from venpay_payments
+           group by payment_status
+           order by 1"
+  }
+
+  entity "trip_types" {
+    field id: id
+    field trip_type: text required
+  }
+
+  entity "vendors" {
+    field id: id
+    field vendor_id: text required
+    field vendor_name: text required
+    field default_expense_category: text
+  }
+
+  entity "trips" {
+    field id: id
+    field trip_id: text required
+    field trip_name: text required
+    field trip_type: text
+    field trip_start_date: text
+    field trip_end_date: text
+  }
+
+  entity "vendor_bills" {
+    field id: id
+    field bill_key: text required
+    field vendor_id: text
+    field trip_id: text
+    field bill_amount: integer
+    field bill_comment: text
+  }
+
+  # Read-only, joined-for-display counterpart of vendor_bills — a
+  # Report's `columns:` always validates against its bound entity's own
+  # fields, even when `source: query` supplies the rows, so a joined
+  # display needs its own query-backed entity rather than reusing
+  # vendor_bills directly (see meta::sync::build_component_config). This
+  # also means the Vendor Bills page's Report and Form target two
+  # different entities, so they don't auto-pair into an edit popup (see
+  # app_builder.pgapp's own new_app_requests_view for the same pattern)
+  # — an accepted trade-off here, not the point of the page.
+  entity "vendor_bills_view" from query vendor_bills_view {
+    field id: integer
+    field bill_key: text
+    field bill_amount: integer
+    field bill_comment: text
+    field vendor_name: text
+    field trip_name: text
+  }
+
+  entity "bill_details" {
+    field id: id
+    field bill_key: text required
+    field seq_no: integer default 1
+    field item: text required
+    field rate: integer default 0
+    field qty: integer default 1
+    field line_total: integer default 0
+    field comments: text
+  }
+
+  entity "payments" {
+    field id: id
+    field payment_id: text required
+    field bill_key: text
+    field amount: integer default 0
+    field expense_category: text
+    field payment_date: text
+    field payment_reference_number: text
+    field payment_status: text default Pending
+  }
+
+  page "Trips" {
+    text "Every trip that can accrue vendor bills. Trip Type is a popup sourced from Trip Types below."
+    report "Trips" of trips {
+      columns: trip_id, trip_name, trip_type, trip_start_date, trip_end_date
+      page_size: 10
+    }
+    form "Add / edit trip" of trips {
+      fields: trip_id, trip_name, trip_type, trip_start_date, trip_end_date
+      item trip_type as popup from query trip_types_lov
+    }
+  }
+
+  page "TripTypes" {
+    text "Reference data — the Trip Type popup on the Trips page reads from here."
+    report "Trip Types" of trip_types {
+      columns: trip_type
+      page_size: 10
+    }
+    form "Add / edit trip type" of trip_types {
+      fields: trip_type
+    }
+  }
+
+  page "Vendors" {
+    text "Vendors who submit bills against trips."
+    report "Vendors" of vendors {
+      columns: vendor_id, vendor_name, default_expense_category
+      page_size: 10
+    }
+    form "Add / edit vendor" of vendors {
+      fields: vendor_id, vendor_name, default_expense_category
+      item default_expense_category as readonly
+    }
+  }
+
+  page "VendorBills" {
+    text "One row per vendor bill. Click a bill key to see its line items and payments."
+    report "Vendor Bills" of vendor_bills_view {
+      columns: bill_key, vendor_name, trip_name, bill_amount, bill_comment
+      link: bill_key -> page BillDetails (bill_key: bill_key)
+      page_size: 10
+    }
+    form "Add / edit bill" of vendor_bills {
+      fields: bill_key, vendor_id, trip_id, bill_amount, bill_comment
+      item vendor_id as popup from query vendor_ids_lov
+      item trip_id as popup from query trip_ids_lov
+    }
+  }
+
+  page "BillDetails" {
+    text "Editing:" attrs (id: "pgapp-bill-key-slot")
+    region "Line items" from query bill_line_items {
+      columns: seq_no, item, rate, qty, line_total, comments
+    }
+    region "Payments against this bill" from query bill_payments {
+      columns: payment_id, amount, payment_date, payment_status, payment_reference_number
+    }
+    button "Record a payment" -> page Payments (bill_key: bill_key)
+    link "Back to Vendor Bills" -> page VendorBills
+  }
+
+  page "Payments" {
+    text "Payments recorded against a bill. Status defaults to Pending until reconciled."
+    report "Payments" of payments {
+      columns: payment_id, bill_key, amount, payment_date, payment_status, payment_reference_number
+      page_size: 10
+    }
+    form "Record payment" of payments {
+      fields: payment_id, bill_key, amount, expense_category, payment_date, payment_reference_number, payment_status
+      item bill_key as popup from query bill_keys_lov
+      item payment_status as radio ("Pending", "Paid", "Rejected")
+    }
+    button "New Bill" -> page VendorBills
+  }
+
+  page "About" {
+    text "VenPay is a vendor-payment tracker, ported by hand from a real Oracle APEX application export into pgapp's markup — see README's 'Migrating from Oracle APEX' section for the concept map used."
+    chart "Payments by status" from query payments_by_status {
+      type: bar
+      x: label
+      y: value
+    }
+    action "Log a snapshot" calls log_values (message: "VenPay About page viewed")
+    link "Back to Trips" -> page Trips
+  }
+}

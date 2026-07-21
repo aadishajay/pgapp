@@ -1378,6 +1378,42 @@ app "Demo" {
     }
 
     #[test]
+    fn parses_venpay_example() {
+        let src = include_str!("../examples/venpay.pgapp");
+        let app = parse_app(src).unwrap();
+        assert_eq!(app.name, "VenPay");
+        assert_eq!(app.pages.len(), 7);
+        assert_eq!(app.entities.len(), 7); // 6 real tables + the query-backed join view
+
+        let view = app.entities.iter().find(|e| e.name == "vendor_bills_view").unwrap();
+        assert_eq!(view.source_query.as_deref(), Some("vendor_bills_view"));
+
+        let vendor_bills_page = app.pages.iter().find(|p| p.name == "VendorBills").unwrap();
+        let report_entity = vendor_bills_page
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Report { entity, link_column, .. } => Some((entity, link_column)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(report_entity.0, "vendor_bills_view");
+        assert_eq!(report_entity.1.as_ref().unwrap().target_page, "BillDetails");
+
+        let bill_details_page = app.pages.iter().find(|p| p.name == "BillDetails").unwrap();
+        let button = bill_details_page
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Button { label, behavior, .. } => Some((label, behavior)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(button.0, "Record a payment");
+        assert!(matches!(button.1, ButtonBehavior::Redirect { ref target_page, .. } if target_page == "Payments"));
+    }
+
+    #[test]
     fn parses_app_builder_example() {
         let src = include_str!("../examples/app_builder.pgapp");
         let app = parse_app(src).unwrap();

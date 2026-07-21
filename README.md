@@ -76,6 +76,14 @@ Running `pgapp run` again with a *different* `.pgapp` path adds a
 second app alongside the first, in the same or a different workspace —
 see "Multi-app routing" below.
 
+`examples/venpay.pgapp` is a third demo: a vendor-payment tracker hand-
+ported from a real Oracle APEX application export, showcasing the
+migration approach in "Migrating from Oracle APEX" below (a joined,
+read-only view entity for a report that needs columns beyond its own,
+and the `button` component's redirect-with-forwarded-params behavior).
+No functions/seed script needed — `pgapp run examples/venpay.pgapp
+--workspace <slug>` and add data through its own forms.
+
 ## Idea
 
 - **In-database metadata**: apps, entities, fields, pages, and
