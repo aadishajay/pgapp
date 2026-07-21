@@ -1088,6 +1088,7 @@ pub fn report_html(
     extras: &ReportExtras,
     formats: &HashMap<String, FormatMask>,
     display: &str,
+    sort: Option<(&str, bool)>,
     html: &HtmlAttrs,
 ) -> String {
     let mut body = format!(
@@ -1165,11 +1166,20 @@ pub fn report_html(
         }
         body.push_str("</span>");
     }
+    let sort_hidden = match sort {
+        Some((c, desc)) => format!(
+            r#"<input type="hidden" name="r{idx}_sort" value="{c}:{d}">"#,
+            c = escape(c),
+            d = if desc { "desc" } else { "asc" },
+        ),
+        None => String::new(),
+    };
     body.push_str(&format!(
         r#"<form class="pgapp-view-save" method="post" action="/{app}/{page}/c/{idx}/views">
 <input type="hidden" name="r{idx}_q" value="{q}">
 <input type="hidden" name="r{idx}_col" value="{col}">
 <input type="hidden" name="r{idx}_val" value="{val}">
+{sort_hidden}
 <input class="pgapp-input" type="text" name="name" placeholder="Save view as&hellip;">
 <label class="pgapp-view-public"><input type="checkbox" name="is_public"> public</label>
 <button class="pgapp-btn pgapp-btn-secondary" type="submit">Save</button>
@@ -1227,9 +1237,40 @@ pub fn report_html(
             body.push_str("</ul>");
         }
         _ => {
+            // Column filter/search state, re-serialized so a
+            // column-header sort click lands back inside the same
+            // filtered result set — the header-link counterpart of the
+            // pagination links' `filter_qs` in `server.rs`.
+            let mut base_qs = String::new();
+            if !extras.q.is_empty() {
+                base_qs.push_str(&format!("&r{idx}_q={}", url_encode(&extras.q)));
+            }
+            if !extras.fcol.is_empty() {
+                base_qs.push_str(&format!("&r{idx}_col={}&r{idx}_val={}", url_encode(&extras.fcol), url_encode(&extras.fval)));
+            }
+
             body.push_str(r#"<div class="pgapp-table-wrap"><table class="pgapp-table"><thead><tr>"#);
             for col in columns {
-                body.push_str(&format!("<th>{}</th>", escape(col)));
+                // Interactive Report's clickable column-header sort:
+                // toggles asc/desc on the currently-sorted column,
+                // defaults a newly-clicked column to ascending.
+                let (next_dir, arrow) = match sort {
+                    Some((c, desc)) if c == col => {
+                        if desc {
+                            ("asc", " \u{25bc}")
+                        } else {
+                            ("desc", " \u{25b2}")
+                        }
+                    }
+                    _ => ("asc", ""),
+                };
+                body.push_str(&format!(
+                    r#"<th><a class="pgapp-link pgapp-sort-link" href="/{app}/{page}?r{idx}_sort={col_enc}:{next_dir}{base_qs}#pgapp-c{idx}">{col}{arrow}</a></th>"#,
+                    app = escape(app),
+                    page = escape(page_name),
+                    col_enc = url_encode(col),
+                    col = escape(col),
+                ));
             }
             if sibling_form_idx.is_some() {
                 body.push_str("<th></th>");

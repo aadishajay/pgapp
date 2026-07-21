@@ -323,7 +323,13 @@ fixed "page kind." Eleven kinds:
   report (entity binding, pagination, search/filter, the sibling-Form
   edit/delete wiring) stays identical, only the per-row markup changes.
   A sibling `Form` for the same entity on the same page gets automatic
-  Edit/Delete actions in every display mode.
+  Edit/Delete actions in every display mode. In `table` mode, every
+  column header is a clickable Interactive-Report-style sort link
+  (`?r<n>_sort=<col>:asc|desc`) — clicking toggles that column's
+  direction and shows a ▲/▼ indicator; sorting an entity-backed report
+  switches it from keyset to offset pagination for the duration (a
+  custom order breaks the keyset cursor's `id`-order assumption), and a
+  saved view remembers its sort along with its filters.
 - **`form "Title" of <entity> { ... }`** — create/edit form. `fields`
   lists writable columns; `item <field> [as <kind> [(...)]] [attrs
   (...)]` picks a widget and/or sets `id`/`class`/attributes on that

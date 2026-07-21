@@ -535,12 +535,69 @@ impl ReportFilters {
     }
 }
 
+/// A report's live column sort, from its `r<idx>_sort=<col>:<asc|desc>`
+/// URL parameter — Interactive Report's clickable column-header sort.
+/// Choosing any sort switches an entity-backed report from keyset to
+/// offset pagination (keyset assumes `id` order, which a custom sort
+/// breaks), the same pagination style query/collection-backed reports
+/// already use.
+#[derive(Debug, Clone)]
+struct SortSpec {
+    column: String,
+    desc: bool,
+}
+
+impl SortSpec {
+    /// `col` must be one of the report's own columns or computed
+    /// columns — same trust boundary as `ReportFilters`' `col`, since
+    /// it's spliced directly into SQL as an identifier.
+    fn from_query(
+        query: &HashMap<String, String>,
+        idx: usize,
+        columns: &[String],
+        computed: &[ComputedColumn],
+    ) -> Result<Option<Self>, AppError> {
+        let Some(raw) = query.get(&format!("r{idx}_sort")).map(|s| s.trim()).filter(|s| !s.is_empty()) else {
+            return Ok(None);
+        };
+        let (col, dir) = raw.split_once(':').unwrap_or((raw, "asc"));
+        if !columns.contains(&col.to_string()) && !computed.iter().any(|c| c.name == col) {
+            return Err((StatusCode::BAD_REQUEST, format!("cannot sort on '{col}': not a column of this report")));
+        }
+        let desc = match dir {
+            "asc" => false,
+            "desc" => true,
+            other => return Err((StatusCode::BAD_REQUEST, format!("invalid sort direction '{other}'"))),
+        };
+        Ok(Some(SortSpec { column: col.to_string(), desc }))
+    }
+
+    /// The SQL `ORDER BY` expression for this sort — a computed
+    /// column's own SQL expression, or a plain qualified field
+    /// reference otherwise (mirrors `ReportFilters::to_sql`'s `expr_for`).
+    fn order_expr(&self, prefix: &str, computed: &[ComputedColumn]) -> String {
+        match computed.iter().find(|c| c.name == self.column) {
+            Some(c) => format!("({})", c.sql),
+            None => format!("{prefix}{}", self.column),
+        }
+    }
+
+    fn dir_str(&self) -> &'static str {
+        if self.desc {
+            "desc"
+        } else {
+            "asc"
+        }
+    }
+}
+
 /// Reads one caller's page of a named collection — OFFSET-paginated
 /// like a query-backed report (a collection has no assumed sort key
 /// beyond its own insertion `seq`, and collections are small enough in
 /// practice that `COUNT(*)`-free keyset pagination isn't worth the
 /// complexity). The `app_id`/`caller_key`/`name` filter is baked in
 /// here, not written by the app author — see `EntityDef::source_collection`.
+#[allow(clippy::too_many_arguments)]
 async fn fetch_collection_page(
     pool: &PgPool,
     app_id: i32,
@@ -549,21 +606,33 @@ async fn fetch_collection_page(
     entity: &RuntimeEntity,
     page_size: i64,
     page_num: i64,
+    sort: Option<&SortSpec>,
 ) -> anyhow::Result<(Vec<BTreeMap<String, Option<String>>>, bool)> {
     let offset = (page_num - 1).max(0) * page_size;
-    let json_rows: Vec<(i32, serde_json::Value)> = sqlx::query_as(
+    // A collection has no schema, so a custom sort can only compare the
+    // JSONB payload as text (`data->>'col'`) — good enough for the
+    // common case (names, statuses) but not numeric-aware; `id` (really
+    // `seq`, the collection's own insertion order) is the one column
+    // that's a real integer column, so it sorts numerically as normal.
+    let order_by = match sort {
+        Some(s) if s.column == "id" => format!("seq {}", s.dir_str()),
+        Some(s) => format!("(data->>'{}') {}", s.column, s.dir_str()),
+        None => "seq asc".to_string(),
+    };
+    let sql = format!(
         "select seq, data from pgapp_meta.collections
           where app_id = $1 and caller_key = $2 and name = $3
-          order by seq
-          offset $4 limit $5",
-    )
-    .bind(app_id)
-    .bind(caller_key)
-    .bind(collection_name)
-    .bind(offset)
-    .bind(page_size + 1)
-    .fetch_all(pool)
-    .await?;
+          order by {order_by}
+          offset $4 limit $5"
+    );
+    let json_rows: Vec<(i32, serde_json::Value)> = sqlx::query_as(&sql)
+        .bind(app_id)
+        .bind(caller_key)
+        .bind(collection_name)
+        .bind(offset)
+        .bind(page_size + 1)
+        .fetch_all(pool)
+        .await?;
 
     let has_next = json_rows.len() as i64 > page_size;
     let rows = json_rows
@@ -668,6 +737,50 @@ async fn fetch_report_rows(
     };
 
     Ok(ReportPage { rows, has_prev, has_next })
+}
+
+/// Plain OFFSET pagination for an entity-backed `Report` when a
+/// column sort is active — `fetch_report_rows`'s keyset cursor assumes
+/// ascending `id` order, which a custom `ORDER BY` breaks, so a sort
+/// switches to the same offset-pagination style query/collection-backed
+/// reports already use (see `SortSpec`).
+#[allow(clippy::too_many_arguments)]
+async fn fetch_report_rows_sorted(
+    pool: &PgPool,
+    data_schema: &str,
+    entity: &RuntimeEntity,
+    computed: &[ComputedColumn],
+    filters: &ReportFilters,
+    filter_columns: &[String],
+    sort: &SortSpec,
+    page_size: i64,
+    page_num: i64,
+) -> anyhow::Result<(Vec<BTreeMap<String, Option<String>>>, bool)> {
+    let cols = select_columns(entity, computed);
+    let offset = (page_num - 1).max(0) * page_size;
+    let (conditions, binds) = filters.to_sql("t.", filter_columns, computed, 1);
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("where {}", conditions.join(" and "))
+    };
+    let order_expr = sort.order_expr("t.", computed);
+    let sql = format!(
+        "select {cols} from {data_schema}.{} t {where_clause} order by {order_expr} {} limit {} offset {offset}",
+        entity.table_name,
+        sort.dir_str(),
+        page_size + 1,
+    );
+    let mut query = sqlx::query(&sql);
+    for b in &binds {
+        query = query.bind(b.as_str());
+    }
+    let db_rows = query.fetch_all(pool).await?;
+    let mut rows: Vec<BTreeMap<String, Option<String>>> =
+        db_rows.iter().map(|r| row_from_sqlx(r, entity, computed)).collect::<anyhow::Result<_>>()?;
+    let has_next = rows.len() as i64 > page_size;
+    rows.truncate(page_size as usize);
+    Ok((rows, has_next))
 }
 
 /// Parses a `?cal<idx>=YYYY-MM` query param into `(year, month)`;
@@ -1092,8 +1205,10 @@ async fn render_component(
 
             let filters = ReportFilters::from_query(query, idx, columns)
                 .map_err(|(_, msg)| anyhow::anyhow!(msg))?;
-            // Filter params re-serialized for pagination links, so
-            // Prev/Next stay inside the filtered result set.
+            let sort = SortSpec::from_query(query, idx, columns, computed).map_err(|(_, msg)| anyhow::anyhow!(msg))?;
+            // Filter/sort params re-serialized for pagination and
+            // column-header links, so Prev/Next/re-sorting stay inside
+            // the same filtered (and, for sort, ordered) result set.
             let mut filter_qs = String::new();
             if let Some(q) = &filters.q {
                 filter_qs.push_str(&format!("&r{idx}_q={}", url_encode(q)));
@@ -1101,11 +1216,17 @@ async fn render_component(
             if let Some((col, val)) = &filters.col {
                 filter_qs.push_str(&format!("&r{idx}_col={}&r{idx}_val={}", url_encode(col), url_encode(val)));
             }
+            if let Some(s) = &sort {
+                filter_qs.push_str(&format!("&r{idx}_sort={}:{}", url_encode(&s.column), s.dir_str()));
+            }
 
             // A report is query-paginated when it declares `source:` or
             // its entity is query-backed (`entity ... from query`);
             // offset-paginated the same way when the entity is
-            // collection-backed instead; keyset-paginated otherwise.
+            // collection-backed instead, or when a column sort is active
+            // (keyset assumes `id` order, which a custom sort breaks —
+            // see `SortSpec`); keyset-paginated only in the plain,
+            // unsorted entity-backed case.
             let effective_query = source_query.as_deref().or(entity.source_query.as_deref());
 
             let (rows, prev_href, next_href) = if let Some(qname) = effective_query {
@@ -1120,16 +1241,53 @@ async fn render_component(
                 } else {
                     format!("where {}", conditions.join(" and "))
                 };
-                let (json_rows, has_next) =
-                    run_named_query_page(&state.pool, &data.app.data_schema, rq, &ctx, &where_clause, &binds, *page_size, page_num).await?;
+                let sort_arg = sort.as_ref().map(|s| (s.column.as_str(), s.desc));
+                let (json_rows, has_next) = run_named_query_page(
+                    &state.pool,
+                    &data.app.data_schema,
+                    rq,
+                    &ctx,
+                    &where_clause,
+                    &binds,
+                    *page_size,
+                    page_num,
+                    sort_arg,
+                )
+                .await?;
                 let rows: Vec<_> = json_rows.into_iter().map(query_engine::json_row_to_map).collect();
                 let prev_href = (page_num > 1).then(|| format!("/{app}/{page_name}?{p_page}={}{filter_qs}", page_num - 1));
                 let next_href = has_next.then(|| format!("/{app}/{page_name}?{p_page}={}{filter_qs}", page_num + 1));
                 (rows, prev_href, next_href)
             } else if let Some(coll_name) = entity.source_collection.as_deref() {
                 let page_num: i64 = query.get(&p_page).and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
-                let (rows, has_next) =
-                    fetch_collection_page(&state.pool, data.app.id, caller_key, coll_name, entity, *page_size, page_num).await?;
+                let (rows, has_next) = fetch_collection_page(
+                    &state.pool,
+                    data.app.id,
+                    caller_key,
+                    coll_name,
+                    entity,
+                    *page_size,
+                    page_num,
+                    sort.as_ref(),
+                )
+                .await?;
+                let prev_href = (page_num > 1).then(|| format!("/{app}/{page_name}?{p_page}={}{filter_qs}", page_num - 1));
+                let next_href = has_next.then(|| format!("/{app}/{page_name}?{p_page}={}{filter_qs}", page_num + 1));
+                (rows, prev_href, next_href)
+            } else if let Some(s) = &sort {
+                let page_num: i64 = query.get(&p_page).and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
+                let (rows, has_next) = fetch_report_rows_sorted(
+                    &state.pool,
+                    &data.app.data_schema,
+                    entity,
+                    computed,
+                    &filters,
+                    columns,
+                    s,
+                    *page_size,
+                    page_num,
+                )
+                .await?;
                 let prev_href = (page_num > 1).then(|| format!("/{app}/{page_name}?{p_page}={}{filter_qs}", page_num - 1));
                 let next_href = has_next.then(|| format!("/{app}/{page_name}?{p_page}={}{filter_qs}", page_num + 1));
                 (rows, prev_href, next_href)
@@ -1153,6 +1311,7 @@ async fn render_component(
             let mut extras = report_extras(app, state, data, page_name, idx, &filters, auth_ctx).await?;
             extras.warning = before_load_warning;
 
+            let sort_arg = sort.as_ref().map(|s| (s.column.as_str(), s.desc));
             Ok(render::report_html(
                 app,
                 page_name,
@@ -1168,6 +1327,7 @@ async fn render_component(
                 &extras,
                 formats,
                 display,
+                sort_arg,
                 html,
             ))
         }
@@ -1268,7 +1428,7 @@ async fn report_extras(
         .into_iter()
         .map(|(id, name, params, owner)| {
             let mut href = format!("/{app}/{page_name}?");
-            for (key, param) in [("q", "q"), ("col", "col"), ("val", "val")] {
+            for (key, param) in [("q", "q"), ("col", "col"), ("val", "val"), ("sort", "sort")] {
                 if let Some(v) = params.get(key).and_then(|v| v.as_str()) {
                     href.push_str(&format!("r{idx}_{param}={}&", url_encode(v)));
                 }
@@ -1559,6 +1719,9 @@ async fn save_view(
     if let (Some(col), Some(val)) = (get("col"), get("val")) {
         params.insert("col".into(), col.into());
         params.insert("val".into(), val.into());
+    }
+    if let Some(sort) = get("sort") {
+        params.insert("sort".into(), sort.into());
     }
 
     sqlx::query(
@@ -1855,7 +2018,7 @@ async fn api_list(
         // entity's fetch_rows. i64::MAX/2 avoids overflowing the
         // `page_size + 1` inside fetch_collection_page while still
         // being an effectively unbounded limit.
-        let (rows, _) = fetch_collection_page(&state.pool, data.app.id, &caller.0, coll_name, entity, i64::MAX / 2, 1)
+        let (rows, _) = fetch_collection_page(&state.pool, data.app.id, &caller.0, coll_name, entity, i64::MAX / 2, 1, None)
             .await
             .map_err(err_response)?;
         rows

@@ -66,10 +66,18 @@ pub async fn run_named_query_page(
     extra_binds: &[String],
     page_size: i64,
     page_num: i64,
+    sort: Option<(&str, bool)>,
 ) -> anyhow::Result<(Vec<serde_json::Value>, bool)> {
     let offset = (page_num - 1).max(0) * page_size;
+    // `sort`'s column comes pre-validated against the query's own
+    // result columns (see `server::SortSpec::from_query`), so it's safe
+    // to splice as an identifier the same way `where_clause` already is.
+    let order_by = match sort {
+        Some((col, desc)) => format!(r#"order by t."{col}" {}"#, if desc { "desc" } else { "asc" }),
+        None => String::new(),
+    };
     let wrapped = format!(
-        "select to_jsonb(t) as j from ({}) as t {} limit {} offset {}",
+        "select to_jsonb(t) as j from ({}) as t {} {order_by} limit {} offset {}",
         rq.sql,
         where_clause,
         page_size + 1,
