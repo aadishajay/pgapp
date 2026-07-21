@@ -1108,6 +1108,26 @@ pub fn report_html(
             page = escape(page_name),
         ));
     }
+    // Interactive Report's "Download CSV": current filters/sort travel
+    // along in the query string, so the export matches whatever's on
+    // screen (all matching rows, not just the current page).
+    let mut csv_qs = String::new();
+    if !extras.q.is_empty() {
+        csv_qs.push_str(&format!("r{idx}_q={}&", url_encode(&extras.q)));
+    }
+    if !extras.fcol.is_empty() {
+        csv_qs.push_str(&format!("r{idx}_col={}&r{idx}_val={}&", url_encode(&extras.fcol), url_encode(&extras.fval)));
+    }
+    if let Some((c, desc)) = sort {
+        csv_qs.push_str(&format!("r{idx}_sort={}:{}&", url_encode(c), if desc { "desc" } else { "asc" }));
+    }
+    csv_qs.pop();
+    body.push_str(&format!(
+        r#"<a class="pgapp-link pgapp-btn pgapp-btn-secondary" href="/{app}/{page}/c/{idx}/csv{sep}{csv_qs}">Download CSV</a>"#,
+        app = escape(app),
+        page = escape(page_name),
+        sep = if csv_qs.is_empty() { "" } else { "?" },
+    ));
     body.push_str("</div>");
 
     if let Some(warning) = &extras.warning {

@@ -265,6 +265,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/:workspace/:app/:page/c/:idx/call/:op_idx", post(call_dynamic_action))
         .route("/:workspace/:app/:page/c/:idx/views", post(save_view))
         .route("/:workspace/:app/:page/c/:idx/views/:vid/delete", post(delete_view))
+        .route("/:workspace/:app/:page/c/:idx/csv", get(report_csv))
         .layer(middleware::from_fn_with_state(state.clone(), auth::require_login))
         .with_state(state)
         .layer(ConcurrencyLimitLayer::new(concurrency_limit()))
@@ -1933,6 +1934,122 @@ async fn delete_view(
         .await
         .map_err(|e| err_response(e.into()))?;
     Ok(Redirect::to(&format!("/{app}/{page_name}#pgapp-c{idx}")).into_response())
+}
+
+/// Quotes a CSV field only when it needs it (contains a comma, quote,
+/// or newline) — RFC 4180's minimal-quoting rule, doubling any embedded
+/// quotes.
+fn csv_field(s: &str) -> String {
+    if s.contains(['"', ',', '\n', '\r']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
+/// Interactive Report's "Download CSV": streams every row matching the
+/// report's *current* filters and sort — not just the page on screen —
+/// as a CSV of its declared `columns` (formatted the same way the table
+/// displays them). Reuses each display mode's own paginated row-fetcher
+/// with a page size large enough to be effectively unlimited, the same
+/// "piggyback on existing plumbing" approach as aggregates and
+/// highlights, rather than a new unpaginated query path.
+async fn report_csv(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Extension(caller): Extension<auth::CallerKey>,
+    Path((workspace, app, page_name, idx)): Path<(String, String, String, usize)>,
+    Query(query): Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let app = format!("{workspace}/{app}");
+    let entry = state.app_or_404(&app)?;
+    let data = entry.data();
+    let page = page_or_404(&data.app, &page_name)?;
+    auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
+    let component = component_at(page, idx)?;
+    auth::authorize(&data, component_requires(component), &auth_ctx)?;
+    let RuntimeComponent::Report { title, entity, columns, source_query, computed, formats, .. } = component else {
+        return Err((StatusCode::BAD_REQUEST, format!("component #{idx} is not a report")));
+    };
+
+    let filters = ReportFilters::from_query(&query, idx, columns)?;
+    let sort = SortSpec::from_query(&query, idx, columns, computed)?;
+    let effective_query = source_query.as_deref().or(entity.source_query.as_deref());
+
+    const CSV_ROW_LIMIT: i64 = 1_000_000;
+
+    let rows: Vec<BTreeMap<String, Option<String>>> = if let Some(qname) = effective_query {
+        let rq = page
+            .resolve_query(&data.app, qname)
+            .ok_or_else(|| anyhow::anyhow!("report '{title}' sources from unknown query '{qname}'"))
+            .map_err(err_response)?;
+        let ctx = bind_context(&query, None);
+        let (conditions, binds) = filters.to_sql("t.", columns, &[], rq.bind_names.len() + 1);
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("where {}", conditions.join(" and "))
+        };
+        let sort_arg = sort.as_ref().map(|s| (s.column.as_str(), s.desc));
+        let (json_rows, _) = run_named_query_page(
+            &state.pool,
+            &data.app.data_schema,
+            rq,
+            &ctx,
+            &where_clause,
+            &binds,
+            CSV_ROW_LIMIT,
+            1,
+            sort_arg,
+        )
+        .await
+        .map_err(err_response)?;
+        json_rows.into_iter().map(query_engine::json_row_to_map).collect()
+    } else if let Some(coll_name) = entity.source_collection.as_deref() {
+        let (rows, _) = fetch_collection_page(&state.pool, data.app.id, &caller.0, coll_name, entity, CSV_ROW_LIMIT, 1, sort.as_ref())
+            .await
+            .map_err(err_response)?;
+        rows
+    } else if let Some(s) = &sort {
+        let (rows, _) =
+            fetch_report_rows_sorted(&state.pool, &data.app.data_schema, entity, computed, &filters, columns, s, CSV_ROW_LIMIT, 1)
+                .await
+                .map_err(err_response)?;
+        rows
+    } else {
+        let rp = fetch_report_rows(&state.pool, &data.app.data_schema, entity, computed, &filters, columns, CSV_ROW_LIMIT, None, None)
+            .await
+            .map_err(err_response)?;
+        rp.rows
+    };
+
+    let mut csv = columns.iter().map(|c| csv_field(c)).collect::<Vec<_>>().join(",");
+    csv.push_str("\r\n");
+    for row in &rows {
+        let fields: Vec<String> = columns
+            .iter()
+            .map(|c| {
+                let raw = row.get(c).and_then(|v| v.as_deref()).unwrap_or("");
+                let display = match formats.get(c) {
+                    Some(mask) => mask.apply(raw),
+                    None => raw.to_string(),
+                };
+                csv_field(&display)
+            })
+            .collect();
+        csv.push_str(&fields.join(","));
+        csv.push_str("\r\n");
+    }
+
+    let filename = format!("{}.csv", title.to_lowercase().replace(' ', "_").replace('"', ""));
+    Ok((
+        [
+            (header::CONTENT_TYPE, "text/csv; charset=utf-8".to_string()),
+            (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{filename}\"")),
+        ],
+        csv,
+    )
+        .into_response())
 }
 
 async fn create(

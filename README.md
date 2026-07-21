@@ -348,7 +348,11 @@ fixed "page kind." Eleven kinds:
   `t.<field>` (same trust level as a `computed` column), evaluated per
   row; the first rule (in declared order) whose expression is true wins
   and colors that row's background. Entity-backed reports only (same
-  restriction as `computed` columns).
+  restriction as `computed` columns). Every report also gets a
+  "Download CSV" link (`GET .../c/<idx>/csv`), no markup needed:
+  it streams every row matching the report's *current* filters and
+  sort as CSV — not just the page on screen — with the same columns
+  and `format:` masks the table shows.
 - **`form "Title" of <entity> { ... }`** — create/edit form. `fields`
   lists writable columns; `item <field> [as <kind> [(...)]] [attrs
   (...)]` picks a widget and/or sets `id`/`class`/attributes on that
