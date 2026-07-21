@@ -680,6 +680,27 @@ a.pgapp-link:has(.pgapp-icon):hover .pgapp-icon {
   white-space: pre;
 }
 
+/* renderLinkControls (runtime.js) — the structured "Target page" +
+   "Link parameters" GUI that appears above a component's raw markup
+   textarea whenever that text targets a page (a `link` component, or a
+   report's `link:` property), inside both the "Add Component" panel
+   and the component "Edit" dialog. */
+.pgapp-link-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-bottom: 0.9rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--muted));
+}
+.pgapp-link-controls-row { display: flex; flex-direction: column; gap: 0.35rem; }
+.pgapp-link-controls-row > label { font-size: 0.8rem; font-weight: 500; color: hsl(var(--muted-foreground)); }
+.pgapp-link-params-list { display: flex; flex-direction: column; gap: 0.35rem; }
+.pgapp-link-param-row { display: flex; align-items: center; gap: 0.4rem; }
+.pgapp-link-param-row .pgapp-input { margin-bottom: 0; flex: 1 1 auto; }
+
 /* App Builder (examples/app_builder.pgapp) — an APEX-App-Builder-
    flavored look for its 4 pages: a card grid for "Apps"/"Pages"
    (`attrs (class: "pgapp-cards")` on those reports), a compact

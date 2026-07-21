@@ -530,7 +530,12 @@ window.pgapp = (function () {
   // textarea with a starter template (COMPONENT_TEMPLATES) — the
   // textarea's own content, not the kind picker, is what's actually
   // submitted, so any of the 8 component kinds and any of their
-  // attributes can be added, not a fixed structured-fields subset.
+  // attributes can be added, not a fixed structured-fields subset. If
+  // the textarea's text targets a page (a `link` component, or a
+  // report's `link:` property), `renderLinkControls` also renders a
+  // proper "Target page" dropdown (+ parameter rows for a report link)
+  // above it — a real GUI control for the one property that's
+  // otherwise easy to typo, re-rendered whenever the kind changes.
   // POSTs the raw text to the target app's own
   // `/admin/pages/:page/components/add`.
   function bindAddComponentForm() {
@@ -563,8 +568,15 @@ window.pgapp = (function () {
     sourceArea.rows = 4;
     sourceArea.value = COMPONENT_TEMPLATES[kindSel.value];
 
+    var pagesListCache = [];
+    fetchPagesList(target).then(function (pages) {
+      pagesListCache = pages;
+      renderLinkControls(form, sourceArea, pagesListCache);
+    });
+
     kindSel.addEventListener("change", function () {
       sourceArea.value = COMPONENT_TEMPLATES[kindSel.value];
+      renderLinkControls(form, sourceArea, pagesListCache);
     });
 
     var addBtn = document.createElement("button");
@@ -657,16 +669,18 @@ window.pgapp = (function () {
           editBtn.setAttribute("aria-label", "Edit component");
           editBtn.textContent = "✎";
           editBtn.addEventListener("click", function () {
-            fetch(pgappAdminPagesUrl(target, "/components/" + encodeURIComponent(idx) + "/source"))
-              .then(function (r) {
-                return r.json();
-              })
-              .then(function (data) {
+            var sourceFetch = fetch(pgappAdminPagesUrl(target, "/components/" + encodeURIComponent(idx) + "/source")).then(function (r) {
+              return r.json();
+            });
+            Promise.all([sourceFetch, fetchPagesList(target)])
+              .then(function (results) {
+                var data = results[0];
+                var pagesList = results[1];
                 if (!data.ok) {
                   pgappAlert("Couldn't load component source: " + data.error);
                   return;
                 }
-                pgappSourceEditor("Edit component (" + kind + ")", data.source).then(function (edited) {
+                pgappSourceEditor("Edit component (" + kind + ")", data.source, pagesList).then(function (edited) {
                   if (edited === null) return;
                   postComponentEdit(target, idx, "source=" + encodeURIComponent(edited));
                 });
@@ -705,6 +719,187 @@ window.pgapp = (function () {
         })(rows[i]);
       }
     }
+  }
+
+  // Fetches every page name currently in the target app's markup (see
+  // `admin_pages_list` in server.rs) — powers the "Target page"
+  // dropdown below instead of making the user hand-type a page
+  // identifier. Resolves to [] (never rejects) on any failure, so a
+  // missing/broken endpoint just means no dropdown shows, not a
+  // broken editor.
+  function fetchPagesList(target) {
+    return fetch("/" + encodeURIComponent(target.workspace) + "/" + encodeURIComponent(target.app) + "/admin/pages-list")
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        return data.ok ? data.pages : [];
+      })
+      .catch(function () {
+        return [];
+      });
+  }
+
+  // Finds the one line in `text` that targets another page — either a
+  // `link "Label" -> page X` component, or a report's `link: col ->
+  // page X (params)` property — and pulls out everything
+  // `renderLinkControls` needs to rebuild it. Returns null if neither
+  // shape is present (most components don't target a page at all).
+  function extractLinkParts(text) {
+    var lines = text.split("\n");
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      var reportLink = line.match(/^(\s*link:\s*)(\S+)(\s*->\s*page\s+)([A-Za-z_][A-Za-z0-9_]*)\s*(?:\(([^)]*)\))?\s*$/);
+      if (reportLink) {
+        return {
+          kind: "report-link",
+          lineIndex: i,
+          prefix: reportLink[1],
+          column: reportLink[2],
+          arrow: reportLink[3],
+          page: reportLink[4],
+          params: reportLink[5] || "",
+        };
+      }
+      var linkComponent = line.match(/^(\s*link\s+"(?:[^"\\]|\\.)*"\s*->\s*page\s+)([A-Za-z_][A-Za-z0-9_]*)\s*$/);
+      if (linkComponent) {
+        return { kind: "link-component", lineIndex: i, prefix: linkComponent[1], page: linkComponent[2] };
+      }
+    }
+    return null;
+  }
+
+  // Structured, GUI-proper editing for the one property that's
+  // genuinely error-prone to hand-type: a page target, plus (for a
+  // report's `link:`) its row-column -> page-param mappings. Inserted
+  // right before `textarea` inside `container`; rewrites the relevant
+  // line in `textarea.value` directly on every change, so Save still
+  // just submits the textarea's own text — this is a convenience layer
+  // on top of the raw editor, not a replacement for it. Rendered once
+  // per call (at editor-open time, or on an explicit re-render trigger
+  // like a kind change), never reactively on every keystroke, so it
+  // never steals focus out from under someone typing in a param field.
+  function renderLinkControls(container, textarea, pagesList) {
+    var existing = container.querySelector(".pgapp-link-controls");
+    if (existing) existing.remove();
+    if (!pagesList || !pagesList.length) return;
+    var parsed = extractLinkParts(textarea.value);
+    if (!parsed) return;
+
+    var wrap = document.createElement("div");
+    wrap.className = "pgapp-link-controls";
+
+    var targetRow = document.createElement("div");
+    targetRow.className = "pgapp-link-controls-row";
+    var label = document.createElement("label");
+    label.textContent = "Target page";
+    var select = document.createElement("select");
+    select.className = "pgapp-select";
+    pagesList.forEach(function (p) {
+      var opt = document.createElement("option");
+      opt.value = p;
+      opt.textContent = p;
+      if (p === parsed.page) opt.selected = true;
+      select.appendChild(opt);
+    });
+    label.appendChild(select);
+    targetRow.appendChild(label);
+    wrap.appendChild(targetRow);
+
+    var paramRows = [];
+    if (parsed.kind === "report-link") {
+      parsed.params.split(",").forEach(function (pair) {
+        pair = pair.trim();
+        if (!pair) return;
+        var sep = pair.indexOf(":");
+        if (sep === -1) return;
+        paramRows.push({ name: pair.slice(0, sep).trim(), value: pair.slice(sep + 1).trim() });
+      });
+
+      var paramsList = document.createElement("div");
+      paramsList.className = "pgapp-link-params-list";
+
+      var rerenderParams = function () {
+        paramsList.textContent = "";
+        paramRows.forEach(function (row, i) {
+          var rowEl = document.createElement("div");
+          rowEl.className = "pgapp-link-param-row";
+          var nameInput = document.createElement("input");
+          nameInput.className = "pgapp-input";
+          nameInput.placeholder = "page param";
+          nameInput.value = row.name;
+          var valueInput = document.createElement("input");
+          valueInput.className = "pgapp-input";
+          valueInput.placeholder = "row column";
+          valueInput.value = row.value;
+          var removeBtn = document.createElement("button");
+          removeBtn.type = "button";
+          removeBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
+          removeBtn.title = "Remove parameter";
+          removeBtn.textContent = "✕";
+          nameInput.addEventListener("input", function () {
+            row.name = nameInput.value;
+            applyChange();
+          });
+          valueInput.addEventListener("input", function () {
+            row.value = valueInput.value;
+            applyChange();
+          });
+          removeBtn.addEventListener("click", function () {
+            paramRows.splice(i, 1);
+            rerenderParams();
+            applyChange();
+          });
+          rowEl.appendChild(nameInput);
+          rowEl.appendChild(document.createTextNode(":"));
+          rowEl.appendChild(valueInput);
+          rowEl.appendChild(removeBtn);
+          paramsList.appendChild(rowEl);
+        });
+      };
+      rerenderParams();
+
+      var addParamBtn = document.createElement("button");
+      addParamBtn.type = "button";
+      addParamBtn.className = "pgapp-btn pgapp-btn-secondary";
+      addParamBtn.textContent = "+ Add parameter";
+      addParamBtn.addEventListener("click", function () {
+        paramRows.push({ name: "", value: "" });
+        rerenderParams();
+        applyChange();
+      });
+
+      var paramsRow = document.createElement("div");
+      paramsRow.className = "pgapp-link-controls-row";
+      var paramsLabel = document.createElement("label");
+      paramsLabel.textContent = "Link parameters";
+      paramsRow.appendChild(paramsLabel);
+      paramsRow.appendChild(paramsList);
+      paramsRow.appendChild(addParamBtn);
+      wrap.appendChild(paramsRow);
+    }
+
+    function applyChange() {
+      var lines = textarea.value.split("\n");
+      if (parsed.kind === "link-component") {
+        lines[parsed.lineIndex] = parsed.prefix + select.value;
+      } else {
+        var paramsStr = paramRows
+          .filter(function (r) {
+            return r.name;
+          })
+          .map(function (r) {
+            return r.name + ": " + r.value;
+          })
+          .join(", ");
+        lines[parsed.lineIndex] =
+          parsed.prefix + parsed.column + parsed.arrow + select.value + (paramsStr ? " (" + paramsStr + ")" : "");
+      }
+      textarea.value = lines.join("\n");
+    }
+    select.addEventListener("change", applyChange);
+
+    container.insertBefore(wrap, textarea);
   }
 
   function postComponentEdit(target, idx, body) {
@@ -908,7 +1103,7 @@ window.pgapp = (function () {
   // the textarea's value on Save, or null on Cancel/Escape (Enter does
   // *not* submit, unlike pgappPrompt, since newlines are meaningful
   // here).
-  function pgappSourceEditor(title, initialText) {
+  function pgappSourceEditor(title, initialText, pagesList) {
     return new Promise(function (resolve) {
       var overlay = document.createElement("div");
       overlay.className = "pgapp-dialog-overlay";
@@ -925,6 +1120,7 @@ window.pgapp = (function () {
       textarea.rows = 10;
       textarea.value = initialText || "";
       box.appendChild(textarea);
+      renderLinkControls(box, textarea, pagesList);
       var actions = document.createElement("div");
       actions.className = "pgapp-dialog-actions";
       var cancelBtn = document.createElement("button");

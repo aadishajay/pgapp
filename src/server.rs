@@ -228,6 +228,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/:workspace/:app/users", get(auth::users_page).post(auth::users_create))
         .route("/:workspace/:app/users/:id/delete", post(auth::users_delete))
         .route("/:workspace/:app/admin/reload", get(admin_reload_page).post(admin_reload))
+        .route("/:workspace/:app/admin/pages-list", get(admin_pages_list))
         .route("/:workspace/:app/admin/pages/:page/reorder", post(admin_reorder_page))
         .route("/:workspace/:app/admin/pages/add", post(admin_add_page))
         .route("/:workspace/:app/admin/pages/:page/delete", post(admin_delete_page))
@@ -1667,6 +1668,35 @@ fn validate_markup(text: &str) -> anyhow::Result<()> {
     markup::parse_app(text).map(|_| ()).context("that markup doesn't parse")
 }
 
+/// GET /:workspace/:app/admin/pages-list — every page name currently in
+/// the target app's markup, for the App Builder's "Target page"
+/// dropdown on anything with a `-> page <Name>` target (report `link:`,
+/// `link` components) — lets that be picked from a real list instead of
+/// hand-typed, without introducing a whole structured property sheet.
+async fn admin_pages_list(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let result: anyhow::Result<Vec<String>> = async {
+        if std::path::Path::new(&entry.markup_path).is_dir() {
+            anyhow::bail!("this app's markup is a directory of files — the App Builder only supports single-file apps right now");
+        }
+        let markup_text = tokio::fs::read_to_string(&entry.markup_path)
+            .await
+            .with_context(|| format!("failed to read '{}'", entry.markup_path))?;
+        let (starts, _) = markup::app_page_start_lines(&markup_text)?;
+        Ok(starts.into_iter().map(|(name, _)| name).collect())
+    }
+    .await;
+
+    match result {
+        Ok(pages) => Ok(axum::Json(json!({"ok": true, "pages": pages})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
 /// GET /:workspace/:app/admin/pages/:page/components/:idx/source —
 /// returns component `idx`'s exact current markup text, for the App
 /// Builder's "Edit" panel to prefill its textarea with (see
@@ -1713,10 +1743,17 @@ async fn admin_add_component_source(
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
-    let new_component = values.get("source").map(|s| s.as_str()).unwrap_or("").trim().to_string();
+    // Trimmed only for the emptiness check below — the value actually
+    // spliced in keeps whatever leading indentation the user's textarea
+    // had, since a single-line component (e.g. `link`/`text`) has that
+    // indentation as literally the first characters of the whole
+    // string, and a blanket `.trim()` here would strip it every time
+    // (a real bug this once was: the App Builder's own raw indent
+    // vanishing on every one-line component add/edit).
+    let new_component = values.get("source").map(|s| s.as_str()).unwrap_or("").to_string();
 
     let result: anyhow::Result<()> = async {
-        if new_component.is_empty() {
+        if new_component.trim().is_empty() {
             anyhow::bail!("a component needs some markup text");
         }
         if std::path::Path::new(&entry.markup_path).is_dir() {
@@ -1758,10 +1795,11 @@ async fn admin_edit_component_source(
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
-    let new_component = values.get("source").map(|s| s.as_str()).unwrap_or("").trim().to_string();
+    // See admin_add_component_source's comment on why this isn't trimmed.
+    let new_component = values.get("source").map(|s| s.as_str()).unwrap_or("").to_string();
 
     let result: anyhow::Result<()> = async {
-        if new_component.is_empty() {
+        if new_component.trim().is_empty() {
             anyhow::bail!("a component needs some markup text");
         }
         if std::path::Path::new(&entry.markup_path).is_dir() {

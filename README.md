@@ -782,7 +782,17 @@ in place — no restart:
   `.../pages/:page/components/:idx/edit`, replacing the whole block
   (`page_reorder::replace_component`). Full-property, APEX-Page-
   Designer-style editing, just as a raw text box instead of a property
-  sheet.
+  sheet — except for one property, which gets an actual structured
+  control: if the textarea's text targets another page (a `link`
+  component, or a report's `link:` property), `renderLinkControls`
+  (`runtime.js`) inserts a real "Target page" `<select>` (populated
+  from `GET .../admin/pages-list`) above it, plus — for a report's
+  `link:` — an add/remove list of parameter rows (page param name +
+  row column), so that specific, otherwise-easy-to-typo property is
+  genuinely GUI-editable rather than hand-typed syntax. Changing either
+  rewrites just that one line in the textarea; everything else in the
+  component still goes through the raw text as before. Shown in the
+  "Add Component" panel too, re-rendered whenever the kind changes.
 - **Delete component**: per-row ✕ button (with a confirm dialog) —
   POSTs to `.../pages/:page/components/:idx/delete`.
 - **Run this page ↗**: opens the page's real, live URL in a new tab —
@@ -1001,6 +1011,7 @@ component kinds, e.g.
 - `POST /:workspace/:app/logout`                        — deletes the server-side session
 - `GET  /:workspace/:app/users` (+ create/delete POSTs) — built-in user management, admin role only
 - `GET  /:workspace/:app/admin/reload` (+ POST)         — re-syncs that app's markup file into `pgapp_meta` and reloads it, no restart
+- `GET  /:workspace/:app/admin/pages-list`              — every page name in that app, for the App Builder's "Target page" dropdown
 - `POST /:workspace/:app/admin/pages/:page/reorder`     — the App Builder's drag-and-drop save (see "App Builder")
 - `POST /:workspace/:app/admin/pages/add`                          — the App Builder's "Add Page" (see "App Builder")
 - `POST /:workspace/:app/admin/pages/:page/rename`                 — the App Builder's "Rename page" (see "App Builder")
