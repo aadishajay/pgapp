@@ -119,6 +119,9 @@ body {
 .pgapp-rich-text-editor { min-height: 6rem; padding: 0.5rem; }
 .pgapp-rich-text-editor:focus { outline: none; }
 
+.pgapp-file-browse { display: flex; align-items: center; gap: 0.6rem; }
+.pgapp-file-browse-link { color: #06c; }
+
 .pgapp-popup { display: inline-block; }
 .pgapp-popup-dialog { min-width: 14rem; padding: 0.5rem; border: 1px solid #ccc; background: #fff; }
 .pgapp-popup-search { width: 100%; margin-bottom: 0.4rem; }

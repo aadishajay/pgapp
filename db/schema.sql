@@ -88,6 +88,27 @@ create table if not exists pgapp_meta.collections (
 );
 create index if not exists collections_lookup on pgapp_meta.collections (app_id, caller_key, name, seq);
 
+-- Blobs uploaded through the `file_browse` item type ("File Browse" in
+-- APEX terms) — a dedicated multipart upload route
+-- (POST /:workspace/:app/uploads) is the one exception to every other
+-- create/update route's plain urlencoded Form extractor, since a real
+-- file upload can't go through that. The field's own stored value is
+-- just "<id>:<filename>" (see item_types::file_browse) — no DB read is
+-- needed to render an existing value, only to serve the download route
+-- (GET /:workspace/:app/uploads/:id). caller_key is recorded for
+-- bookkeeping/future use but not enforced on download: a file
+-- referenced from an entity row is visible to anyone who can already
+-- see that row, the same as any other column's value.
+create table if not exists pgapp_meta.file_uploads (
+    id           bigserial primary key,
+    app_id       integer not null references pgapp_meta.apps(id) on delete cascade,
+    caller_key   text not null,
+    filename     text not null,
+    content_type text not null,
+    data         bytea not null,
+    created_at   timestamptz not null default now()
+);
+
 create table if not exists pgapp_meta.fields (
     id            serial primary key,
     entity_id     integer not null references pgapp_meta.entities(id) on delete cascade,

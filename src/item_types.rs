@@ -21,6 +21,7 @@ mod checkbox;
 mod checkbox_group;
 mod color;
 mod date;
+mod file_browse;
 mod list_manager;
 mod password;
 mod popup;
@@ -95,6 +96,7 @@ pub fn registry() -> Registry {
         Box::new(list_manager::ListManager),
         Box::new(shuttle::Shuttle),
         Box::new(rich_text::RichText),
+        Box::new(file_browse::FileBrowse),
     ];
     components.into_iter().map(|c| (c.kind(), c)).collect()
 }

@@ -316,6 +316,62 @@ window.pgapp = (function () {
     }
   }
 
+  // Every app route is "/<workspace>/<app>/...", so the upload
+  // endpoint's own prefix can always be derived from the current page's
+  // own URL — no need for item_types::file_browse's render() to know
+  // the app's URL prefix (it doesn't have it) or for a template
+  // placeholder to be baked into the HTML at render time.
+  function fileUploadsUrl() {
+    var parts = window.location.pathname.split("/").filter(Boolean);
+    return "/" + parts[0] + "/" + parts[1] + "/uploads";
+  }
+
+  // The file_browse item type's <input type=file> carries no `name` of
+  // its own; picking a file here posts it to the dedicated multipart
+  // upload route (server.rs's upload_file — the one route that isn't
+  // the universal urlencoded Form extractor) and writes the returned
+  // "id:filename" into the preceding hidden input, which is what
+  // actually submits — same idiom as syncRichText/shuttleMove/etc.
+  function uploadFile(inputEl) {
+    var file = inputEl.files && inputEl.files[0];
+    if (!file) return;
+    var wrapper = inputEl.closest(".pgapp-file-browse");
+    if (!wrapper) return;
+    var hidden = wrapper.querySelector('input[type="hidden"]');
+    var link = wrapper.querySelector(".pgapp-file-browse-link");
+    var body = new FormData();
+    body.append("file", file);
+    fetch(fileUploadsUrl(), { method: "POST", body: body })
+      .then(function (r) {
+        if (!r.ok) throw new Error("upload failed (" + r.status + ")");
+        return r.json();
+      })
+      .then(function (result) {
+        if (hidden) hidden.value = result.id + ":" + result.filename;
+        if (link) {
+          link.textContent = result.filename;
+          link.href = fileUploadsUrl() + "/" + result.id;
+          link.dataset.fileId = result.id;
+        }
+      })
+      .catch(function (e) {
+        pgappAlert("Upload failed: " + e.message);
+      });
+  }
+
+  // Existing (already-uploaded) file_browse values render with a
+  // data-file-id but a placeholder href, since the download URL's
+  // workspace/app prefix isn't known at render time either — wired up
+  // here from the current page's own URL, same derivation as
+  // fileUploadsUrl().
+  function wireFileBrowseLinks() {
+    document.querySelectorAll(".pgapp-file-browse-link[data-file-id]").forEach(function (el) {
+      if (el.dataset.fileId) {
+        el.href = fileUploadsUrl() + "/" + el.dataset.fileId;
+      }
+    });
+  }
+
   // ---- App Builder: drag-and-drop row reordering ----
   //
   // A region/report table wrapped in a ".pgapp-draggable-rows" element
@@ -2473,6 +2529,7 @@ window.pgapp = (function () {
     document.addEventListener("DOMContentLoaded", bindPageCardActions);
     document.addEventListener("DOMContentLoaded", bindNewAppProcessing);
     document.addEventListener("DOMContentLoaded", bindAdvancedSourceLink);
+    document.addEventListener("DOMContentLoaded", wireFileBrowseLinks);
   } else {
     bindDynamicActions();
     bindNavToggles();
@@ -2487,6 +2544,7 @@ window.pgapp = (function () {
     bindPageCardActions();
     bindNewAppProcessing();
     bindAdvancedSourceLink();
+    wireFileBrowseLinks();
   }
 
   return {
@@ -2501,6 +2559,7 @@ window.pgapp = (function () {
     removeListManagerItem: removeListManagerItem,
     shuttleMove: shuttleMove,
     syncRichText: syncRichText,
+    uploadFile: uploadFile,
     alert: pgappAlert,
     confirm: pgappConfirm,
   };

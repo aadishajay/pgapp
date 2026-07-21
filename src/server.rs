@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, RwLock};
 
 use anyhow::Context as _;
-use axum::extract::{Form, Path, Query, State};
+use axum::extract::{DefaultBodyLimit, Form, Multipart, Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::middleware;
 use axum::response::{Html, IntoResponse, Redirect, Response};
@@ -213,6 +213,11 @@ fn concurrency_limit() -> usize {
     instance::max_connections() as usize
 }
 
+/// Per-file cap for `file_browse` uploads (see `upload_file`) —
+/// generous for the typical case (a document/image attachment) while
+/// still bounding how much of one request axum buffers in memory.
+const MAX_UPLOAD_BYTES: usize = 10 * 1024 * 1024;
+
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(landing))
@@ -222,6 +227,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/:workspace/:app/chart-lib.js", get(chart_lib_js))
         .route("/:workspace/:app/assets/*path", get(asset))
         .route("/:workspace/:app/api/:entity", get(api_list))
+        .route("/:workspace/:app/uploads", post(upload_file))
+        .route("/:workspace/:app/uploads/:id", get(download_file))
         .route("/:workspace/:app/login", get(auth::login_form).post(auth::login))
         .route("/:workspace/:app/setup", post(auth::setup))
         .route("/:workspace/:app/logout", post(auth::logout))
@@ -260,6 +267,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .layer(middleware::from_fn_with_state(state.clone(), auth::require_login))
         .with_state(state)
         .layer(ConcurrencyLimitLayer::new(concurrency_limit()))
+        // Overrides axum's 2MB default body limit for the whole router —
+        // generous enough for a `file_browse` upload, still bounded so a
+        // client can't force an unbounded in-memory multipart buffer.
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
 }
 
 /// Gate for `/:workspace/:app/admin/reload`: same "everyone's an admin" fallback as
@@ -1485,6 +1496,84 @@ async fn delete(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("failed to delete row: {e}")))?;
     Ok(Redirect::to(&format!("/{app}/{page_name}#pgapp-c{}", redirect_anchor(page, idx))).into_response())
+}
+
+/// POST /:workspace/:app/uploads — the `file_browse` item type's
+/// upload endpoint (see `item_types::file_browse`'s doc comment): the
+/// one route that takes multipart instead of the universal urlencoded
+/// `Form` every create/update route uses. Returns `{"id", "filename"}`
+/// JSON; the client (`pgapp.uploadFile` in `/runtime.js`) writes
+/// `"<id>:<filename>"` into the field's real hidden input itself — this
+/// route only knows which *app* an upload belongs to, not which
+/// entity/field, so it stays useful for however many `file_browse`
+/// fields an app declares.
+async fn upload_file(
+    State(state): State<Arc<AppState>>,
+    Extension(caller): Extension<auth::CallerKey>,
+    Path((workspace, app)): Path<(String, String)>,
+    mut multipart: Multipart,
+) -> Result<Response, AppError> {
+    let app_key = format!("{workspace}/{app}");
+    let entry = state.app_or_404(&app_key)?;
+    let data = entry.data();
+
+    let Some(field) = multipart.next_field().await.map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid upload: {e}")))? else {
+        return Err((StatusCode::BAD_REQUEST, "no file field in upload".to_string()));
+    };
+    let filename = field.file_name().unwrap_or("upload").to_string();
+    let content_type = field.content_type().unwrap_or("application/octet-stream").to_string();
+    let bytes = field.bytes().await.map_err(|e| (StatusCode::BAD_REQUEST, format!("failed to read upload: {e}")))?;
+
+    let id: i64 = sqlx::query_scalar(
+        "insert into pgapp_meta.file_uploads (app_id, caller_key, filename, content_type, data)
+         values ($1, $2, $3, $4, $5) returning id",
+    )
+    .bind(data.app.id)
+    .bind(&caller.0)
+    .bind(&filename)
+    .bind(&content_type)
+    .bind(bytes.as_ref())
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to store upload: {e}")))?;
+
+    Ok(axum::Json(json!({ "id": id, "filename": filename })).into_response())
+}
+
+/// GET /:workspace/:app/uploads/:id — streams a previously uploaded
+/// blob back with its original content-type. Not gated by `caller_key`
+/// (see `db/schema.sql`'s `file_uploads` comment): a file referenced
+/// from an entity row is visible to whoever can already see that row,
+/// same as any other column's value. Scoped to the current app's id so
+/// one app can't fetch another's upload by guessing its id.
+async fn download_file(
+    State(state): State<Arc<AppState>>,
+    Path((workspace, app, id)): Path<(String, String, i64)>,
+) -> Result<Response, AppError> {
+    let app_key = format!("{workspace}/{app}");
+    let entry = state.app_or_404(&app_key)?;
+    let data = entry.data();
+
+    let row = sqlx::query("select filename, content_type, data from pgapp_meta.file_uploads where id = $1 and app_id = $2")
+        .bind(id)
+        .bind(data.app.id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("failed to load upload: {e}")))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "no such upload".to_string()))?;
+
+    let filename: String = row.get("filename");
+    let content_type: String = row.get("content_type");
+    let bytes: Vec<u8> = row.get("data");
+
+    Ok((
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CONTENT_DISPOSITION, format!("inline; filename=\"{}\"", filename.replace('"', ""))),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 /// Minimal JSON API, keyed by entity rather than page — a stand-in for

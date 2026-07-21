@@ -645,6 +645,9 @@ shuttle.rs   dual <select multiple> with move buttons, comma-joined
 rich_text.rs contenteditable + execCommand toolbar ("Rich Text Editor");
              read_value runs submitted HTML through ammonia::clean
              (allow-list sanitizer) before it's ever persisted
+file_browse.rs  "File Browse" — <input type=file>, uploads via a dedicated
+             multipart route (not the universal Form extractor); the
+             stored value is "<file_uploads id>:<filename>"
 ```
 
 Adding one: write `src/item_types/<name>.rs`, add one line to
@@ -1208,6 +1211,8 @@ component kinds, e.g.
 - `POST /:workspace/:app/:page/c/:idx/update/:id`       — update a row
 - `POST /:workspace/:app/:page/c/:idx/delete/:id`       — delete a row
 - `GET  /:workspace/:app/api/:entity`                   — JSON list for that entity
+- `POST /:workspace/:app/uploads`                       — multipart upload for `file_browse` fields; returns `{"id", "filename"}` JSON
+- `GET  /:workspace/:app/uploads/:id`                   — streams a previously uploaded file back
 - `GET  /:workspace/:app/:page/region/:query`           — one region re-rendered as a fragment (dynamic-action refresh)
 - `POST /:workspace/:app/:page/c/:idx/run`              — run an `action` component's server-side module
 - `POST /:workspace/:app/:page/c/:idx/views` (+ delete) — save / delete a report's saved view

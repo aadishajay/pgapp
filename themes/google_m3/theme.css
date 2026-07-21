@@ -587,3 +587,6 @@ a.pgapp-link:hover .pgapp-icon { color: var(--m3-primary); }
 .pgapp-rich-text-toolbar button { cursor: pointer; padding: 0.25rem 0.6rem; border: 1px solid var(--m3-outline); border-radius: var(--m3-radius-xs); background: var(--m3-surface-container-lowest); color: var(--m3-on-surface); }
 .pgapp-rich-text-editor { min-height: 6rem; padding: 0.65rem 0.85rem; font-size: 0.9rem; background: var(--m3-surface-container-lowest); color: var(--m3-on-surface); }
 .pgapp-rich-text-editor:focus { outline: none; }
+.pgapp-file-browse { display: flex; align-items: center; gap: 0.6rem; }
+.pgapp-file-browse-link { color: var(--m3-primary); text-decoration: none; font-weight: 500; }
+.pgapp-file-browse-link:hover { text-decoration: underline; }
