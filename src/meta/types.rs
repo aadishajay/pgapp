@@ -102,6 +102,10 @@ pub enum RuntimeComponent {
         /// Display formatting applied to a column's raw text value at
         /// render time — see `model::FormatMask`.
         formats: HashMap<String, FormatMask>,
+        /// Role (or auth scheme name) required to see/write through
+        /// this one component, on top of whatever the page itself
+        /// requires — see `server::auth::authorize`.
+        requires: Option<String>,
         html: HtmlAttrs,
     },
     Form {
@@ -110,6 +114,7 @@ pub enum RuntimeComponent {
         fields: Vec<String>,
         item_types: HashMap<String, FieldItem>,
         field_html: HashMap<String, HtmlAttrs>,
+        requires: Option<String>,
         html: HtmlAttrs,
     },
     EditableTable {
@@ -118,6 +123,7 @@ pub enum RuntimeComponent {
         columns: Vec<String>,
         item_types: HashMap<String, FieldItem>,
         field_html: HashMap<String, HtmlAttrs>,
+        requires: Option<String>,
         html: HtmlAttrs,
     },
     Chart {
@@ -126,15 +132,18 @@ pub enum RuntimeComponent {
         chart_type: String,
         x: String,
         y: String,
+        requires: Option<String>,
         html: HtmlAttrs,
     },
     Text {
         text: String,
+        requires: Option<String>,
         html: HtmlAttrs,
     },
     Link {
         label: String,
         target_page: String,
+        requires: Option<String>,
         html: HtmlAttrs,
     },
     /// `columns` narrows the displayed columns to a subset of the
@@ -144,6 +153,7 @@ pub enum RuntimeComponent {
         label: String,
         query: String,
         columns: Vec<String>,
+        requires: Option<String>,
         html: HtmlAttrs,
     },
     /// A button running a registered server-side action module.
@@ -151,12 +161,14 @@ pub enum RuntimeComponent {
         label: String,
         name: String,
         config: serde_json::Value,
+        requires: Option<String>,
         html: HtmlAttrs,
     },
     /// A standalone button — see `model::ComponentDef::Button`.
     Button {
         label: String,
         behavior: ButtonBehavior,
+        requires: Option<String>,
         html: HtmlAttrs,
     },
     /// A client-side dynamic action; `config` is the full
@@ -220,6 +232,10 @@ pub struct RuntimeApp {
     pub footer: Vec<RuntimeComponent>,
     /// Queries visible from every page.
     pub queries: HashMap<String, RuntimeQuery>,
+    /// Named role groups (`auth_scheme "name" { roles: ... }`), keyed by
+    /// name, for `server::auth::authorize` to expand a `requires:` name
+    /// through before falling back to treating it as a literal role.
+    pub schemes: HashMap<String, Vec<String>>,
     /// This app's row id in `pgapp_control.apps` — a different table
     /// (and a different id) from `id` above (`pgapp_meta.apps`, rebuilt
     /// by every markup resync). `load_app` doesn't know this; it's set

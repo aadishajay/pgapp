@@ -180,6 +180,11 @@ pub fn region_html(label: &str, query: &str, regions: &RegionRows, columns: &[St
 
 /// Renders a header/footer chrome list — restricted at sync time to
 /// Text/Link/Region, so those are the only variants handled here.
+/// Chrome shows on every page regardless of that page's own `requires:`
+/// (nav items are filtered separately by `visible_nav`), so a chrome
+/// item's own `requires:` isn't consulted here either — narrower than
+/// page-body component gating, a deliberate scope cut rather than an
+/// oversight.
 fn chrome_items_html(app: &str, items: &[RuntimeComponent], regions: &RegionRows) -> String {
     if items.is_empty() {
         return String::new();
@@ -187,11 +192,11 @@ fn chrome_items_html(app: &str, items: &[RuntimeComponent], regions: &RegionRows
     let mut html = String::from(r#"<div class="pgapp-items">"#);
     for item in items {
         match item {
-            RuntimeComponent::Text { text, html: attrs } => html.push_str(&text_html(text, attrs)),
-            RuntimeComponent::Link { label, target_page, html: attrs } => {
+            RuntimeComponent::Text { text, html: attrs, .. } => html.push_str(&text_html(text, attrs)),
+            RuntimeComponent::Link { label, target_page, html: attrs, .. } => {
                 html.push_str(&link_html(app, label, target_page, attrs))
             }
-            RuntimeComponent::Region { label, query, columns, html: attrs } => {
+            RuntimeComponent::Region { label, query, columns, html: attrs, .. } => {
                 html.push_str(&region_html(label, query, regions, columns, attrs))
             }
             _ => {}
@@ -625,7 +630,7 @@ pub fn login_page(app: &str, app_name: &str, error: Option<&str>, setup: bool) -
 pub fn users_page(
     app: &str,
     app_name: &str,
-    users: &[(i32, String, String)],
+    users: &[(i32, String, Vec<String>)],
     current_user_id: i32,
     error: Option<&str>,
     chrome: Chrome,
@@ -641,8 +646,8 @@ pub fn users_page(
         ));
     }
 
-    body.push_str(r#"<div class="pgapp-report"><h2 class="pgapp-subtitle">Accounts</h2><div class="pgapp-table-wrap"><table class="pgapp-table"><thead><tr><th>username</th><th>role</th><th></th></tr></thead><tbody>"#);
-    for (id, username, role) in users {
+    body.push_str(r#"<div class="pgapp-report"><h2 class="pgapp-subtitle">Accounts</h2><div class="pgapp-table-wrap"><table class="pgapp-table"><thead><tr><th>username</th><th>roles</th><th></th></tr></thead><tbody>"#);
+    for (id, username, roles) in users {
         let action = if *id == current_user_id {
             r#"<span class="pgapp-text">(you)</span>"#.to_string()
         } else {
@@ -655,7 +660,7 @@ pub fn users_page(
         body.push_str(&format!(
             "<tr><td>{}</td><td>{}</td><td class=\"pgapp-row-actions\">{action}</td></tr>",
             escape(username),
-            escape(role),
+            escape(&roles.join(", ")),
         ));
     }
     body.push_str("</tbody></table></div></div>");
@@ -665,7 +670,7 @@ pub fn users_page(
 <form class="pgapp-form" method="post" action="/{app}/users">
 <div class="pgapp-field"><label class="pgapp-label">username</label><input class="pgapp-input" type="text" name="username" required></div>
 <div class="pgapp-field"><label class="pgapp-label">password (min 8 chars)</label><input class="pgapp-input" type="password" name="password" required></div>
-<div class="pgapp-field"><label class="pgapp-label">role</label><input class="pgapp-input" type="text" name="role" placeholder="user, admin, or any role your pages require"></div>
+<div class="pgapp-field"><label class="pgapp-label">roles</label><input class="pgapp-input" type="text" name="roles" placeholder="comma-separated, e.g. admin, finance"></div>
 <button class="pgapp-btn pgapp-btn-primary" type="submit">Create user</button>
 </form></div>"#,
         app = escape(app),

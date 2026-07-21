@@ -12,11 +12,13 @@
 //!   admins can add users (via the built-in `/{workspace}/{app}/users`
 //!   page). Users are deliberately *not* declarable in markup:
 //!   passwords don't belong in a source file.
-//! - **AuthZ**: a user has one `role` (free-form string). A page's
-//!   `requires: <role>` markup restricts it to that role; 'admin'
-//!   passes every check. Pages without `requires:` need any signed-in
-//!   user. Apps without an `auth { }` block skip all of this and stay
-//!   public.
+//! - **AuthZ**: a user holds any number of free-form `roles`. A page's
+//!   or component's `requires: <role_or_scheme>` markup restricts it to
+//!   users holding that role (or any role in that named `auth_scheme`,
+//!   if the name matches one — see `model::AuthScheme`); 'admin' passes
+//!   every check regardless. Pages/components without `requires:` need
+//!   any signed-in user. Apps without an `auth { }` block skip all of
+//!   this and stay public.
 //!
 //! Everything hangs off [`require_login`], an axum middleware that
 //! resolves the app's `{workspace}/{app}` key from the raw request path
@@ -68,12 +70,16 @@ pub struct CallerKey(pub String);
 pub struct CurrentUser {
     pub id: i32,
     pub username: String,
-    pub role: String,
+    pub roles: Vec<String>,
 }
 
 impl CurrentUser {
     pub fn is_admin(&self) -> bool {
-        self.role == "admin"
+        self.roles.iter().any(|r| r == "admin")
+    }
+
+    pub fn has_role(&self, role: &str) -> bool {
+        self.is_admin() || self.roles.iter().any(|r| r == role)
     }
 }
 
@@ -156,8 +162,8 @@ async fn create_session(pool: &PgPool, app_id: i32, user_id: i32, app_key: &str)
 }
 
 async fn load_session(pool: &PgPool, app_id: i32, token: &str) -> anyhow::Result<Option<CurrentUser>> {
-    let row: Option<(i32, String, String)> = sqlx::query_as(
-        "select u.id, u.username, u.role
+    let row: Option<(i32, String, Vec<String>)> = sqlx::query_as(
+        "select u.id, u.username, u.roles
            from pgapp_meta.sessions s
            join pgapp_meta.users u on u.id = s.user_id
           where s.token = $1 and s.app_id = $2 and s.expires_at > now()",
@@ -166,7 +172,7 @@ async fn load_session(pool: &PgPool, app_id: i32, token: &str) -> anyhow::Result
     .bind(app_id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|(id, username, role)| CurrentUser { id, username, role }))
+    Ok(row.map(|(id, username, roles)| CurrentUser { id, username, roles }))
 }
 
 async fn user_count(pool: &PgPool, app_id: i32) -> anyhow::Result<i64> {
@@ -252,22 +258,41 @@ pub async fn require_login(State(state): State<Arc<AppState>>, mut req: Request,
     response
 }
 
-/// The per-page role gate, called by every page-serving/writing
-/// handler. With auth disabled everything is public; with it enabled,
-/// the middleware already guaranteed a signed-in user, so only the
-/// role remains to check ('admin' passes everything).
-pub fn authorize(data: &AppData, required_role: Option<&str>, auth: &AuthCtx) -> Result<(), AppError> {
+/// The per-page/per-component role gate, called by every page-serving/
+/// writing handler (and, for the latter, by `server::render_component`
+/// and every mutating route). With auth disabled everything is public;
+/// with it enabled, the middleware already guaranteed a signed-in user.
+///
+/// `required` is either a literal role or the name of an app-declared
+/// `auth_scheme` (see `model::AuthScheme`) — resolved through
+/// `data.app.schemes` first; a name that matches no scheme falls back
+/// to being checked as a literal role directly, so an app with no
+/// schemes at all behaves exactly as if this resolution step didn't
+/// exist. 'admin' passes regardless of which role(s) are required.
+pub fn authorize(data: &AppData, required: Option<&str>, auth: &AuthCtx) -> Result<(), AppError> {
     if !data.app.auth_enabled {
         return Ok(());
     }
     let user = auth.0.as_ref().ok_or((StatusCode::UNAUTHORIZED, "sign in required".to_string()))?;
-    match required_role {
-        None => Ok(()),
-        Some(role) if user.role == role || user.is_admin() => Ok(()),
-        Some(role) => Err((
+    let Some(name) = required else { return Ok(()) };
+    if user.is_admin() {
+        return Ok(());
+    }
+    let owned;
+    let allowed_roles: &[String] = match data.app.schemes.get(name) {
+        Some(roles) => roles,
+        None => {
+            owned = vec![name.to_string()];
+            &owned
+        }
+    };
+    if allowed_roles.iter().any(|r| user.roles.contains(r)) {
+        Ok(())
+    } else {
+        Err((
             StatusCode::FORBIDDEN,
-            format!("this page requires the '{role}' role (you are '{}')", user.role),
-        )),
+            format!("this requires the '{name}' role (you have: {})", user.roles.join(", ")),
+        ))
     }
 }
 
@@ -365,8 +390,8 @@ pub async fn setup(
 
     let hash = hash_password(password).map_err(err_response)?;
     let user_id: i32 = sqlx::query_scalar(
-        "insert into pgapp_meta.users (app_id, username, password_hash, role)
-         values ($1, $2, $3, 'admin') returning id",
+        "insert into pgapp_meta.users (app_id, username, password_hash, roles)
+         values ($1, $2, $3, array['admin']) returning id",
     )
     .bind(data.app.id)
     .bind(username)
@@ -412,8 +437,8 @@ pub async fn users_page(
     let entry = state.app_or_404(&app)?;
     let data = entry.data();
 
-    let users: Vec<(i32, String, String)> = sqlx::query_as(
-        "select id, username, role from pgapp_meta.users where app_id = $1 order by username",
+    let users: Vec<(i32, String, Vec<String>)> = sqlx::query_as(
+        "select id, username, roles from pgapp_meta.users where app_id = $1 order by username",
     )
     .bind(data.app.id)
     .fetch_all(&state.pool)
@@ -451,8 +476,11 @@ pub async fn users_create(
 
     let username = values.get("username").map(|s| s.trim()).unwrap_or_default();
     let password = values.get("password").map(|s| s.as_str()).unwrap_or_default();
-    let role = values.get("role").map(|s| s.trim()).unwrap_or_default();
-    let role = if role.is_empty() { "user" } else { role };
+    let roles: Vec<String> = values
+        .get("roles")
+        .map(|s| s.split(',').map(|r| r.trim().to_string()).filter(|r| !r.is_empty()).collect())
+        .unwrap_or_default();
+    let roles = if roles.is_empty() { vec!["user".to_string()] } else { roles };
 
     if username.is_empty() || password.len() < MIN_PASSWORD_LEN {
         let msg = "Username is required and the password needs at least 8 characters.";
@@ -461,12 +489,12 @@ pub async fn users_create(
 
     let hash = hash_password(password).map_err(err_response)?;
     let result = sqlx::query(
-        "insert into pgapp_meta.users (app_id, username, password_hash, role) values ($1, $2, $3, $4)",
+        "insert into pgapp_meta.users (app_id, username, password_hash, roles) values ($1, $2, $3, $4)",
     )
     .bind(entry.data().app.id)
     .bind(username)
     .bind(&hash)
-    .bind(role)
+    .bind(&roles)
     .execute(&state.pool)
     .await;
 

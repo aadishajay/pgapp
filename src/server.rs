@@ -314,6 +314,24 @@ fn component_at<'a>(page: &'a RuntimePage, idx: usize) -> Result<&'a RuntimeComp
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("page '{}' has no component #{idx}", page.name)))
 }
 
+/// A component's own `requires:` — the per-component counterpart to a
+/// page's `required_role`, read generically across every kind (mirrors
+/// `meta::sync::component_requires` on the markup side).
+fn component_requires(component: &RuntimeComponent) -> Option<&str> {
+    match component {
+        RuntimeComponent::Report { requires, .. }
+        | RuntimeComponent::Form { requires, .. }
+        | RuntimeComponent::EditableTable { requires, .. }
+        | RuntimeComponent::Chart { requires, .. }
+        | RuntimeComponent::Text { requires, .. }
+        | RuntimeComponent::Link { requires, .. }
+        | RuntimeComponent::Region { requires, .. }
+        | RuntimeComponent::Action { requires, .. }
+        | RuntimeComponent::Button { requires, .. } => requires.as_deref(),
+        RuntimeComponent::DynamicAction { .. } => None,
+    }
+}
+
 /// The (entity, field names, item types) a `Form` or `EditableTable`
 /// writes through — the two writable component kinds share create/
 /// update/delete handling, since both ultimately mean "a named subset
@@ -837,10 +855,18 @@ async fn render_component(
     auth_ctx: &AuthCtx,
     caller_key: &str,
 ) -> anyhow::Result<String> {
+    // A component's own `requires:` (on top of whatever the page itself
+    // requires, already checked before this is called) silently hides
+    // it from view — same "just don't show it" precedent as a role-
+    // gated nav item (see `visible_nav`), not a hard error, since a page
+    // can otherwise be entirely open to this user.
+    if auth::authorize(data, component_requires(component), auth_ctx).is_err() {
+        return Ok(String::new());
+    }
     match component {
-        RuntimeComponent::Text { text, html } => Ok(render::text_html(text, html)),
-        RuntimeComponent::Link { label, target_page, html } => Ok(render::link_html(app, label, target_page, html)),
-        RuntimeComponent::Region { label, query: qname, columns, html } => {
+        RuntimeComponent::Text { text, html, .. } => Ok(render::text_html(text, html)),
+        RuntimeComponent::Link { label, target_page, html, .. } => Ok(render::link_html(app, label, target_page, html)),
+        RuntimeComponent::Region { label, query: qname, columns, html, .. } => {
             Ok(render::region_html(label, qname, regions, columns, html))
         }
 
@@ -852,14 +878,14 @@ async fn render_component(
             Ok(render::action_html(app, page_name, idx, label, name, html))
         }
 
-        RuntimeComponent::Button { label, behavior, html } => match behavior {
+        RuntimeComponent::Button { label, behavior, html, .. } => match behavior {
             meta::ButtonBehavior::Redirect { target_page, extra_params } => {
                 Ok(render::button_redirect_html(app, label, target_page, extra_params, query, html))
             }
             meta::ButtonBehavior::RunAction { name, .. } => Ok(render::action_html(app, page_name, idx, label, name, html)),
         },
 
-        RuntimeComponent::Chart { title, query: qname, chart_type, x, y, html } => {
+        RuntimeComponent::Chart { title, query: qname, chart_type, x, y, html, .. } => {
             let rq = page
                 .resolve_query(&data.app, qname)
                 .ok_or_else(|| anyhow::anyhow!("chart '{title}' references unknown query '{qname}'"))?;
@@ -879,6 +905,7 @@ async fn render_component(
             computed,
             formats,
             html,
+            ..
         } => {
             let before_load_warning = match before_load {
                 Some(pre) => run_before_load(state, data, page, query, caller_key, pre).await,
@@ -971,7 +998,7 @@ async fn render_component(
             ))
         }
 
-        RuntimeComponent::Form { title, entity, fields, item_types, field_html, html } => {
+        RuntimeComponent::Form { title, entity, fields, item_types, field_html, html, .. } => {
             // A Form that's a Report's edit/create companion renders as a
             // floating popup instead of a block sitting inline below the
             // table: closed (nothing rendered) unless its edit_{idx}/
@@ -1012,7 +1039,7 @@ async fn render_component(
             }
         }
 
-        RuntimeComponent::EditableTable { title, entity, columns, item_types, field_html, html } => {
+        RuntimeComponent::EditableTable { title, entity, columns, item_types, field_html, html, .. } => {
             let ctx = bind_context(query, None);
             let choices = resolve_field_choices(&state.pool, &data.app, page, item_types, &ctx).await?;
             let rows = fetch_rows(&state.pool, &data.app.data_schema, entity).await?;
@@ -1171,7 +1198,7 @@ async fn region_fragment(
     let rows = run_named_query_rows(&state.pool, &data.app.data_schema, rq, &ctx).await.map_err(err_response)?;
 
     let region = page.components.iter().find_map(|c| match c {
-        RuntimeComponent::Region { label, query, columns, html } if *query == query_name => {
+        RuntimeComponent::Region { label, query, columns, html, .. } if *query == query_name => {
             Some((label.clone(), columns.clone(), html.clone()))
         }
         _ => None,
@@ -1199,6 +1226,7 @@ async fn run_action(
     let page = page_or_404(&data.app, &page_name)?;
     auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
+    auth::authorize(&data, component_requires(component), &auth_ctx)?;
     let (name, config) = match component {
         RuntimeComponent::Action { name, config, .. } => (name, config),
         RuntimeComponent::Button { behavior: meta::ButtonBehavior::RunAction { name, config }, .. } => (name, config),
@@ -1253,6 +1281,7 @@ async fn save_view(
     let page = page_or_404(&data.app, &page_name)?;
     auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
+    auth::authorize(&data, component_requires(component), &auth_ctx)?;
     if !matches!(component, RuntimeComponent::Report { .. }) {
         return Err((StatusCode::BAD_REQUEST, format!("component #{idx} is not a report")));
     }
@@ -1343,6 +1372,7 @@ async fn create(
     let page = page_or_404(&data.app, &page_name)?;
     auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
+    auth::authorize(&data, component_requires(component), &auth_ctx)?;
     let (entity, fields, item_types) = writable_fields(component, &page_name, idx)?;
 
     match build_value_exprs(entity, fields, item_types, &values, &state.item_types) {
@@ -1386,6 +1416,7 @@ async fn update(
     let page = page_or_404(&data.app, &page_name)?;
     auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
+    auth::authorize(&data, component_requires(component), &auth_ctx)?;
     let (entity, fields, item_types) = writable_fields(component, &page_name, idx)?;
 
     match build_value_exprs(entity, fields, item_types, &values, &state.item_types) {
@@ -1439,6 +1470,7 @@ async fn delete(
     let page = page_or_404(&data.app, &page_name)?;
     auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
+    auth::authorize(&data, component_requires(component), &auth_ctx)?;
     let (entity, _, _) = writable_fields(component, &page_name, idx)?;
 
     let sql = format!("delete from {}.{} where id = $1::integer", data.app.data_schema, entity.table_name);

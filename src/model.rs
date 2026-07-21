@@ -382,6 +382,7 @@ pub enum ComponentDef {
         before_load: Option<PreAction>,
         computed: Vec<ComputedColumn>,
         formats: HashMap<String, FormatMask>,
+        requires: Option<String>,
         html: HtmlAttrs,
     },
     /// A create/edit form for one entity. Renders blank (create mode) by
@@ -398,6 +399,7 @@ pub enum ComponentDef {
         fields: Vec<String>,
         item_types: HashMap<String, FieldItem>,
         field_html: HashMap<String, HtmlAttrs>,
+        requires: Option<String>,
         html: HtmlAttrs,
     },
     /// Every row rendered inline-editable (one `<form>` per row), plus
@@ -409,6 +411,7 @@ pub enum ComponentDef {
         columns: Vec<String>,
         item_types: HashMap<String, FieldItem>,
         field_html: HashMap<String, HtmlAttrs>,
+        requires: Option<String>,
         html: HtmlAttrs,
     },
     /// Renders `query`'s rows as a chart; `chart_type` is one of
@@ -421,15 +424,18 @@ pub enum ComponentDef {
         chart_type: String,
         x: String,
         y: String,
+        requires: Option<String>,
         html: HtmlAttrs,
     },
     Text {
         text: String,
+        requires: Option<String>,
         html: HtmlAttrs,
     },
     Link {
         label: String,
         target_page: String,
+        requires: Option<String>,
         html: HtmlAttrs,
     },
     /// Renders a named query's rows as a plain (non-paginated) table —
@@ -442,6 +448,7 @@ pub enum ComponentDef {
         label: String,
         query: String,
         columns: Vec<String>,
+        requires: Option<String>,
         html: HtmlAttrs,
     },
     /// A button that runs a server-side action module — a Rust component
@@ -451,6 +458,7 @@ pub enum ComponentDef {
         label: String,
         name: String,
         config: serde_json::Value,
+        requires: Option<String>,
         html: HtmlAttrs,
     },
     /// A standalone clickable button, independent of any report row —
@@ -466,6 +474,7 @@ pub enum ComponentDef {
     Button {
         label: String,
         behavior: ButtonBehavior,
+        requires: Option<String>,
         html: HtmlAttrs,
     },
     /// A client-side dynamic action: `on <event> of <item> { ops }`.
@@ -495,6 +504,26 @@ impl ComponentDef {
             | ComponentDef::Region { html, .. }
             | ComponentDef::Action { html, .. }
             | ComponentDef::Button { html, .. } => *html = new_html,
+            ComponentDef::DynamicAction { .. } => {}
+        }
+    }
+
+    /// Overwrites this component's `requires` in place from a trailing
+    /// `requires: <role>` suffix (see `markup::Parser::parse_component`)
+    /// — the same role gate as a page's `requires:`, but scoped to just
+    /// this one component. A no-op on `DynamicAction`, which renders no
+    /// visible content of its own for a hidden role to be hidden from.
+    pub(crate) fn set_requires(&mut self, new_requires: Option<String>) {
+        match self {
+            ComponentDef::Report { requires, .. }
+            | ComponentDef::Form { requires, .. }
+            | ComponentDef::EditableTable { requires, .. }
+            | ComponentDef::Chart { requires, .. }
+            | ComponentDef::Text { requires, .. }
+            | ComponentDef::Link { requires, .. }
+            | ComponentDef::Region { requires, .. }
+            | ComponentDef::Action { requires, .. }
+            | ComponentDef::Button { requires, .. } => *requires = new_requires,
             ComponentDef::DynamicAction { .. } => {}
         }
     }
@@ -549,6 +578,21 @@ pub struct NavItem {
     pub children: Vec<NavItem>,
 }
 
+/// A reusable, named group of roles — declared once at app scope and
+/// referenced by name from any page's or component's `requires:`
+/// (`requires: <scheme_name>` instead of `requires: <literal_role>`),
+/// resolved to "does the signed-in user hold any of these roles"
+/// (`server::auth::authorize`). Exists so a role combination used in
+/// several places (e.g. "finance or manager can record a payment")
+/// only has to be spelled out once — the pgapp analog of an Oracle APEX
+/// Authorization Scheme, minus the PL/SQL-expression/SQL-query scheme
+/// types APEX also supports (see README's "Migrating from Oracle APEX").
+#[derive(Debug, Clone)]
+pub struct AuthScheme {
+    pub name: String,
+    pub roles: Vec<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppDef {
     pub name: String,
@@ -574,6 +618,9 @@ pub struct AppDef {
     /// Queries visible from every page (a page-scoped query of the same
     /// name takes precedence).
     pub queries: Vec<QueryDef>,
+    /// Named role groups a page/component's `requires:` may reference
+    /// by name instead of a single literal role — see `AuthScheme`.
+    pub auth_schemes: Vec<AuthScheme>,
 }
 
 impl AppDef {

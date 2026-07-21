@@ -87,6 +87,7 @@ pub async fn sync_app(
     .await?;
 
     sync_queries(pool, app_id, None, &app.queries).await?;
+    sync_auth_schemes(pool, app_id, &app.auth_schemes).await?;
 
     // Seed the runtime JS library on first sync only; once a row exists
     // it's the database's to edit, not this binary's to overwrite.
@@ -207,6 +208,7 @@ pub async fn sync_app(
                 &format!("page '{}'", page.name),
             )?;
             merge_html_into_config(&mut config, component_html(component));
+            merge_requires_into_config(&mut config, component_requires(component));
 
             sqlx::query(
                 "insert into pgapp_meta.components (app_id, page_id, slot, kind, ordinal, config)
@@ -338,6 +340,26 @@ async fn sync_queries(
     Ok(())
 }
 
+/// Replaces the app's named auth schemes — same delete-then-reinsert
+/// pattern as `sync_queries`.
+async fn sync_auth_schemes(pool: &PgPool, app_id: i32, schemes: &[crate::model::AuthScheme]) -> Result<()> {
+    sqlx::query("delete from pgapp_meta.auth_schemes where app_id = $1")
+        .bind(app_id)
+        .execute(pool)
+        .await?;
+
+    for scheme in schemes {
+        sqlx::query("insert into pgapp_meta.auth_schemes (app_id, name, roles) values ($1, $2, $3)")
+            .bind(app_id)
+            .bind(&scheme.name)
+            .bind(&scheme.roles)
+            .execute(pool)
+            .await?;
+    }
+
+    Ok(())
+}
+
 /// Replaces the app-wide header/footer chrome (`slot` = "header" or
 /// "footer", `page_id` null). Only Text/Link/Region components are
 /// allowed here — chrome has no pagination or per-request entity
@@ -375,6 +397,7 @@ async fn sync_chrome(
             ),
         };
         merge_html_into_config(&mut config, component_html(component));
+        merge_requires_into_config(&mut config, component_requires(component));
 
         sqlx::query(
             "insert into pgapp_meta.components (app_id, page_id, slot, kind, ordinal, config)
@@ -427,6 +450,35 @@ fn component_html(c: &ComponentDef) -> &HtmlAttrs {
         | ComponentDef::Button { html, .. } => html,
         ComponentDef::DynamicAction { .. } => &EMPTY,
     }
+}
+
+/// Every component (except `DynamicAction`) also carries an optional
+/// `requires` — a per-component role gate from a trailing
+/// `requires: <role>` suffix, same generic-reading pattern as
+/// `component_html`.
+fn component_requires(c: &ComponentDef) -> Option<&str> {
+    match c {
+        ComponentDef::Report { requires, .. }
+        | ComponentDef::Form { requires, .. }
+        | ComponentDef::EditableTable { requires, .. }
+        | ComponentDef::Chart { requires, .. }
+        | ComponentDef::Text { requires, .. }
+        | ComponentDef::Link { requires, .. }
+        | ComponentDef::Region { requires, .. }
+        | ComponentDef::Action { requires, .. }
+        | ComponentDef::Button { requires, .. } => requires.as_deref(),
+        ComponentDef::DynamicAction { .. } => None,
+    }
+}
+
+/// Splices `requires` into `config` under a reserved `"requires"` key —
+/// read back generically in `meta::load`, independent of `kind`.
+fn merge_requires_into_config(config: &mut serde_json::Value, requires: Option<&str>) {
+    let Some(role) = requires else { return };
+    config
+        .as_object_mut()
+        .expect("component config is always a JSON object")
+        .insert("requires".to_string(), serde_json::Value::String(role.to_string()));
 }
 
 /// `HtmlAttrs` -> `{"id": ..., "class": ..., "attrs": {...}}`, the wire

@@ -190,6 +190,7 @@ pub async fn load_app(pool: &PgPool, app_name: &str) -> Result<RuntimeApp> {
         page_rows.iter().map(|(id, name, _)| (*id, name.clone())).collect();
 
     let (app_queries, mut page_queries) = load_queries(pool, app_id, &data_schema).await?;
+    let schemes = load_auth_schemes(pool, app_id).await?;
 
     let mut pages = Vec::new();
     for (page_id, name, required_role) in &page_rows {
@@ -227,6 +228,7 @@ pub async fn load_app(pool: &PgPool, app_name: &str) -> Result<RuntimeApp> {
         header,
         footer,
         queries: app_queries,
+        schemes,
         // Neither is known here — pgapp_control isn't this function's
         // concern (see RuntimeApp's doc comment). Whoever calls
         // load_app sets these from the control-plane registry
@@ -303,6 +305,17 @@ async fn load_queries(
         }
     }
     Ok((app_queries, page_queries))
+}
+
+/// Loads every named auth scheme for the app, keyed by name — see
+/// `model::AuthScheme` / `server::auth::authorize`.
+async fn load_auth_schemes(pool: &PgPool, app_id: i32) -> Result<HashMap<String, Vec<String>>> {
+    let rows: Vec<(String, Vec<String>)> =
+        sqlx::query_as("select name, roles from pgapp_meta.auth_schemes where app_id = $1")
+            .bind(app_id)
+            .fetch_all(pool)
+            .await?;
+    Ok(rows.into_iter().collect())
 }
 
 /// Loads the components owned by one page, in order.
@@ -479,6 +492,7 @@ fn decode_component(
     entities: &HashMap<String, RuntimeEntity>,
 ) -> Result<RuntimeComponent> {
     let html = decode_html_attrs(&config);
+    let requires = config.get("requires").and_then(|v| v.as_str()).map(String::from);
     match kind {
         "report" => {
             let entity = resolve_entity(entities, &json_str(&config, "entity"))?;
@@ -500,6 +514,7 @@ fn decode_component(
                 before_load: decode_before_load(&config),
                 computed: decode_computed(&config),
                 formats: decode_formats(&config),
+                requires,
                 html,
             })
         }
@@ -509,6 +524,7 @@ fn decode_component(
             fields: json_strings(&config["fields"]),
             item_types: decode_item_types(&config["item_types"]),
             field_html: decode_field_html(&config),
+            requires,
             html,
         }),
         "editable_table" => Ok(RuntimeComponent::EditableTable {
@@ -517,6 +533,7 @@ fn decode_component(
             columns: json_strings(&config["columns"]),
             item_types: decode_item_types(&config["item_types"]),
             field_html: decode_field_html(&config),
+            requires,
             html,
         }),
         "chart" => Ok(RuntimeComponent::Chart {
@@ -525,24 +542,28 @@ fn decode_component(
             chart_type: json_str(&config, "chart_type"),
             x: json_str(&config, "x"),
             y: json_str(&config, "y"),
+            requires,
             html,
         }),
-        "text" => Ok(RuntimeComponent::Text { text: json_str(&config, "text"), html }),
+        "text" => Ok(RuntimeComponent::Text { text: json_str(&config, "text"), requires, html }),
         "link" => Ok(RuntimeComponent::Link {
             label: json_str(&config, "label"),
             target_page: json_str(&config, "target_page"),
+            requires,
             html,
         }),
         "region" => Ok(RuntimeComponent::Region {
             label: json_str(&config, "label"),
             query: json_str(&config, "query"),
             columns: json_strings(&config["columns"]),
+            requires,
             html,
         }),
         "action" => Ok(RuntimeComponent::Action {
             label: json_str(&config, "label"),
             name: json_str(&config, "name"),
             config: config.get("config").cloned().unwrap_or(serde_json::json!({})),
+            requires,
             html,
         }),
         "button" => {
@@ -556,7 +577,7 @@ fn decode_component(
                     extra_params: decode_extra_params(config.get("extra_params")),
                 },
             };
-            Ok(RuntimeComponent::Button { label: json_str(&config, "label"), behavior, html })
+            Ok(RuntimeComponent::Button { label: json_str(&config, "label"), behavior, requires, html })
         }
         "dynamic_action" => Ok(RuntimeComponent::DynamicAction { config }),
         other => anyhow::bail!("unknown component kind '{other}' in pgapp_meta.components"),

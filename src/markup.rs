@@ -6,10 +6,15 @@
 //! file      := app | fragment
 //! fragment  := (entity | page | query)*     (see src/source.rs: directory-based apps)
 //!
-//! app       := "app" String "{" (appprop | auth | nav | header | footer | entity | page | query)* "}"
+//! app       := "app" String "{" (appprop | auth | nav | header | footer | entity | page | query | auth_scheme)* "}"
 //!
 //! appprop   := ("theme" | "icons" | "chart_lib") ":" Ident
 //! auth      := "auth" "{" "}"
+//! auth_scheme := "auth_scheme" String "{" "roles" ":" identlist "}"
+//!             (a named, reusable role group — see `model::AuthScheme` —
+//!             referenced from any "requires:" by name instead of a
+//!             literal role; unrecognized names fall back to being
+//!             treated as a literal role, so this is purely additive)
 //!
 //! nav       := "nav" "{" navitem* "}"
 //! navitem   := "item" String ( "->" "page" Ident | "{" navitem* "}" )
@@ -32,7 +37,11 @@
 //!            | "set" Ident "to" String
 //!            | "refresh" Ident
 //!
-//! component := (report | form | editable_table | chart | text | link | region | action) htmlattrs?
+//! component := (report | form | editable_table | chart | text | link | region | action) compsuffix*
+//! compsuffix := "requires" ":" Ident | htmlattrs
+//!            (either order, either/both/neither present; "requires:"
+//!            here is a per-component role gate, same semantics as a
+//!            page's own — see `model::ComponentDef::set_requires`)
 //! htmlattrs := "attrs" "(" Ident ":" (String | Ident) ("," Ident ":" (String | Ident))* ")"
 //!            ("id"/"class" reserved; any other key -> a plain attribute,
 //!            its "_" rewritten to "-")
@@ -133,8 +142,8 @@
 use anyhow::{bail, Context, Result};
 
 use crate::model::{
-    AppDef, ButtonBehavior, ComponentDef, ComputedColumn, DaOp, EntityDef, FieldDef, FieldItem, FieldType,
-    FormatMask, HtmlAttrs, LinkColumn, NavItem, PageDef, PreAction, QueryDef, CHART_TYPES,
+    AppDef, AuthScheme, ButtonBehavior, ComponentDef, ComputedColumn, DaOp, EntityDef, FieldDef, FieldItem,
+    FieldType, FormatMask, HtmlAttrs, LinkColumn, NavItem, PageDef, PreAction, QueryDef, CHART_TYPES,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -335,6 +344,7 @@ impl Parser {
         let mut header = Vec::new();
         let mut footer = Vec::new();
         let mut queries = Vec::new();
+        let mut auth_schemes = Vec::new();
         while !self.at_symbol('}') {
             if self.at_keyword("entity") {
                 entities.push(self.parse_entity()?);
@@ -348,6 +358,8 @@ impl Parser {
                 footer = self.parse_component_block("footer")?;
             } else if self.at_keyword("query") {
                 queries.push(self.parse_query()?);
+            } else if self.at_keyword("auth_scheme") {
+                auth_schemes.push(self.parse_auth_scheme()?);
             } else if self.at_keyword("theme") {
                 theme = Some(self.parse_app_prop()?);
             } else if self.at_keyword("icons") {
@@ -362,7 +374,7 @@ impl Parser {
             } else {
                 bail!(
                     "expected 'entity', 'page', 'nav', 'header', 'footer', 'query', 'auth', \
-                     'theme', 'icons', or 'chart_lib', found {:?} (line {})",
+                     'auth_scheme', 'theme', 'icons', or 'chart_lib', found {:?} (line {})",
                     self.peek(),
                     self.cur_line()
                 );
@@ -382,7 +394,29 @@ impl Parser {
             header,
             footer,
             queries,
+            auth_schemes,
         })
+    }
+
+    /// Parses `"auth_scheme" String "{" "roles" ":" identlist "}"`.
+    fn parse_auth_scheme(&mut self) -> Result<AuthScheme> {
+        self.expect_keyword("auth_scheme")?;
+        let name = self.expect_string()?;
+        self.expect_symbol('{')?;
+        let mut roles = Vec::new();
+        while !self.at_symbol('}') {
+            let prop = self.expect_ident()?;
+            self.expect_symbol(':')?;
+            match prop.as_str() {
+                "roles" => roles = self.parse_ident_list()?,
+                other => bail!("unknown auth_scheme property '{other}' (line {})", self.cur_line()),
+            }
+        }
+        self.expect_symbol('}')?;
+        if roles.is_empty() {
+            bail!("auth_scheme '{name}' declares no roles");
+        }
+        Ok(AuthScheme { name, roles })
     }
 
     /// Parses `"query" Ident "{" "sql" ":" String "}"`.
@@ -572,9 +606,17 @@ impl Parser {
     /// support itself.
     fn parse_component(&mut self) -> Result<ComponentDef> {
         let mut def = self.parse_component_kind()?;
-        if self.at_keyword("attrs") {
-            self.advance()?;
-            def.set_html(self.parse_html_attrs()?);
+        loop {
+            if self.at_keyword("attrs") {
+                self.advance()?;
+                def.set_html(self.parse_html_attrs()?);
+            } else if self.at_keyword("requires") {
+                self.advance()?;
+                self.expect_symbol(':')?;
+                def.set_requires(Some(self.expect_ident()?));
+            } else {
+                break;
+            }
         }
         Ok(def)
     }
@@ -592,6 +634,7 @@ impl Parser {
             self.advance()?;
             Ok(ComponentDef::Text {
                 text: self.expect_string()?,
+                requires: None,
                 html: HtmlAttrs::default(),
             })
         } else if self.at_keyword("link") {
@@ -601,6 +644,7 @@ impl Parser {
             Ok(ComponentDef::Link {
                 label,
                 target_page,
+                requires: None,
                 html: HtmlAttrs::default(),
             })
         } else if self.at_keyword("region") {
@@ -629,6 +673,7 @@ impl Parser {
                 label,
                 query,
                 columns,
+                requires: None,
                 html: HtmlAttrs::default(),
             })
         } else if self.at_keyword("action") {
@@ -645,6 +690,7 @@ impl Parser {
                 label,
                 name,
                 config,
+                requires: None,
                 html: HtmlAttrs::default(),
             })
         } else if self.at_keyword("button") {
@@ -667,6 +713,7 @@ impl Parser {
             Ok(ComponentDef::Button {
                 label,
                 behavior,
+                requires: None,
                 html: HtmlAttrs::default(),
             })
         } else {
@@ -835,6 +882,7 @@ impl Parser {
             before_load,
             computed,
             formats,
+            requires: None,
             html: HtmlAttrs::default(),
         })
     }
@@ -909,6 +957,7 @@ impl Parser {
             fields,
             item_types,
             field_html,
+            requires: None,
             html: HtmlAttrs::default(),
         })
     }
@@ -949,6 +998,7 @@ impl Parser {
             columns,
             item_types,
             field_html,
+            requires: None,
             html: HtmlAttrs::default(),
         })
     }
@@ -992,6 +1042,7 @@ impl Parser {
             chart_type,
             x,
             y,
+            requires: None,
             html: HtmlAttrs::default(),
         })
     }
@@ -1267,7 +1318,7 @@ pub fn parse_fragment(src: &str) -> Result<Fragment> {
         } else {
             bail!(
                 "expected a top-level 'entity', 'page', or 'query' block (app settings, 'auth', \
-                 'nav', 'header', and 'footer' belong in the file with the `app` block), \
+                 'auth_scheme', 'nav', 'header', and 'footer' belong in the file with the `app` block), \
                  found {:?} (line {})",
                 parser.peek(),
                 parser.cur_line()
@@ -2076,5 +2127,71 @@ app "Demo" {
             formats.get("trip_start_date"),
             Some(&FormatMask::Date { pattern: "%m/%d/%Y".to_string() })
         );
+    }
+
+    #[test]
+    fn parses_component_level_requires_in_either_order_relative_to_attrs() {
+        let src = r#"
+            app "Demo" {
+                auth { }
+                entity "bills" { field id: id field amount: integer }
+                page "P" {
+                    button "Approve" calls noop requires: finance
+                    button "Reject" calls noop attrs (class: "x") requires: finance
+                    button "Escalate" calls noop requires: finance attrs (class: "y")
+                }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+        let page = &app.pages[0];
+        let requires_of = |i: usize| match &page.components[i] {
+            ComponentDef::Button { requires, .. } => requires.clone(),
+            _ => panic!("expected a button"),
+        };
+        assert_eq!(requires_of(0), Some("finance".to_string()));
+        assert_eq!(requires_of(1), Some("finance".to_string()));
+        assert_eq!(requires_of(2), Some("finance".to_string()));
+        match &page.components[2] {
+            ComponentDef::Button { html, .. } => assert_eq!(html.class.as_deref(), Some("y")),
+            _ => panic!("expected a button"),
+        }
+    }
+
+    #[test]
+    fn parses_an_auth_scheme_declaration() {
+        let src = r#"
+            app "Demo" {
+                auth { }
+                auth_scheme "can_approve" {
+                    roles: finance, manager
+                }
+                entity "bills" { field id: id }
+                page "P" {
+                    text "hi"
+                }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+        assert_eq!(app.auth_schemes.len(), 1);
+        assert_eq!(app.auth_schemes[0].name, "can_approve");
+        assert_eq!(app.auth_schemes[0].roles, vec!["finance".to_string(), "manager".to_string()]);
+    }
+
+    #[test]
+    fn rejects_an_auth_scheme_with_no_roles() {
+        let src = r#"
+            app "Demo" {
+                auth_scheme "empty" { }
+                entity "e" { field id: id }
+            }
+        "#;
+        let err = parse_app(src).unwrap_err().to_string();
+        assert!(err.contains("declares no roles"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn fragments_reject_a_top_level_auth_scheme() {
+        let err = parse_fragment(r#"auth_scheme "x" { roles: admin }"#).unwrap_err().to_string();
+        assert!(err.contains("auth_scheme"), "unexpected error: {err}");
     }
 }

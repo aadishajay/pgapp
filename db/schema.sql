@@ -25,19 +25,22 @@ alter table pgapp_meta.apps add column if not exists auth_enabled boolean not nu
 alter table pgapp_meta.apps add column if not exists data_schema text not null default 'pgapp_data';
 
 -- Authentication: one user store per app. Passwords are argon2 hashes
--- (never plaintext); role is a free-form string checked against a
--- page's required_role ('admin' passes every check). Users are managed
--- at runtime via the built-in /users admin page — never from markup,
--- which is why there's no sync phase for this table.
+-- (never plaintext); a user can hold multiple free-form role strings,
+-- checked against a page's/component's required role — any overlap
+-- passes, and 'admin' passes every check regardless of what else is
+-- required. Users are managed at runtime via the built-in /users admin
+-- page — never from markup, which is why there's no sync phase for
+-- this table.
 create table if not exists pgapp_meta.users (
     id            serial primary key,
     app_id        integer not null references pgapp_meta.apps(id) on delete cascade,
     username      text not null,
     password_hash text not null,
-    role          text not null default 'user',
     created_at    timestamptz not null default now(),
     unique (app_id, username)
 );
+alter table pgapp_meta.users drop column if exists role;
+alter table pgapp_meta.users add column if not exists roles text[] not null default '{user}';
 
 -- Server-side login sessions: the browser holds only the random token
 -- in an HttpOnly cookie; everything else lives here so sessions can be
@@ -173,6 +176,20 @@ create table if not exists pgapp_meta.named_queries (
 );
 create unique index if not exists named_queries_scope_name_idx
     on pgapp_meta.named_queries (app_id, coalesce(page_id, 0), name);
+
+-- Named, reusable role groups — declared as `auth_scheme "name" { roles:
+-- ... }` at app scope, referenced by name from any page's or
+-- component's `requires:` instead of spelling out one literal role
+-- (see model::AuthScheme, server::auth::authorize). Purely additive: a
+-- `requires:` name that doesn't match any scheme here is just treated
+-- as a literal role, same as before this table existed.
+create table if not exists pgapp_meta.auth_schemes (
+    id     serial primary key,
+    app_id integer not null references pgapp_meta.apps(id) on delete cascade,
+    name   text not null,
+    roles  text[] not null,
+    unique (app_id, name)
+);
 
 -- Saved report views: a named bookmark of one report's filter state
 -- (the r<idx>_q / r<idx>_col / r<idx>_val parameters, as a params

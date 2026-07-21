@@ -728,12 +728,50 @@ Opt in with an `auth { }` block:
   server-side rows in `pgapp_meta.sessions` (an HttpOnly, `SameSite=Lax`
   cookie holds only a random token — revoking a session means deleting
   its row).
-- A user has one `role` (free-form string). `requires: <role>` gates a
-  page (and its create/update/delete routes) to that role or admin.
+- A user holds any number of `roles` (free-form strings, comma-separated
+  on the Add-user form). `requires: <role>` gates a page (and its
+  create/update/delete routes) to a user holding that role, or admin.
 
 Without `auth { }`, an app stays fully public
 (`examples/todo.pgapp`); `examples/helpdesk.pgapp` runs behind a login
 with an admin-only Agents page.
+
+### Component-level `requires:` and named auth schemes
+
+`requires:` isn't only a page property — any component (`button`,
+`form`, `report`, `action`, ...) can carry its own trailing
+`requires: <role>`, same slot as `attrs (...)` and combinable with it,
+in either order:
+
+```text
+button "Approve" calls approve_bill requires: finance
+form "Edit rates" of rates { fields: rate } requires: finance attrs (class: "wide")
+```
+
+A component a user doesn't have the role for is simply left out of the
+page (same "just don't show it" precedent as a role-gated nav item) —
+and its own create/update/delete/run route independently re-checks the
+same role server-side, so hiding the button is never the only thing
+standing between an unauthorized user and the write.
+
+A `requires:` name can also be a reusable **auth scheme** — a named
+role group declared once at app scope:
+
+```text
+auth_scheme "can_approve" {
+  roles: finance, manager
+}
+```
+
+`requires: can_approve` then passes for anyone holding *either* role.
+This is resolved by name at check time: an app with no matching scheme
+just treats the name as a literal role, so introducing schemes is
+purely additive and never a breaking change to an existing
+`requires:`. This is the pgapp analog of an Oracle APEX Authorization
+Scheme (see "Migrating from Oracle APEX") — minus the PL/SQL-expression
+and SQL-query scheme types APEX also supports, and minus APEX's
+separate Access Control allow-list, neither of which pgapp apps have
+needed yet.
 
 ## Runtime JS
 
@@ -949,7 +987,8 @@ piece goes:
 | a page item (`P7_TRIP_ID`, etc.)                              | a `Form`/`EditableTable` field, or a cross-page query-string parameter        |
 | `dynamicAction ... (when { event }, action { action: ... })`  | `on <event> of <item> { show/hide/toggle/set/refresh }` (native APEX events beyond click/change aren't supported) |
 | shared LOV (`shared-components/lovs.apx`)                     | `query <name> { sql: "..." }` referenced inline from `item ... as popup from query <name>` — not a standalone reusable object yet |
-| `authentication`/`authorization` schemes                      | the app-level `auth { }` block (on/off; roles via `requires: <role>` on a page) — no separate scheme objects |
+| `authentication` scheme                                       | the app-level `auth { }` block (on/off) |
+| `authorization` scheme                                        | `requires: <role>` on a page or component, or a named, reusable `auth_scheme { roles: ... }` referenced by name (see "Component-level requires: and named auth schemes") — no PL/SQL-expression or SQL-query scheme types, no separate Access Control allow-list |
 | `process` (PL/SQL)                                            | a registered Rust action module (`src/actions.rs`) called from `before_load`, `action`, or a `button calls` |
 
 For each APEX page: create the matching pgapp `page`, then migrate its
@@ -1418,9 +1457,9 @@ required at all otherwise (`secret list`/`rm`, or an app with no
 - runtime.js is seeded once per app; picking up a newer built-in seed
   needs deleting the `pgapp_meta.app_runtime_js` row — no versioned
   upgrade story yet
-- Field-level authorization (page-level `requires:` exists, per-column
-  doesn't), plus password reset flows (today an admin deletes/recreates
-  the account)
+- Field-level authorization (page- and component-level `requires:`
+  exist, per-column doesn't), plus password reset flows (today an admin
+  deletes/recreates the account)
 - Login sessions have no `Secure` cookie attribute — fine for
   localhost, add it behind TLS
 - Item type config is always flat strings, even for numeric-looking
