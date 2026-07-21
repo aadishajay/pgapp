@@ -1,0 +1,321 @@
+/* pgapp theme: apex_universal
+ * Evokes Oracle APEX's "Universal Theme" (Theme 42, the "Vita" default
+ * color scheme that shipped with every APEX app for years before
+ * Redwood): white regions with a bold title underlined in APEX's
+ * signature blue, rectangular low-radius buttons (solid blue for
+ * primary, light gray for secondary), a plain white top nav bar with a
+ * thin bottom border, and a light-gray Interactive-Report-style table
+ * header. Not a pixel-exact reproduction (Universal Theme is a large,
+ * JavaScript-templated component library; this is a plain CSS file
+ * over the fixed `.pgapp-*` contract, same as every other theme here) —
+ * the goal is "recognizably Universal Theme," the same spirit as
+ * themes/plain and themes/vivid rather than themes/shadcn's literal
+ * design-system parity. No dark mode: Universal Theme predates
+ * APEX's Redwood-era dark mode support, so this theme doesn't attempt
+ * one either.
+ */
+
+:root {
+  --au-blue: #2c67c8;
+  --au-blue-dark: #1f4f9e;
+  --au-red: #c74634;
+  --au-border: #d9d9d9;
+  --au-bg: #fff;
+  --au-header-bg: #f7f7f7;
+  --au-text: #333;
+  --au-muted: #6f6f6f;
+  --au-radius: 3px;
+
+  /* Chart categorical palette (bar/pie/donut per-category fill, see
+     render.rs's `chart_slice_fill`) — the dataviz skill's validated
+     8-hue reference order (worst adjacent CVD ΔE 9.1, worst adjacent
+     normal-vision ΔE 19.6 in light mode; this theme has no dark mode). */
+  --chart-1: #2a78d6;
+  --chart-2: #008300;
+  --chart-3: #e87ba4;
+  --chart-4: #eda100;
+  --chart-5: #1baf7a;
+  --chart-6: #eb6834;
+  --chart-7: #4a3aa7;
+  --chart-8: #e34948;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 1.25rem 2rem;
+  color: var(--au-text);
+  background: var(--au-bg);
+}
+
+/* Top nav: a plain white bar with a thin bottom border, the app name
+   bold on the left — Universal Theme's default "Desktop" header
+   template, minus its JS-driven mega-menu. */
+.pgapp-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  row-gap: 0.35rem;
+  gap: 1.25rem;
+  margin: 0 -1.25rem 1.5rem;
+  padding: 0.85rem 1.25rem;
+  background: var(--au-header-bg);
+  border-bottom: 1px solid var(--au-border);
+}
+.pgapp-nav-collapse { display: flex; align-items: center; flex-wrap: wrap; row-gap: 0.35rem; gap: 1.25rem; flex: 1; }
+.pgapp-nav-toggle { display: none; border: none; background: transparent; cursor: pointer; font-size: 1.25rem; line-height: 1; padding: 0.1rem 0.35rem; color: var(--au-text); }
+.pgapp-link { color: var(--au-blue); text-decoration: none; }
+.pgapp-link:hover { text-decoration: underline; }
+.pgapp-title { margin: 1.5rem 0 1rem; font-size: 1.5rem; }
+.pgapp-subtitle {
+  margin: 1.75rem 0 0.9rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid var(--au-blue);
+}
+
+.pgapp-navbar { display: flex; flex-wrap: wrap; row-gap: 0.35rem; gap: 1.25rem; list-style: none; margin: 0; padding: 0; }
+.pgapp-navbar-item { position: relative; }
+.pgapp-navbar-label { color: var(--au-text); font-weight: 600; }
+.pgapp-navbar-submenu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 9rem;
+  margin: 0;
+  padding: 0.4rem 0;
+  list-style: none;
+  background: var(--au-bg);
+  border: 1px solid var(--au-border);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.12);
+  z-index: 20;
+}
+.pgapp-navbar-item.pgapp-open > .pgapp-navbar-submenu,
+.pgapp-navbar-item:hover > .pgapp-navbar-submenu,
+.pgapp-navbar-item:focus-within > .pgapp-navbar-submenu { display: block; }
+.pgapp-navbar-submenu .pgapp-navbar-item { display: block; }
+.pgapp-navbar-submenu .pgapp-link { display: block; padding: 0.4rem 0.9rem; color: var(--au-text); }
+.pgapp-navbar-submenu .pgapp-link:hover { background: var(--au-header-bg); text-decoration: none; }
+.pgapp-navbar-row { display: inline-flex; align-items: center; }
+.pgapp-navbar-toggle { border: none; background: transparent; cursor: pointer; padding: 0.2rem 0.35rem; font-size: 0.65rem; color: var(--au-muted); }
+
+.pgapp-nav-user { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; }
+.pgapp-nav-user .pgapp-inline-form { margin-left: 0; }
+.pgapp-nav-username { font-weight: 700; }
+
+.pgapp-items { margin-bottom: 1rem; }
+.pgapp-text { color: var(--au-muted); }
+
+.pgapp-table { border-collapse: collapse; width: 100%; margin-bottom: 1.5rem; font-size: 0.9rem; }
+.pgapp-table th, .pgapp-table td { border-bottom: 1px solid var(--au-border); padding: 0.5rem 0.7rem; text-align: left; }
+.pgapp-table th {
+  background: var(--au-header-bg);
+  color: var(--au-muted);
+  font-weight: 700;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.pgapp-table tbody tr:hover { background: #fafbfd; }
+
+.pgapp-form { display: block; }
+.pgapp-field { margin-bottom: 0.85rem; }
+.pgapp-label { display: block; font-weight: 700; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.02em; color: var(--au-muted); margin-bottom: 0.3rem; }
+.pgapp-input, .pgapp-select {
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--au-border);
+  border-radius: var(--au-radius);
+  font-size: 0.9rem;
+  color: var(--au-text);
+  background: var(--au-bg);
+}
+.pgapp-input:focus, .pgapp-select:focus { outline: 2px solid var(--au-blue); outline-offset: 1px; }
+
+/* Universal Theme's t-Button: rectangular, ~3px corners, a solid blue
+   "hot" button for primary actions and a light-gray outlined button
+   for everything else. */
+.pgapp-btn {
+  cursor: pointer;
+  padding: 0.45rem 1rem;
+  border-radius: var(--au-radius);
+  font-size: 0.85rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+.pgapp-btn-primary { background: var(--au-blue); border-color: var(--au-blue); color: #fff; }
+.pgapp-btn-primary:hover { background: var(--au-blue-dark); border-color: var(--au-blue-dark); }
+.pgapp-btn-destructive { background: #fff; border-color: var(--au-red); color: var(--au-red); }
+.pgapp-btn-destructive:hover { background: var(--au-red); color: #fff; }
+.pgapp-btn-secondary { background: #fff; border-color: var(--au-border); color: var(--au-text); }
+.pgapp-btn-secondary:hover { background: var(--au-header-bg); }
+
+.pgapp-inline-form { display: inline; margin-left: 0.5rem; }
+.pgapp-alert { padding: 0.6rem 0.8rem; margin-bottom: 1rem; border-radius: var(--au-radius); border-left: 4px solid; }
+.pgapp-alert-error { color: var(--au-red); background: #fdf1ef; border-left-color: var(--au-red); }
+.pgapp-list { list-style: none; padding: 0; }
+
+.pgapp-checkbox { width: 1.1rem; height: 1.1rem; accent-color: var(--au-blue); }
+.pgapp-readonly { display: inline-block; padding: 0.4rem 0.55rem; color: var(--au-muted); background: var(--au-header-bg); border-radius: var(--au-radius); }
+.pgapp-radio-group { display: flex; flex-direction: column; gap: 0.3rem; }
+.pgapp-radio-option { display: flex; align-items: center; gap: 0.35rem; font-weight: 400; }
+.pgapp-radio-option input { accent-color: var(--au-blue); }
+
+.pgapp-popup { display: inline-block; }
+.pgapp-popup-dialog { min-width: 15rem; padding: 0.6rem; border: 1px solid var(--au-border); border-radius: var(--au-radius); background: var(--au-bg); box-shadow: 0 4px 14px rgb(0 0 0 / 0.15); }
+.pgapp-popup-search { width: 100%; margin-bottom: 0.45rem; }
+.pgapp-popup-list { list-style: none; margin: 0 0 0.5rem; padding: 0; max-height: 14rem; overflow-y: auto; }
+.pgapp-popup-list button { width: 100%; text-align: left; padding: 0.35rem 0.5rem; border: none; background: transparent; cursor: pointer; border-radius: var(--au-radius); }
+.pgapp-popup-list button:hover { background: var(--au-header-bg); }
+.pgapp-popup-empty { padding: 0.35rem 0.5rem; color: var(--au-muted); font-style: italic; }
+
+.pgapp-slider { display: flex; align-items: center; gap: 0.5rem; }
+.pgapp-slider-input { flex: 1; accent-color: var(--au-blue); }
+.pgapp-slider-output { min-width: 2.5rem; text-align: right; color: var(--au-muted); }
+
+.pgapp-header, .pgapp-footer { font-size: 0.85rem; color: var(--au-muted); }
+.pgapp-header { margin: 0 -1.25rem 1rem; padding: 0.6rem 1.25rem; background: var(--au-header-bg); border-bottom: 1px solid var(--au-border); }
+.pgapp-brand { color: var(--au-text); font-size: 1.15rem; font-weight: 700; margin-right: 1.25rem; }
+.pgapp-footer { margin-top: 2rem; padding-top: 0.9rem; border-top: 1px solid var(--au-border); }
+.pgapp-header .pgapp-items, .pgapp-footer .pgapp-items { margin-bottom: 0; }
+
+.pgapp-region { margin: 0 0 1.25rem; padding: 1rem 1.1rem; background: var(--au-bg); border: 1px solid var(--au-border); border-radius: var(--au-radius); }
+.pgapp-region-title { margin: 0 0 0.75rem; font-size: 0.95rem; font-weight: 700; padding-bottom: 0.4rem; border-bottom: 2px solid var(--au-blue); }
+.pgapp-region .pgapp-table { margin-bottom: 0; }
+
+/* Components: Report, Form, EditableTable, Chart. */
+.pgapp-report, .pgapp-form-panel, .pgapp-editable-table { margin-bottom: 1.75rem; }
+.pgapp-report .pgapp-table, .pgapp-editable-table .pgapp-table { margin-bottom: 0.75rem; }
+
+.pgapp-row-actions { display: flex; align-items: center; gap: 0.5rem; white-space: nowrap; }
+.pgapp-row-actions .pgapp-inline-form { margin-left: 0; }
+.pgapp-icon { width: 1rem; height: 1rem; vertical-align: -0.15em; color: var(--au-muted); }
+
+.pgapp-pagination { display: flex; justify-content: space-between; gap: 0.75rem; }
+.pgapp-btn-disabled { opacity: 0.4; cursor: default; pointer-events: none; }
+
+/* EditableTable: each row (and the "add new" row) is its own <form>,
+   since a <form> can't wrap <tr>/<td> — laid out horizontally via flex
+   so it still reads as a table. */
+.pgapp-editable-row-wrap { display: flex; align-items: flex-end; gap: 0.5rem; margin-bottom: 0.5rem; }
+.pgapp-editable-row-wrap .pgapp-inline-form { margin-left: 0; }
+.pgapp-editable-row { display: flex; flex-direction: row; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem; }
+.pgapp-editable-row .pgapp-field { margin-bottom: 0; min-width: 7rem; }
+
+.pgapp-chart { margin: 0 0 1.25rem; padding: 1rem 1.1rem; background: var(--au-bg); border: 1px solid var(--au-border); border-radius: var(--au-radius); }
+.pgapp-chart-svg { width: 100%; height: auto; color: var(--au-blue); }
+.pgapp-chart canvas { max-width: 100%; }
+/* A donut's punched-out center — matches this theme's white background
+   rather than a separately hardcoded white, so the two can never drift
+   apart. */
+.pgapp-chart-donut-hole { fill: #fff; }
+
+/* Report toolbar, saved views, actions, notices */
+.pgapp-report-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-bottom: 0.7rem; padding: 0.5rem 0.6rem; background: var(--au-header-bg); border-radius: var(--au-radius); }
+.pgapp-report-views { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.85rem; }
+.pgapp-view-chip { display: inline-flex; align-items: center; gap: 0.2rem; border: 1px solid var(--au-border); border-radius: 999px; padding: 0.15rem 0.65rem; font-size: 0.8rem; }
+.pgapp-btn-viewdel { border: none; background: transparent; color: var(--au-red); font-weight: 700; cursor: pointer; }
+.pgapp-view-save { display: inline-flex; align-items: center; gap: 0.35rem; }
+.pgapp-view-public { font-size: 0.8rem; color: var(--au-muted); }
+.pgapp-action { display: inline-block; margin-bottom: 1rem; }
+.pgapp-alert-success { color: #1a7f37; background: #edf9f0; border-left-color: #1a7f37; }
+
+/* Report header ("+ New" trigger next to the title) and table scroll
+   wrapper (narrow viewports scroll the table instead of blowing out the
+   page layout). */
+.pgapp-report-header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
+.pgapp-report-header .pgapp-subtitle { margin: 0; border-bottom: none; padding-bottom: 0; }
+.pgapp-table-wrap { overflow-x: auto; }
+
+/* A Report's edit/create Form renders as a centered modal over the
+   report: a dimmed, full-viewport backdrop (.pgapp-modal-overlay) with
+   the form panel (.pgapp-form-floating) centered on top of it at 60% of
+   the viewport width. */
+.pgapp-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 0.5);
+  padding: 1rem;
+}
+.pgapp-form-floating {
+  position: relative;
+  width: 60vw;
+  max-width: 36rem;
+  max-height: calc(100vh - 4rem);
+  overflow-y: auto;
+  background: var(--au-bg);
+  border: 1px solid var(--au-border);
+  border-radius: var(--au-radius);
+  border-top: 3px solid var(--au-blue);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+  padding: 1.1rem 1.3rem;
+}
+.pgapp-form-floating-close {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.8rem;
+  font-size: 1.3rem;
+  line-height: 1;
+  color: var(--au-muted);
+  text-decoration: none;
+}
+.pgapp-form-floating-close:hover { color: var(--au-text); }
+
+/* Mobile: no per-app work required to get a usable narrow-viewport
+   layout — nav wraps, the report toolbar stacks, and the form modal
+   widens toward a near-full-width sheet instead of the fixed 60vw box
+   (still centered by .pgapp-modal-overlay's flex layout, just wider). */
+@media (max-width: 640px) {
+  body { padding: 0 0.85rem 1.5rem; }
+  .pgapp-nav { margin: 0 -0.85rem 1.25rem; padding: 0.7rem 0.85rem; flex-wrap: wrap; row-gap: 0.5rem; }
+  .pgapp-navbar { flex-wrap: wrap; row-gap: 0.35rem; }
+  .pgapp-nav-toggle { display: inline-flex; align-items: center; justify-content: center; }
+  .pgapp-nav-collapse {
+    display: none;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    flex-basis: 100%;
+    margin-top: 0.5rem;
+  }
+  .pgapp-nav.pgapp-nav-open .pgapp-nav-collapse { display: flex; }
+  .pgapp-nav-collapse .pgapp-nav-user { margin-left: 0; }
+  .pgapp-report-toolbar .pgapp-input[type="search"] { min-width: 0; flex: 1 1 100%; }
+  .pgapp-form-floating {
+    width: 100%;
+    max-width: none;
+    max-height: calc(100vh - 2rem);
+  }
+}
+
+/* Themed alert/confirm dialogs (runtime.js pgapp.alert/pgapp.confirm),
+   replacing the browser's native, unstyleable alert()/confirm(). */
+.pgapp-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 1rem;
+}
+.pgapp-dialog-box {
+  background: var(--au-bg);
+  border: 1px solid var(--au-border);
+  border-top: 3px solid var(--au-blue);
+  border-radius: var(--au-radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.2);
+  padding: 1.1rem 1.2rem;
+  max-width: 22rem;
+  width: 100%;
+}
+.pgapp-dialog-message { margin: 0 0 1rem; font-weight: 600; }
+.pgapp-dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }

@@ -853,7 +853,7 @@ async fn app_create(workspace_arg: Option<String>, slug_arg: Option<String>) -> 
 
     println!("Let's scaffold a new app in workspace '{}'.", ws.slug);
     let name = scaffold::prompt_required("App name")?;
-    let theme = scaffold::prompt("Theme (plain/shadcn/vivid/google_m3)", "shadcn")?;
+    let theme = scaffold::prompt("Theme (plain/shadcn/vivid/google_m3/apex_universal)", "shadcn")?;
     let as_dir = scaffold::prompt_yes_no("Scaffold as a directory of files instead of one?", false)?;
     let slug = match slug_arg {
         Some(s) => {

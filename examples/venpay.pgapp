@@ -26,7 +26,7 @@
 #   picker via `item ... as date`, same UX as Oracle's `datePicker`.
 
 app "VenPay" {
-  theme: shadcn
+  theme: apex_universal
 
   header {
     text "VenPay — vendor payment tracking, ported from an Oracle APEX export"

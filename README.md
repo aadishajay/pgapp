@@ -1132,7 +1132,11 @@ error.
 theme, used by `examples/helpdesk.pgapp`), `google_m3` (Material
 Design 3 — tonal surfaces, pill buttons, 4px field radius, 28px dialog
 corners; selected as `google_m3` since markup identifiers can't
-contain hyphens).
+contain hyphens), `apex_universal` (evokes Oracle APEX's classic
+Universal Theme / Theme 42: white regions, a bold title underlined in
+signature blue, rectangular low-radius buttons, a plain white top nav
+bar, and a light-gray Interactive Report-style table header — no dark
+mode, same as the original; used by `examples/venpay.pgapp`).
 
 To add another design system: `themes/<name>/theme.css` + `theme:
 <name>` — no Rust changes.

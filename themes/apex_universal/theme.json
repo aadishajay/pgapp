@@ -1,0 +1,4 @@
+{
+  "label": "APEX Universal",
+  "description": "Evokes Oracle APEX's classic Universal Theme (Theme 42, the \"Vita\" default): white regions, a bold title underlined in signature blue, rectangular low-radius buttons, a plain white top nav bar with a thin bottom border, and a light-gray Interactive-Report-style table header. No dark mode, same as the original. Same .pgapp-* contract as every other theme."
+}

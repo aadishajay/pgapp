@@ -117,7 +117,7 @@ async fn run_interactive(parsed: ParsedArgs) -> Result<()> {
     };
     let theme = match parsed.theme {
         Some(t) => t,
-        None => prompt("Theme (plain/shadcn/vivid/google_m3)", "shadcn")?,
+        None => prompt("Theme (plain/shadcn/vivid/google_m3/apex_universal)", "shadcn")?,
     };
     let as_dir = if parsed.as_dir {
         true
@@ -223,7 +223,8 @@ mode" section):
                   split-by-kind shape a real Oracle APEX application
                   export uses (see README's "One file, or a directory")
   --theme <name>  starting theme (default: shadcn) — see themes/ for
-                  what's shipped (plain, shadcn, vivid, google_m3)
+                  what's shipped (plain, shadcn, vivid, google_m3,
+                  apex_universal)
   --create, -i    force the interactive prompts even when an <AppName>
                   is also given on the command line
 
