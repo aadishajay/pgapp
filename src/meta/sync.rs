@@ -428,6 +428,7 @@ fn component_kind_name(c: &ComponentDef) -> &'static str {
         ComponentDef::Action { .. } => "action",
         ComponentDef::Button { .. } => "button",
         ComponentDef::DynamicAction { .. } => "dynamic_action",
+        ComponentDef::Calendar { .. } => "calendar",
     }
 }
 
@@ -449,7 +450,8 @@ fn component_html(c: &ComponentDef) -> &HtmlAttrs {
         | ComponentDef::Region { html, .. }
         | ComponentDef::DynamicContent { html, .. }
         | ComponentDef::Action { html, .. }
-        | ComponentDef::Button { html, .. } => html,
+        | ComponentDef::Button { html, .. }
+        | ComponentDef::Calendar { html, .. } => html,
         ComponentDef::DynamicAction { .. } => &EMPTY,
     }
 }
@@ -469,7 +471,8 @@ fn component_requires(c: &ComponentDef) -> Option<&str> {
         | ComponentDef::Region { requires, .. }
         | ComponentDef::DynamicContent { requires, .. }
         | ComponentDef::Action { requires, .. }
-        | ComponentDef::Button { requires, .. } => requires.as_deref(),
+        | ComponentDef::Button { requires, .. }
+        | ComponentDef::Calendar { requires, .. } => requires.as_deref(),
         ComponentDef::DynamicAction { .. } => None,
     }
 }
@@ -869,6 +872,56 @@ fn build_component_config(
                 ))
             }
         },
+        ComponentDef::Calendar {
+            title,
+            entity,
+            date_field,
+            title_field,
+            link_page,
+            ..
+        } => {
+            if !entity_ids.contains_key(entity) {
+                anyhow::bail!("{owner_label} calendar '{title}' references unknown entity '{entity}'");
+            }
+            let entity_def = app.entity(entity).expect("checked above");
+            if entity_def.source_query.is_some() {
+                anyhow::bail!(
+                    "{owner_label} calendar '{title}' binds to entity '{entity}', which is \
+                     query-backed and read-only — calendars need a real table"
+                );
+            }
+            if entity_def.source_collection.is_some() {
+                anyhow::bail!(
+                    "{owner_label} calendar '{title}' binds to entity '{entity}', which is \
+                     collection-backed and read-only — calendars need a real table"
+                );
+            }
+            if !entity_def.fields.iter().any(|f| &f.name == date_field) {
+                anyhow::bail!(
+                    "{owner_label} calendar '{title}' date field '{date_field}' is not a field of '{entity}'"
+                );
+            }
+            if !entity_def.fields.iter().any(|f| &f.name == title_field) {
+                anyhow::bail!(
+                    "{owner_label} calendar '{title}' title field '{title_field}' is not a field of '{entity}'"
+                );
+            }
+            if let Some(p) = link_page {
+                if !page_ids.contains_key(p) {
+                    anyhow::bail!("{owner_label} calendar '{title}' links to unknown page '{p}'");
+                }
+            }
+            Ok((
+                "calendar",
+                serde_json::json!({
+                    "title": title,
+                    "entity": entity,
+                    "date_field": date_field,
+                    "title_field": title_field,
+                    "link_page": link_page,
+                }),
+            ))
+        }
         ComponentDef::DynamicAction { event, item, ops } => {
             let ops_json: Vec<serde_json::Value> = ops.iter().map(|op| op.to_json()).collect();
             for op in ops {

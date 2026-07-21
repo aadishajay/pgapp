@@ -515,6 +515,27 @@ pub enum ComponentDef {
         item: String,
         ops: Vec<DaOp>,
     },
+    /// Oracle APEX's "Calendar" region: a month-grid view of one
+    /// entity's rows, one entry per row bucketed by `date_field` (cast
+    /// to `date`, so a `timestamp` field works too). `title_field`
+    /// names what's shown on each day's entry; `link_page`, when set,
+    /// makes each entry a link to that page forwarding the row's id
+    /// (mirroring `Report::link_column`, but with no extra params —
+    /// there's only ever one link target per calendar). Read-only, and
+    /// unlike `Report` neither paginated nor sourced from a query or
+    /// collection — always the entity's own data table. The rendered
+    /// month is picked by a `?cal<idx>=YYYY-MM` query parameter,
+    /// defaulting to the current month, with Prev/Next controls
+    /// stepping by one.
+    Calendar {
+        title: String,
+        entity: String,
+        date_field: String,
+        title_field: String,
+        link_page: Option<String>,
+        requires: Option<String>,
+        html: HtmlAttrs,
+    },
 }
 
 impl ComponentDef {
@@ -532,7 +553,8 @@ impl ComponentDef {
             | ComponentDef::Region { html, .. }
             | ComponentDef::DynamicContent { html, .. }
             | ComponentDef::Action { html, .. }
-            | ComponentDef::Button { html, .. } => *html = new_html,
+            | ComponentDef::Button { html, .. }
+            | ComponentDef::Calendar { html, .. } => *html = new_html,
             ComponentDef::DynamicAction { .. } => {}
         }
     }
@@ -553,7 +575,8 @@ impl ComponentDef {
             | ComponentDef::Region { requires, .. }
             | ComponentDef::DynamicContent { requires, .. }
             | ComponentDef::Action { requires, .. }
-            | ComponentDef::Button { requires, .. } => *requires = new_requires,
+            | ComponentDef::Button { requires, .. }
+            | ComponentDef::Calendar { requires, .. } => *requires = new_requires,
             ComponentDef::DynamicAction { .. } => {}
         }
     }

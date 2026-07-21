@@ -588,6 +588,15 @@ fn decode_component(
             Ok(RuntimeComponent::Button { label: json_str(&config, "label"), behavior, requires, html })
         }
         "dynamic_action" => Ok(RuntimeComponent::DynamicAction { config }),
+        "calendar" => Ok(RuntimeComponent::Calendar {
+            title: json_str(&config, "title"),
+            entity: resolve_entity(entities, &json_str(&config, "entity"))?,
+            date_field: json_str(&config, "date_field"),
+            title_field: json_str(&config, "title_field"),
+            link_page: config.get("link_page").and_then(|v| v.as_str()).map(String::from),
+            requires,
+            html,
+        }),
         other => anyhow::bail!("unknown component kind '{other}' in pgapp_meta.components"),
     }
 }

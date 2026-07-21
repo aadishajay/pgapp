@@ -58,6 +58,12 @@
 //!            action module's returned string, rendered once per page
 //!            load as trusted HTML — see model::ComponentDef::DynamicContent)
 //!
+//! calendar  := "calendar" String "of" Ident "{" calprop* "}"
+//! calprop   := "date" ":" Ident | "title" ":" Ident | "link" ":" "page" Ident
+//!            (Oracle APEX's Calendar region: a month-grid view of one
+//!            entity's rows bucketed by "date" — see
+//!            model::ComponentDef::Calendar)
+//!
 //! action    := "action" String "calls" Ident itemconfig?
 //!
 //! button    := "button" String ( "->" "page" Ident ( "(" paramlist ")" )?
@@ -725,6 +731,8 @@ impl Parser {
                 requires: None,
                 html: HtmlAttrs::default(),
             })
+        } else if self.at_keyword("calendar") {
+            self.parse_calendar()
         } else if self.at_keyword("button") {
             self.advance()?;
             let label = self.expect_string()?;
@@ -751,7 +759,7 @@ impl Parser {
         } else {
             bail!(
                 "expected a component ('report', 'form', 'editable_table', 'chart', 'text', \
-                 'link', 'region', 'dynamic_content', 'action', or 'button'), found {:?} (line {})",
+                 'link', 'region', 'dynamic_content', 'action', 'button', or 'calendar'), found {:?} (line {})",
                 self.peek(),
                 self.cur_line()
             );
@@ -931,6 +939,50 @@ impl Parser {
             computed,
             formats,
             display,
+            requires: None,
+            html: HtmlAttrs::default(),
+        })
+    }
+
+    /// `"calendar" String "of" Ident "{" ("date" ":" Ident | "title" ":" Ident
+    /// | "link" ":" "page" Ident)* "}"` — Oracle APEX's Calendar region
+    /// (see `model::ComponentDef::Calendar`).
+    fn parse_calendar(&mut self) -> Result<ComponentDef> {
+        self.expect_keyword("calendar")?;
+        let title = self.expect_string()?;
+        self.expect_keyword("of")?;
+        let entity = self.expect_ident()?;
+        self.expect_symbol('{')?;
+
+        let mut date_field = None;
+        let mut title_field = None;
+        let mut link_page = None;
+        while !self.at_symbol('}') {
+            let prop = self.expect_ident()?;
+            self.expect_symbol(':')?;
+            match prop.as_str() {
+                "date" => date_field = Some(self.expect_ident()?),
+                "title" => title_field = Some(self.expect_ident()?),
+                "link" => {
+                    self.expect_keyword("page")?;
+                    link_page = Some(self.expect_ident()?);
+                }
+                other => bail!("unknown calendar property '{other}' (line {})", self.cur_line()),
+            }
+        }
+        self.expect_symbol('}')?;
+
+        let date_field = date_field
+            .ok_or_else(|| anyhow::anyhow!("calendar '{title}' is missing required 'date:' property"))?;
+        let title_field = title_field
+            .ok_or_else(|| anyhow::anyhow!("calendar '{title}' is missing required 'title:' property"))?;
+
+        Ok(ComponentDef::Calendar {
+            title,
+            entity,
+            date_field,
+            title_field,
+            link_page,
             requires: None,
             html: HtmlAttrs::default(),
         })

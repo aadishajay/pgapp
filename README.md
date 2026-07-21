@@ -346,6 +346,16 @@ fixed "page kind." Eleven kinds:
   action registry at sync time, same as `action` below; a module that
   fails at runtime shows its error inline instead of failing the whole
   page (same soft-fail precedent as `Report::before_load`).
+- **`calendar "Title" of <entity> { date: <field> title: <field> [link: page <Name>] }`**
+  — Oracle APEX's Calendar region: a month grid, one entry per row of
+  `<entity>` bucketed by `date` (cast to `date`, so a `timestamp` field
+  works too); `title` names the field shown on each entry; `link:`, if
+  given, makes each entry a link to that page forwarding the row's id.
+  Read-only, unpaginated (a month only ever has 28-31 cells), and always
+  sourced from the entity's own data table — no `source: query` or
+  collection-backed entities, same restriction as `Form`/`EditableTable`.
+  Prev/Next controls step a `?cal<n>=YYYY-MM` query parameter one month
+  at a time, defaulting to the current month when absent.
 - **`action "Label" calls <module> (config...)`** — a button running a
   server-side action module; see "Server-side actions".
 - **`button "Label" -> page <Name> (extra: param, ...)`** or **`button
@@ -1132,6 +1142,7 @@ piece goes:
 | `region ... (type: interactiveReport, source { tableName })`  | `report "Title" of <entity> { columns: ... }`                                |
 | `region ... (type: staticContent)` / a plain query region     | `region "Label" from query <name> { columns: ... }`                          |
 | `region ... (type: cards)` / `region ... (type: list)`        | `report "Title" of <entity> { display: cards }` / `{ display: list }` — a display mode on the same `report`, not a separate region kind |
+| `region ... (type: calendar)`                                  | `calendar "Title" of <entity> { date: <field> title: <field> }` |
 | a region's `column NAME (heading, layout, appearance, ...)`   | one name in `columns:`, plus `format <column>: <mask>` for display formatting (see "Computed columns & format masks") — no per-column heading override yet (see "App Builder" for what's GUI-editable today) |
 | a column's "Derived Column"/computation                       | `computed <name>: "<sql>"` on the report (see "Computed columns & format masks") |
 | `region`'s `link { target: { page, items } }`                 | a report's `link: <field> -> page <Name> (extra: param, ...)`               |

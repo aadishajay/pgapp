@@ -9,6 +9,7 @@
 pub mod actions;
 pub mod chart_lib;
 pub mod control;
+pub mod dateutil;
 pub mod instance;
 pub mod html;
 pub mod icons;

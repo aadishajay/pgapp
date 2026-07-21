@@ -203,6 +203,16 @@ pub enum RuntimeComponent {
     DynamicAction {
         config: serde_json::Value,
     },
+    /// Oracle APEX's Calendar region — see `model::ComponentDef::Calendar`.
+    Calendar {
+        title: String,
+        entity: RuntimeEntity,
+        date_field: String,
+        title_field: String,
+        link_page: Option<String>,
+        requires: Option<String>,
+        html: HtmlAttrs,
+    },
 }
 
 impl RuntimeComponent {
@@ -225,6 +235,7 @@ impl RuntimeComponent {
             RuntimeComponent::Action { .. } => "action",
             RuntimeComponent::Button { .. } => "button",
             RuntimeComponent::DynamicAction { .. } => "dynamic_action",
+            RuntimeComponent::Calendar { .. } => "calendar",
         }
     }
 
@@ -357,6 +368,24 @@ impl RuntimeComponent {
                 "html": html_attrs_json(html),
             }),
             RuntimeComponent::DynamicAction { config } => config.clone(),
+            RuntimeComponent::Calendar {
+                title,
+                entity,
+                date_field,
+                title_field,
+                link_page,
+                requires,
+                html,
+            } => serde_json::json!({
+                "title": title,
+                "entity": entity.name,
+                "entity_fields": entity_fields_json(entity),
+                "date_field": date_field,
+                "title_field": title_field,
+                "link_page": link_page,
+                "requires": requires,
+                "html": html_attrs_json(html),
+            }),
         }
     }
 }

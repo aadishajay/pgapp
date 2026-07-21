@@ -345,7 +345,8 @@ fn component_requires(component: &RuntimeComponent) -> Option<&str> {
         | RuntimeComponent::Region { requires, .. }
         | RuntimeComponent::DynamicContent { requires, .. }
         | RuntimeComponent::Action { requires, .. }
-        | RuntimeComponent::Button { requires, .. } => requires.as_deref(),
+        | RuntimeComponent::Button { requires, .. }
+        | RuntimeComponent::Calendar { requires, .. } => requires.as_deref(),
         RuntimeComponent::DynamicAction { .. } => None,
     }
 }
@@ -668,6 +669,56 @@ async fn fetch_report_rows(
     Ok(ReportPage { rows, has_prev, has_next })
 }
 
+/// Parses a `?cal<idx>=YYYY-MM` query param into `(year, month)`;
+/// `None` on anything malformed, so the caller falls back to today's
+/// month rather than erroring the whole page over a hand-edited URL.
+fn parse_year_month(s: &str) -> Option<(i32, u32)> {
+    let (y, m) = s.split_once('-')?;
+    let year: i32 = y.parse().ok()?;
+    let month: u32 = m.parse().ok()?;
+    if (1..=12).contains(&month) {
+        Some((year, month))
+    } else {
+        None
+    }
+}
+
+/// Every row of `entity` whose `date_field` (cast to `date`) falls in
+/// `year`/`month`, as `(day-of-month, id, title_field's value)` —
+/// `Calendar`'s whole-month fetch, deliberately unpaginated and with no
+/// query/collection-backed sourcing (see the entity checks in
+/// `meta::sync::build_component_config`'s `Calendar` arm): a month grid
+/// only ever has 28-31 cells, so there's no page to turn within it.
+async fn fetch_calendar_entries(
+    pool: &PgPool,
+    data_schema: &str,
+    entity: &RuntimeEntity,
+    date_field: &str,
+    title_field: &str,
+    year: i32,
+    month: u32,
+) -> anyhow::Result<Vec<(u32, String, String)>> {
+    let (next_y, next_m) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
+    let start = format!("{year:04}-{month:02}-01");
+    let end = format!("{next_y:04}-{next_m:02}-01");
+    let sql = format!(
+        "select id::text as id, extract(day from ({date_field})::date)::int as day, ({title_field})::text as title \
+         from {data_schema}.{table} \
+         where ({date_field})::date >= $1::date and ({date_field})::date < $2::date \
+         order by ({date_field})::date asc, id asc",
+        table = entity.table_name
+    );
+    let db_rows = sqlx::query(&sql).bind(&start).bind(&end).fetch_all(pool).await?;
+    let mut out = Vec::with_capacity(db_rows.len());
+    for row in &db_rows {
+        let id: Option<String> = row.try_get("id")?;
+        let day: Option<i32> = row.try_get("day")?;
+        let entry_title: Option<String> = row.try_get("title")?;
+        out.push((day.unwrap_or(0).max(0) as u32, id.unwrap_or_default(), entry_title.unwrap_or_default()));
+    }
+    Ok(out)
+}
+
 /// Builds (column names, value expressions, bind values) for a Form's
 /// or EditableTable's writable fields. Empty, non-required values
 /// become SQL `NULL` literals directly (an empty string can't be cast
@@ -939,6 +990,29 @@ async fn render_component(
             let ctx = bind_context(query, None);
             let rows = run_named_query_rows(&state.pool, &data.app.data_schema, rq, &ctx).await?;
             Ok(render::chart_html(title, chart_type, x, y, &rows, &data.chart_lib, html))
+        }
+
+        RuntimeComponent::Calendar {
+            title,
+            entity,
+            date_field,
+            title_field,
+            link_page,
+            html,
+            ..
+        } => {
+            let param = format!("cal{idx}");
+            let (year, month) = query
+                .get(&param)
+                .and_then(|s| parse_year_month(s))
+                .unwrap_or_else(|| {
+                    let (y, m, _d) = crate::dateutil::today_ymd();
+                    (y, m)
+                });
+            let entries =
+                fetch_calendar_entries(&state.pool, &data.app.data_schema, entity, date_field, title_field, year, month)
+                    .await?;
+            Ok(render::calendar_html(app, page_name, idx, title, year, month, &entries, link_page.as_deref(), html))
         }
 
         RuntimeComponent::Report {

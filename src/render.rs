@@ -192,6 +192,82 @@ pub fn dynamic_content_html(label: &str, content: &str, html: &HtmlAttrs) -> Str
     )
 }
 
+const CALENDAR_MONTH_NAMES: [&str; 12] = [
+    "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November",
+    "December",
+];
+const CALENDAR_WEEKDAY_LABELS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/// Oracle APEX's Calendar region: a month grid for `year`/`month`, one
+/// cell per day, entries (`(day, id, title)`) bucketed under their
+/// day. `link_page`, when set, makes each entry a link to that page
+/// forwarding the row's id (mirroring a report's `link_column`); `nil`
+/// renders each entry as plain text instead. Prev/Next controls step
+/// the `cal<idx>` query param by one month — see server.rs's Calendar
+/// dispatch for how `year`/`month` are resolved (from that param, or
+/// today's date when absent).
+#[allow(clippy::too_many_arguments)]
+pub fn calendar_html(
+    app: &str,
+    page_name: &str,
+    idx: usize,
+    title: &str,
+    year: i32,
+    month: u32,
+    entries: &[(u32, String, String)],
+    link_page: Option<&str>,
+    html: &HtmlAttrs,
+) -> String {
+    let param = format!("cal{idx}");
+    let (prev_y, prev_m) = if month == 1 { (year - 1, 12) } else { (year, month - 1) };
+    let (next_y, next_m) = if month == 12 { (year + 1, 1) } else { (year, month + 1) };
+
+    let mut body = format!(
+        r#"<div class="{class}"{extra}><div class="pgapp-calendar-header"><a class="pgapp-link pgapp-btn pgapp-btn-secondary" href="/{app}/{page_name}?{param}={prev_y:04}-{prev_m:02}#pgapp-c{idx}">&larr;</a><h2 class="pgapp-subtitle">{title} &mdash; {month_name} {year}</h2><a class="pgapp-link pgapp-btn pgapp-btn-secondary" href="/{app}/{page_name}?{param}={next_y:04}-{next_m:02}#pgapp-c{idx}">&rarr;</a></div>"#,
+        class = merged_class("pgapp-calendar", html),
+        extra = extra_attrs(html),
+        title = escape(title),
+        month_name = CALENDAR_MONTH_NAMES[(month - 1) as usize],
+    );
+
+    body.push_str(r#"<div class="pgapp-calendar-grid">"#);
+    for label in CALENDAR_WEEKDAY_LABELS {
+        body.push_str(&format!(r#"<div class="pgapp-calendar-daylabel">{label}</div>"#));
+    }
+
+    let first_weekday = crate::dateutil::weekday(year, month, 1);
+    let days_in_month = crate::dateutil::days_in_month(year, month);
+
+    let mut by_day: BTreeMap<u32, Vec<(&str, &str)>> = BTreeMap::new();
+    for (day, id, entry_title) in entries {
+        by_day.entry(*day).or_default().push((id.as_str(), entry_title.as_str()));
+    }
+
+    for _ in 0..first_weekday {
+        body.push_str(r#"<div class="pgapp-calendar-day pgapp-calendar-day-outside"></div>"#);
+    }
+    for day in 1..=days_in_month {
+        body.push_str(r#"<div class="pgapp-calendar-day">"#);
+        body.push_str(&format!(r#"<span class="pgapp-calendar-daynum">{day}</span>"#));
+        if let Some(day_entries) = by_day.get(&day) {
+            for (id, entry_title) in day_entries {
+                match link_page {
+                    Some(target) => body.push_str(&format!(
+                        r#"<a class="pgapp-link pgapp-calendar-entry" href="/{app}/{target}?id={id}">{t}</a>"#,
+                        target = escape(target),
+                        id = url_encode(id),
+                        t = escape(entry_title),
+                    )),
+                    None => body.push_str(&format!(r#"<div class="pgapp-calendar-entry">{}</div>"#, escape(entry_title))),
+                }
+            }
+        }
+        body.push_str("</div>");
+    }
+    body.push_str("</div></div>");
+    body
+}
+
 /// Renders a header/footer chrome list — restricted at sync time to
 /// Text/Link/Region, so those are the only variants handled here.
 /// Chrome shows on every page regardless of that page's own `requires:`
