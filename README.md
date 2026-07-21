@@ -342,7 +342,13 @@ fixed "page kind." Eleven kinds:
   group (table display mode only); a report with `break_on` and no
   explicit column-header sort defaults to sorting by that column
   ascending, since the rows need to actually be grouped together for
-  the break to read as intended.
+  the break to read as intended. `highlight (when: "<sql bool expr>",
+  color: "<css color>")` (repeatable) adds Interactive Report's row
+  highlighting: `when` is a raw SQL boolean expression referencing
+  `t.<field>` (same trust level as a `computed` column), evaluated per
+  row; the first rule (in declared order) whose expression is true wins
+  and colors that row's background. Entity-backed reports only (same
+  restriction as `computed` columns).
 - **`form "Title" of <entity> { ... }`** — create/edit form. `fields`
   lists writable columns; `item <field> [as <kind> [(...)]] [attrs
   (...)]` picks a widget and/or sets `id`/`class`/attributes on that

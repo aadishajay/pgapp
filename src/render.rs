@@ -21,7 +21,7 @@ use crate::html::{escape, url_encode};
 use crate::icons::Icons;
 use crate::item_types::{self, RenderArgs};
 use crate::meta::{Chrome, LinkColumn, NavNode, RegionRows, RuntimeComponent, RuntimeEntity};
-use crate::model::{AggregateFn, FieldItem, FormatMask, HtmlAttrs};
+use crate::model::{AggregateFn, FieldItem, FormatMask, HighlightRule, HtmlAttrs};
 use std::collections::{BTreeMap, HashMap};
 
 /// Extra `<link>`/`<script>` tags for user-supplied assets, if present —
@@ -1090,6 +1090,7 @@ pub fn report_html(
     aggregates: &HashMap<String, AggregateFn>,
     agg_values: &HashMap<String, Option<String>>,
     break_on: Option<&str>,
+    highlights: &[HighlightRule],
     display: &str,
     sort: Option<(&str, bool)>,
     html: &HtmlAttrs,
@@ -1296,11 +1297,27 @@ pub fn report_html(
                     }
                     None => false,
                 };
-                if break_on.is_some() && is_break_row {
-                    body.push_str(r#"<tr class="pgapp-break-row">"#);
+                // Interactive Report's row highlighting: first matching
+                // rule (in declared order) wins, checked via the hidden
+                // computed boolean column each rule was compiled into.
+                let highlight_color = highlights.iter().enumerate().find_map(|(i, h)| {
+                    let name = crate::model::highlight_hidden_name(i);
+                    if row.get(&name).and_then(|v| v.as_deref()) == Some("true") {
+                        Some(h.color.as_str())
+                    } else {
+                        None
+                    }
+                });
+                let class_attr = if break_on.is_some() && is_break_row {
+                    r#" class="pgapp-break-row""#.to_string()
                 } else {
-                    body.push_str("<tr>");
-                }
+                    String::new()
+                };
+                let style_attr = match highlight_color {
+                    Some(color) => format!(r#" style="background-color: {};""#, escape(color)),
+                    None => String::new(),
+                };
+                body.push_str(&format!("<tr{class_attr}{style_attr}>"));
                 let id = row.get("id").and_then(|v| v.as_deref()).unwrap_or("").to_string();
                 for col in columns {
                     if break_on == Some(col.as_str()) && !is_break_row {

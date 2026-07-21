@@ -100,6 +100,11 @@
 //!             (Interactive Report's Control Break — consecutive rows
 //!             sharing this column's value show it once; table display
 //!             mode only, see model::ComponentDef::Report::break_on)
+//!             | "highlight" "(" "when" ":" String "," "color" ":" String ")"
+//!             (Interactive Report's row highlight — `when` is a scalar
+//!             SQL boolean expression, entity-backed reports only, same
+//!             `t.<field>` convention as `computed`'s SQL; repeatable,
+//!             first matching rule per row wins — see model::HighlightRule)
 //!             | "display" ":" ("table" | "cards" | "list")
 //!             (default "table"; Oracle APEX's "Cards" region folded in
 //!             as a display mode — see model::REPORT_DISPLAY_MODES)
@@ -879,6 +884,7 @@ impl Parser {
         let mut formats = std::collections::HashMap::new();
         let mut aggregates = std::collections::HashMap::new();
         let mut break_on = None;
+        let mut highlights = Vec::new();
         let mut display = "table".to_string();
         while !self.at_symbol('}') {
             if self.at_keyword("computed") {
@@ -905,6 +911,22 @@ impl Parser {
                 let agg = crate::model::AggregateFn::parse(&kind)
                     .ok_or_else(|| anyhow::anyhow!("unknown aggregate '{kind}' on report '{title}' (line {})", self.cur_line()))?;
                 aggregates.insert(name, agg);
+                continue;
+            }
+            if self.at_keyword("highlight") {
+                self.advance()?;
+                let config = self.parse_item_config()?;
+                let when = config
+                    .get("when")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("highlight on report '{title}' is missing required 'when:' (line {})", self.cur_line()))?
+                    .to_string();
+                let color = config
+                    .get("color")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("highlight on report '{title}' is missing required 'color:' (line {})", self.cur_line()))?
+                    .to_string();
+                highlights.push(crate::model::HighlightRule { when, color });
                 continue;
             }
             let prop = self.expect_ident()?;
@@ -970,6 +992,7 @@ impl Parser {
             formats,
             aggregates,
             break_on,
+            highlights,
             display,
             requires: None,
             html: HtmlAttrs::default(),

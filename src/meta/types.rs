@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::model::{AggregateFn, ComputedColumn, FieldItem, FormatMask, HtmlAttrs, PreAction};
+use crate::model::{AggregateFn, ComputedColumn, FieldItem, FormatMask, HighlightRule, HtmlAttrs, PreAction};
 
 /// A named query, compiled at load time: `sql` already uses positional
 /// `$N::TYPE` parameters, and `bind_names[i]` is the bind context key
@@ -122,6 +122,9 @@ pub enum RuntimeComponent {
         /// Interactive Report's Control Break column — see
         /// `model::ComponentDef::Report::break_on`.
         break_on: Option<String>,
+        /// Interactive Report's row highlight rules — see
+        /// `model::HighlightRule`.
+        highlights: Vec<HighlightRule>,
         /// One of `model::REPORT_DISPLAY_MODES` — `"table"` (default),
         /// `"cards"`, or `"list"`.
         display: String,
@@ -288,6 +291,7 @@ impl RuntimeComponent {
                 formats,
                 aggregates,
                 break_on,
+                highlights,
                 display,
                 requires,
                 html,
@@ -308,6 +312,7 @@ impl RuntimeComponent {
                 "formats": formats_json(formats),
                 "aggregates": aggregates_json(aggregates),
                 "break_on": break_on,
+                "highlights": highlights.iter().map(|h| serde_json::json!({"when": h.when, "color": h.color})).collect::<Vec<_>>(),
                 "display": display,
                 "requires": requires,
                 "html": html_attrs_json(html),

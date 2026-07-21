@@ -625,6 +625,7 @@ fn build_component_config(
             formats,
             aggregates,
             break_on,
+            highlights,
             display,
             ..
         } => {
@@ -632,6 +633,12 @@ fn build_component_config(
                 anyhow::bail!("{owner_label} report '{title}' references unknown entity '{entity}'");
             }
             let entity_def = app.entity(entity).expect("checked above");
+            if !highlights.is_empty() && (source_query.is_some() || entity_def.source_collection.is_some()) {
+                anyhow::bail!(
+                    "{owner_label} report '{title}' declares 'highlight' rules but its source isn't a plain \
+                     entity table — highlight rules only apply to entity-backed reports"
+                );
+            }
             if !computed.is_empty() && source_query.is_some() {
                 anyhow::bail!(
                     "{owner_label} report '{title}' declares 'computed' columns but also 'source: query \
@@ -702,6 +709,10 @@ fn build_component_config(
                 .iter()
                 .map(|(col, agg)| (col.clone(), serde_json::Value::String(agg.as_str().to_string())))
                 .collect();
+            let highlights_json: Vec<serde_json::Value> = highlights
+                .iter()
+                .map(|h| serde_json::json!({"when": h.when, "color": h.color}))
+                .collect();
             Ok((
                 "report",
                 serde_json::json!({
@@ -716,6 +727,7 @@ fn build_component_config(
                     "formats": formats_json,
                     "aggregates": aggregates_json,
                     "break_on": break_on,
+                    "highlights": highlights_json,
                     "display": display,
                 }),
             ))

@@ -340,6 +340,28 @@ impl AggregateFn {
     }
 }
 
+/// Interactive Report's row highlight: `when` is a scalar SQL boolean
+/// expression (same trust level and `t.<field>` row-reference
+/// convention as `ComputedColumn::sql` — the app author wrote it, not a
+/// user), `color` a CSS color value. Rules are checked in declared
+/// order; the first one whose `when` is true wins. Entity-backed
+/// reports only, same restriction as `ComputedColumn` (a query-backed
+/// report's rows already come from arbitrary SQL the app author
+/// controls directly).
+#[derive(Debug, Clone)]
+pub struct HighlightRule {
+    pub when: String,
+    pub color: String,
+}
+
+/// The alias a `HighlightRule` at index `i` gets spliced into a
+/// report's `SELECT` list under (see `server::fetch_report_rows`'s
+/// merged-computed-columns approach) — reserved, so it never collides
+/// with a real column or `ComputedColumn` name the app author picked.
+pub fn highlight_hidden_name(i: usize) -> String {
+    format!("__pgapp_hl_{i}")
+}
+
 /// Groups digits in `n` (rounded to `decimals` places) with `,` every
 /// three places left of the point — the shared core of `Currency`,
 /// `Number`, and `Percent`.
@@ -455,6 +477,10 @@ pub enum ComponentDef {
         /// column-header sort defaults to sorting by this column
         /// ascending (see `server::SortSpec`'s resolution).
         break_on: Option<String>,
+        /// Interactive Report's row highlight rules — see
+        /// `HighlightRule`. Entity-backed reports only, checked in
+        /// order, first match wins.
+        highlights: Vec<HighlightRule>,
         /// One of `REPORT_DISPLAY_MODES` — `"table"` (default),
         /// `"cards"`, or `"list"`.
         display: String,

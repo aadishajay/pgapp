@@ -1283,6 +1283,7 @@ async fn render_component(
             formats,
             aggregates,
             break_on,
+            highlights,
             display,
             html,
             ..
@@ -1328,6 +1329,22 @@ async fn render_component(
             // see `SortSpec`); keyset-paginated only in the plain,
             // unsorted entity-backed case.
             let effective_query = source_query.as_deref().or(entity.source_query.as_deref());
+
+            // Row highlight rules ride along as extra hidden computed
+            // columns (see `model::highlight_hidden_name`) — the entity-
+            // backed row-fetchers below already splice `computed` into
+            // their `SELECT` and the resulting row map, so this reuses
+            // that machinery instead of needing its own. Only entity-
+            // backed reports get highlights (validated at sync time),
+            // so this merged list is only ever used on that path.
+            let computed_with_highlights: Vec<ComputedColumn> = computed
+                .iter()
+                .cloned()
+                .chain(highlights.iter().enumerate().map(|(i, h)| ComputedColumn {
+                    name: crate::model::highlight_hidden_name(i),
+                    sql: h.when.clone(),
+                }))
+                .collect();
 
             let (rows, prev_href, next_href) = if let Some(qname) = effective_query {
                 let rq = page
@@ -1380,7 +1397,7 @@ async fn render_component(
                     &state.pool,
                     &data.app.data_schema,
                     entity,
-                    computed,
+                    &computed_with_highlights,
                     &filters,
                     columns,
                     s,
@@ -1394,9 +1411,18 @@ async fn render_component(
             } else {
                 let after = query.get(&p_after).map(|s| s.as_str());
                 let before = query.get(&p_before).map(|s| s.as_str());
-                let rp =
-                    fetch_report_rows(&state.pool, &data.app.data_schema, entity, computed, &filters, columns, *page_size, after, before)
-                        .await?;
+                let rp = fetch_report_rows(
+                    &state.pool,
+                    &data.app.data_schema,
+                    entity,
+                    &computed_with_highlights,
+                    &filters,
+                    columns,
+                    *page_size,
+                    after,
+                    before,
+                )
+                .await?;
                 let prev_href = rp.has_prev.then(|| {
                     let id = rp.rows.first().and_then(|r| r.get("id")).and_then(|v| v.clone()).unwrap_or_default();
                     format!("/{app}/{page_name}?{p_before}={}{filter_qs}", url_encode(&id))
@@ -1455,6 +1481,7 @@ async fn render_component(
                 aggregates,
                 &agg_values,
                 break_on.as_deref(),
+                highlights,
                 display,
                 sort_arg,
                 html,

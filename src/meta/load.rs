@@ -10,7 +10,7 @@ use super::types::{
     wrap_to_jsonb, ButtonBehavior, LinkColumn, NavNode, RuntimeApp, RuntimeComponent, RuntimeEntity,
     RuntimeField, RuntimePage, RuntimeQuery,
 };
-use crate::model::{AggregateFn, ComputedColumn, FieldItem, FieldType, FormatMask, HtmlAttrs, PreAction};
+use crate::model::{AggregateFn, ComputedColumn, FieldItem, FieldType, FormatMask, HighlightRule, HtmlAttrs, PreAction};
 
 /// One piece of a named query's SQL text, as split by `tokenize_binds`:
 /// either literal SQL or a `:name` bind marker.
@@ -472,6 +472,21 @@ fn decode_aggregates(config: &serde_json::Value) -> HashMap<String, AggregateFn>
         .collect()
 }
 
+fn decode_highlights(config: &serde_json::Value) -> Vec<HighlightRule> {
+    config
+        .get("highlights")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|h| {
+            Some(HighlightRule {
+                when: h.get("when")?.as_str()?.to_string(),
+                color: h.get("color")?.as_str()?.to_string(),
+            })
+        })
+        .collect()
+}
+
 fn decode_item_types(v: &serde_json::Value) -> HashMap<String, FieldItem> {
     v.as_object()
         .into_iter()
@@ -526,6 +541,7 @@ fn decode_component(
                 formats: decode_formats(&config),
                 aggregates: decode_aggregates(&config),
                 break_on: config.get("break_on").and_then(|v| v.as_str()).map(String::from),
+                highlights: decode_highlights(&config),
                 display: config.get("display").and_then(|v| v.as_str()).unwrap_or("table").to_string(),
                 requires,
                 html,
