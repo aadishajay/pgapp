@@ -20,8 +20,10 @@
 # - Money fields are `integer` (whole units), not `varchar2` — the
 #   original stored amounts as text; there's no reason to port that
 #   over here.
-# - Date fields are plain `text` (no native date-picker item type in
-#   this build yet) rather than Oracle's `date`/`datePicker`.
+# - Date fields are plain `text` storing "YYYY-MM-DD" (pgapp has no
+#   native date *column* type — see `FieldType`) rather than Oracle's
+#   `date` column type; the form fields below still get a native
+#   picker via `item ... as date`, same UX as Oracle's `datePicker`.
 
 app "VenPay" {
   theme: shadcn
@@ -180,6 +182,8 @@ app "VenPay" {
     form "Add / edit trip" of trips {
       fields: trip_id, trip_name, trip_type, trip_start_date, trip_end_date
       item trip_type as popup from query trip_types_lov
+      item trip_start_date as date
+      item trip_end_date as date
     }
   }
 
@@ -242,6 +246,7 @@ app "VenPay" {
       fields: payment_id, bill_key, amount, expense_category, payment_date, payment_reference_number, payment_status
       item bill_key as popup from query bill_keys_lov
       item payment_status as radio ("Pending", "Paid", "Rejected")
+      item payment_date as date
     }
     button "New Bill" -> page VendorBills
   }

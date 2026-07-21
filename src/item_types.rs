@@ -1,7 +1,8 @@
 //! Pluggable form-field components ("page item types" in APEX terms).
 //!
-//! Adding a new one — say a date picker — means adding one file here
-//! implementing [`ItemType`] and one line in [`registry`]. Nothing in
+//! Adding a new one means adding one file here implementing
+//! [`ItemType`] and one line in [`registry`] — `date.rs` is the
+//! smallest real example. Nothing in
 //! `markup.rs`, `meta.rs`, `server.rs`, or `render.rs` needs to change:
 //! they only ever go through the [`Registry`] by kind string, and a
 //! field's config is a generic `serde_json::Value` no component-specific
@@ -17,6 +18,7 @@ use std::collections::HashMap;
 use crate::model::FieldType;
 
 mod checkbox;
+mod date;
 mod popup;
 mod radio;
 mod readonly;
@@ -70,6 +72,7 @@ pub fn registry() -> Registry {
         Box::new(radio::Radio),
         Box::new(popup::Popup),
         Box::new(slider::Slider),
+        Box::new(date::DatePicker),
     ];
     components.into_iter().map(|c| (c.kind(), c)).collect()
 }

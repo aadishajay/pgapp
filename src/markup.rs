@@ -2194,4 +2194,32 @@ app "Demo" {
         let err = parse_fragment(r#"auth_scheme "x" { roles: admin }"#).unwrap_err().to_string();
         assert!(err.contains("auth_scheme"), "unexpected error: {err}");
     }
+
+    #[test]
+    fn parses_the_date_item_type_with_and_without_min_max_config() {
+        let src = r#"
+            app "Demo" {
+                entity "trips" { field id: id field start_date: text }
+                page "P" {
+                    form "Edit" of trips {
+                        fields: start_date
+                        item start_date as date (min: "2020-01-01", max: "2030-12-31")
+                    }
+                }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+        let item_types = app.pages[0]
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Form { item_types, .. } => Some(item_types),
+                _ => None,
+            })
+            .unwrap();
+        let item = item_types.get("start_date").unwrap();
+        assert_eq!(item.kind, "date");
+        assert_eq!(item.config["min"], "2020-01-01");
+        assert_eq!(item.config["max"], "2030-12-31");
+    }
 }

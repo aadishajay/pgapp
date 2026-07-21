@@ -613,13 +613,15 @@ checkbox.rs  default for boolean
 radio.rs     radio group over args.choices
 popup.rs     "Pop Up LOV": <dialog> + search filter + pgapp.setItem(...)
 slider.rs    <input type=range>, reads min/max/step from config
+date.rs      <input type=date> for a text field storing "YYYY-MM-DD";
+             optional min/max config bound the pickable range
 ```
 
-Adding one (say a date picker): write `src/item_types/date_picker.rs`,
-add one line to `registry()` — nothing else changes, since everything
-goes through the registry by kind string and a generic JSON config.
-Compile-time plugin point (rebuild + restart, not hot-loaded); a
-misspelled `kind` is caught at sync time.
+Adding one: write `src/item_types/<name>.rs`, add one line to
+`registry()` — nothing else changes, since everything goes through the
+registry by kind string and a generic JSON config; `date.rs` is the
+smallest real example. Compile-time plugin point (rebuild + restart,
+not hot-loaded); a misspelled `kind` is caught at sync time.
 
 `popup` renders every choice into the dialog up front; its search box
 (`pgapp.filterPopup`/`pgapp.openPopup` in `/runtime.js`) filters
