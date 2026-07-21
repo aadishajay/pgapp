@@ -302,6 +302,20 @@ window.pgapp = (function () {
     }
   }
 
+  // The rich_text item type's contenteditable <div> carries no `name`
+  // of its own; this keeps the preceding hidden input (the field that
+  // actually submits) in sync with the editor's current HTML on every
+  // edit — same "one real input, JS keeps it in sync" idiom as
+  // shuttle/checkbox_group/etc above. Server-side sanitization (see
+  // item_types::rich_text) is what makes it safe to persist and
+  // re-render this HTML rather than a pre-escaped copy of it.
+  function syncRichText(editorEl) {
+    var hidden = editorEl.previousElementSibling;
+    if (hidden && hidden.tagName === "INPUT") {
+      hidden.value = editorEl.innerHTML;
+    }
+  }
+
   // ---- App Builder: drag-and-drop row reordering ----
   //
   // A region/report table wrapped in a ".pgapp-draggable-rows" element
@@ -2486,6 +2500,7 @@ window.pgapp = (function () {
     addListManagerItem: addListManagerItem,
     removeListManagerItem: removeListManagerItem,
     shuttleMove: shuttleMove,
+    syncRichText: syncRichText,
     alert: pgappAlert,
     confirm: pgappConfirm,
   };

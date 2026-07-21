@@ -642,6 +642,9 @@ star_rating.rs     click-to-rate stars, optional max config (default 5)
 list_manager.rs    add/remove free-text list, comma-joined value
 shuttle.rs   dual <select multiple> with move buttons, comma-joined
              value in selected order
+rich_text.rs contenteditable + execCommand toolbar ("Rich Text Editor");
+             read_value runs submitted HTML through ammonia::clean
+             (allow-list sanitizer) before it's ever persisted
 ```
 
 Adding one: write `src/item_types/<name>.rs`, add one line to

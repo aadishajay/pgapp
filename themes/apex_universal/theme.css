@@ -340,3 +340,8 @@ body {
 .pgapp-shuttle { display: flex; align-items: center; gap: 0.5rem; }
 .pgapp-shuttle-list { flex: 1; min-width: 10rem; height: auto; }
 .pgapp-shuttle-controls { display: flex; flex-direction: column; gap: 0.3rem; }
+.pgapp-rich-text { border: 1px solid var(--au-border); border-radius: var(--au-radius); overflow: hidden; }
+.pgapp-rich-text-toolbar { display: flex; gap: 0.2rem; padding: 0.4rem; border-bottom: 1px solid var(--au-border); background: var(--au-header-bg); }
+.pgapp-rich-text-toolbar button { cursor: pointer; padding: 0.25rem 0.55rem; border: 1px solid var(--au-border); border-radius: var(--au-radius); background: var(--au-bg); color: var(--au-text); }
+.pgapp-rich-text-editor { min-height: 6rem; padding: 0.5rem 0.6rem; font-size: 0.9rem; color: var(--au-text); background: var(--au-bg); }
+.pgapp-rich-text-editor:focus { outline: none; }

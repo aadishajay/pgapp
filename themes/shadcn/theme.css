@@ -896,3 +896,8 @@ a.pgapp-link:has(.pgapp-icon):hover .pgapp-icon {
 .pgapp-shuttle { display: flex; align-items: center; gap: 0.5rem; }
 .pgapp-shuttle-list { flex: 1; min-width: 10rem; height: auto; }
 .pgapp-shuttle-controls { display: flex; flex-direction: column; gap: 0.3rem; }
+.pgapp-rich-text { border: 1px solid hsl(var(--input)); border-radius: var(--radius); overflow: hidden; }
+.pgapp-rich-text-toolbar { display: flex; gap: 0.2rem; padding: 0.4rem; border-bottom: 1px solid hsl(var(--input)); background: hsl(var(--muted)); }
+.pgapp-rich-text-toolbar button { cursor: pointer; padding: 0.25rem 0.55rem; border: 1px solid hsl(var(--input)); border-radius: calc(var(--radius) - 4px); background: hsl(var(--background)); color: hsl(var(--foreground)); }
+.pgapp-rich-text-editor { min-height: 6rem; padding: 0.6rem 0.75rem; font-size: 0.875rem; background: hsl(var(--background)); color: hsl(var(--foreground)); }
+.pgapp-rich-text-editor:focus { outline: none; }

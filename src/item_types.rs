@@ -26,6 +26,7 @@ mod password;
 mod popup;
 mod radio;
 mod readonly;
+mod rich_text;
 mod select;
 mod shuttle;
 mod slider;
@@ -93,6 +94,7 @@ pub fn registry() -> Registry {
         Box::new(star_rating::StarRating),
         Box::new(list_manager::ListManager),
         Box::new(shuttle::Shuttle),
+        Box::new(rich_text::RichText),
     ];
     components.into_iter().map(|c| (c.kind(), c)).collect()
 }

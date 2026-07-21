@@ -515,3 +515,8 @@ a.pgapp-link:hover .pgapp-icon { color: var(--v-fuchsia); }
 .pgapp-shuttle { display: flex; align-items: center; gap: 0.5rem; }
 .pgapp-shuttle-list { flex: 1; min-width: 10rem; height: auto; }
 .pgapp-shuttle-controls { display: flex; flex-direction: column; gap: 0.3rem; }
+.pgapp-rich-text { border: 1.5px solid var(--v-border); border-radius: 10px; overflow: hidden; }
+.pgapp-rich-text-toolbar { display: flex; gap: 0.25rem; padding: 0.45rem; border-bottom: 1.5px solid var(--v-border); background: rgb(0 0 0 / 0.03); }
+.pgapp-rich-text-toolbar button { cursor: pointer; padding: 0.25rem 0.6rem; border: 1.5px solid var(--v-border); border-radius: 7px; background: var(--v-surface); color: var(--v-ink); }
+.pgapp-rich-text-editor { min-height: 6rem; padding: 0.65rem 0.8rem; font-size: 0.9rem; background: var(--v-surface); color: var(--v-ink); }
+.pgapp-rich-text-editor:focus { outline: none; }

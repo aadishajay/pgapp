@@ -582,3 +582,8 @@ a.pgapp-link:hover .pgapp-icon { color: var(--m3-primary); }
 .pgapp-shuttle { display: flex; align-items: center; gap: 0.5rem; }
 .pgapp-shuttle-list { flex: 1; min-width: 10rem; height: auto; }
 .pgapp-shuttle-controls { display: flex; flex-direction: column; gap: 0.3rem; }
+.pgapp-rich-text { border: 1px solid var(--m3-outline); border-radius: var(--m3-radius-xs); overflow: hidden; }
+.pgapp-rich-text-toolbar { display: flex; gap: 0.25rem; padding: 0.5rem; border-bottom: 1px solid var(--m3-outline); background: var(--m3-surface-container); }
+.pgapp-rich-text-toolbar button { cursor: pointer; padding: 0.25rem 0.6rem; border: 1px solid var(--m3-outline); border-radius: var(--m3-radius-xs); background: var(--m3-surface-container-lowest); color: var(--m3-on-surface); }
+.pgapp-rich-text-editor { min-height: 6rem; padding: 0.65rem 0.85rem; font-size: 0.9rem; background: var(--m3-surface-container-lowest); color: var(--m3-on-surface); }
+.pgapp-rich-text-editor:focus { outline: none; }
