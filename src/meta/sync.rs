@@ -424,6 +424,7 @@ fn component_kind_name(c: &ComponentDef) -> &'static str {
         ComponentDef::Text { .. } => "text",
         ComponentDef::Link { .. } => "link",
         ComponentDef::Region { .. } => "region",
+        ComponentDef::DynamicContent { .. } => "dynamic_content",
         ComponentDef::Action { .. } => "action",
         ComponentDef::Button { .. } => "button",
         ComponentDef::DynamicAction { .. } => "dynamic_action",
@@ -446,6 +447,7 @@ fn component_html(c: &ComponentDef) -> &HtmlAttrs {
         | ComponentDef::Text { html, .. }
         | ComponentDef::Link { html, .. }
         | ComponentDef::Region { html, .. }
+        | ComponentDef::DynamicContent { html, .. }
         | ComponentDef::Action { html, .. }
         | ComponentDef::Button { html, .. } => html,
         ComponentDef::DynamicAction { .. } => &EMPTY,
@@ -465,6 +467,7 @@ fn component_requires(c: &ComponentDef) -> Option<&str> {
         | ComponentDef::Text { requires, .. }
         | ComponentDef::Link { requires, .. }
         | ComponentDef::Region { requires, .. }
+        | ComponentDef::DynamicContent { requires, .. }
         | ComponentDef::Action { requires, .. }
         | ComponentDef::Button { requires, .. } => requires.as_deref(),
         ComponentDef::DynamicAction { .. } => None,
@@ -814,6 +817,19 @@ fn build_component_config(
             }
             Ok((
                 "action",
+                serde_json::json!({ "label": label, "name": name, "config": config }),
+            ))
+        }
+        ComponentDef::DynamicContent { label, name, config, .. } => {
+            if !action_registry.contains_key(name.as_str()) {
+                let known: Vec<&str> = action_registry.keys().copied().collect();
+                anyhow::bail!(
+                    "{owner_label} dynamic_content '{label}' calls unknown module '{name}' (known: {})",
+                    known.join(", ")
+                );
+            }
+            Ok((
+                "dynamic_content",
                 serde_json::json!({ "label": label, "name": name, "config": config }),
             ))
         }

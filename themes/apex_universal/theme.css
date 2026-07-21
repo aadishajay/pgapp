@@ -200,7 +200,7 @@ body {
 .pgapp-footer { margin-top: 2rem; padding-top: 0.9rem; border-top: 1px solid var(--au-border); }
 .pgapp-header .pgapp-items, .pgapp-footer .pgapp-items { margin-bottom: 0; }
 
-.pgapp-region { margin: 0 0 1.25rem; padding: 1rem 1.1rem; background: var(--au-bg); border: 1px solid var(--au-border); border-radius: var(--au-radius); }
+.pgapp-region, .pgapp-dynamic-content { margin: 0 0 1.25rem; padding: 1rem 1.1rem; background: var(--au-bg); border: 1px solid var(--au-border); border-radius: var(--au-radius); }
 .pgapp-region-title { margin: 0 0 0.75rem; font-size: 0.95rem; font-weight: 700; padding-bottom: 0.4rem; border-bottom: 2px solid var(--au-blue); }
 .pgapp-region .pgapp-table { margin-bottom: 0; }
 

@@ -311,7 +311,7 @@ conflicts.
 ## Components
 
 A page's body is `Vec<ComponentDef>` (`src/model.rs`) — there's no
-fixed "page kind." Ten kinds:
+fixed "page kind." Eleven kinds:
 
 - **`report "Title" of <entity> { ... }`** — read-only, paginated
   table. `columns`; `source: query <name>` sources rows from a query
@@ -334,6 +334,13 @@ fixed "page kind." Ten kinds:
 - **`region "Label" from query <name> { columns: ... }`** — a query's
   rows as a plain, non-paginated table; `columns:` narrows/orders which
   result columns show (default: every column, alphabetically).
+- **`dynamic_content "Label" calls <module> (config...)`** — Oracle
+  APEX's "PL/SQL Dynamic Content" region: the named action module's
+  returned string, rendered once per page load as trusted HTML (not
+  escaped — the app author wrote the module). Validated against the
+  action registry at sync time, same as `action` below; a module that
+  fails at runtime shows its error inline instead of failing the whole
+  page (same soft-fail precedent as `Report::before_load`).
 - **`action "Label" calls <module> (config...)`** — a button running a
   server-side action module; see "Server-side actions".
 - **`button "Label" -> page <Name> (extra: param, ...)`** or **`button

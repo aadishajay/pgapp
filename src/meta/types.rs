@@ -169,6 +169,15 @@ pub enum RuntimeComponent {
         requires: Option<String>,
         html: HtmlAttrs,
     },
+    /// Oracle APEX's "PL/SQL Dynamic Content" region — see
+    /// `model::ComponentDef::DynamicContent`.
+    DynamicContent {
+        label: String,
+        name: String,
+        config: serde_json::Value,
+        requires: Option<String>,
+        html: HtmlAttrs,
+    },
     /// A button running a registered server-side action module.
     Action {
         label: String,
@@ -209,6 +218,7 @@ impl RuntimeComponent {
             RuntimeComponent::Text { .. } => "text",
             RuntimeComponent::Link { .. } => "link",
             RuntimeComponent::Region { .. } => "region",
+            RuntimeComponent::DynamicContent { .. } => "dynamic_content",
             RuntimeComponent::Action { .. } => "action",
             RuntimeComponent::Button { .. } => "button",
             RuntimeComponent::DynamicAction { .. } => "dynamic_action",
@@ -307,6 +317,13 @@ impl RuntimeComponent {
                 "label": label,
                 "query": query,
                 "columns": columns,
+                "requires": requires,
+                "html": html_attrs_json(html),
+            }),
+            RuntimeComponent::DynamicContent { label, name, config, requires, html } => serde_json::json!({
+                "label": label,
+                "name": name,
+                "config": config,
                 "requires": requires,
                 "html": html_attrs_json(html),
             }),

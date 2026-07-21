@@ -343,6 +343,7 @@ fn component_requires(component: &RuntimeComponent) -> Option<&str> {
         | RuntimeComponent::Text { requires, .. }
         | RuntimeComponent::Link { requires, .. }
         | RuntimeComponent::Region { requires, .. }
+        | RuntimeComponent::DynamicContent { requires, .. }
         | RuntimeComponent::Action { requires, .. }
         | RuntimeComponent::Button { requires, .. } => requires.as_deref(),
         RuntimeComponent::DynamicAction { .. } => None,
@@ -885,6 +886,35 @@ async fn render_component(
         RuntimeComponent::Link { label, target_page, html, .. } => Ok(render::link_html(app, label, target_page, html)),
         RuntimeComponent::Region { label, query: qname, columns, html, .. } => {
             Ok(render::region_html(label, qname, regions, columns, html))
+        }
+
+        // PL/SQL Dynamic Content: runs once per page load, server-side —
+        // unlike the ajax callback (DaOp::Call), which only runs on a
+        // client-side event. A failed module shows its error inline
+        // instead of failing the whole page, same soft-fail precedent as
+        // Report::before_load (run_before_load above).
+        RuntimeComponent::DynamicContent { label, name, config, html, .. } => {
+            let module = state.actions.get(name.as_str()).ok_or_else(|| {
+                anyhow::anyhow!("dynamic_content '{label}' calls unknown module '{name}' (not registered — rebuild?)")
+            })?;
+            let outcome = module
+                .run(ActionContext {
+                    pool: &state.pool,
+                    app: &data.app,
+                    page,
+                    config,
+                    values: query,
+                    caller_key,
+                })
+                .await;
+            let content = match outcome {
+                Ok(result) => result,
+                Err(e) => format!(
+                    r#"<div class="pgapp-alert pgapp-alert-error">{}</div>"#,
+                    crate::html::escape(&e.to_string())
+                ),
+            };
+            Ok(render::dynamic_content_html(label, &content, html))
         }
 
         // A dynamic action renders nothing in the body — show() gathers

@@ -140,7 +140,7 @@ body {
 .pgapp-footer { margin-top: 1.5rem; padding-top: 0.75rem; border-top: 1px solid #ddd; }
 .pgapp-header .pgapp-items, .pgapp-footer .pgapp-items { margin-bottom: 0; }
 
-.pgapp-region { margin: 0 0 1rem; padding: 0.75rem; border: 1px solid #ddd; }
+.pgapp-region, .pgapp-dynamic-content { margin: 0 0 1rem; padding: 0.75rem; border: 1px solid #ddd; }
 .pgapp-region-title { margin: 0 0 0.5rem; font-size: 1rem; }
 .pgapp-region .pgapp-table { margin-bottom: 0; }
 

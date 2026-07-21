@@ -139,6 +139,7 @@ async fn print_banner(bind_addr: &str, apps: &HashMap<String, Arc<server::AppEnt
                     meta::RuntimeComponent::Text { .. } => "text",
                     meta::RuntimeComponent::Link { .. } => "link",
                     meta::RuntimeComponent::Region { .. } => "region",
+                    meta::RuntimeComponent::DynamicContent { .. } => "dynamic_content",
                     meta::RuntimeComponent::Action { .. } => "action",
                     meta::RuntimeComponent::Button { .. } => "button",
                     meta::RuntimeComponent::DynamicAction { .. } => "dynamic_action",

@@ -437,7 +437,7 @@ a.pgapp-link:hover .pgapp-icon { color: var(--m3-primary); }
 .pgapp-editable-row .pgapp-field { margin-bottom: 0; min-width: 8rem; }
 .pgapp-editable-row .pgapp-btn { padding: 0.45rem 0.75rem; }
 
-.pgapp-region, .pgapp-chart {
+.pgapp-region, .pgapp-dynamic-content, .pgapp-chart {
   margin: 0 0 1.5rem;
   padding: 1.15rem 1.3rem;
   background: var(--m3-surface-container);

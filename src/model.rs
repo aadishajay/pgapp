@@ -451,6 +451,22 @@ pub enum ComponentDef {
         requires: Option<String>,
         html: HtmlAttrs,
     },
+    /// Oracle APEX's "PL/SQL Dynamic Content" region: its body is a
+    /// server-side action module's own returned string, rendered as
+    /// trusted HTML (not escaped, unlike `Text`) — the app author wrote
+    /// the module, so this is server-authored content, not user input.
+    /// Runs once per page load (server-side), unlike the ajax callback
+    /// (`DaOp::Call`), which runs on a client-side event with no
+    /// reload. A failed module shows its error inline instead of
+    /// failing the whole page (see `server::render_component`), same
+    /// soft-fail precedent as `Report::before_load`.
+    DynamicContent {
+        label: String,
+        name: String,
+        config: serde_json::Value,
+        requires: Option<String>,
+        html: HtmlAttrs,
+    },
     /// A button that runs a server-side action module — a Rust component
     /// registered in `src/actions.rs` (pgapp's PL/SQL analog). `config`
     /// is the module's own generic blob, same pattern as item types.
@@ -502,6 +518,7 @@ impl ComponentDef {
             | ComponentDef::Text { html, .. }
             | ComponentDef::Link { html, .. }
             | ComponentDef::Region { html, .. }
+            | ComponentDef::DynamicContent { html, .. }
             | ComponentDef::Action { html, .. }
             | ComponentDef::Button { html, .. } => *html = new_html,
             ComponentDef::DynamicAction { .. } => {}
@@ -522,6 +539,7 @@ impl ComponentDef {
             | ComponentDef::Text { requires, .. }
             | ComponentDef::Link { requires, .. }
             | ComponentDef::Region { requires, .. }
+            | ComponentDef::DynamicContent { requires, .. }
             | ComponentDef::Action { requires, .. }
             | ComponentDef::Button { requires, .. } => *requires = new_requires,
             ComponentDef::DynamicAction { .. } => {}

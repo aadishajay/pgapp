@@ -178,6 +178,20 @@ pub fn region_html(label: &str, query: &str, regions: &RegionRows, columns: &[St
     out
 }
 
+/// Oracle APEX's "PL/SQL Dynamic Content" region: `content` is a
+/// server-side action module's own returned string, rendered as
+/// trusted HTML rather than escaped text (see
+/// `model::ComponentDef::DynamicContent`'s doc) — the app author wrote
+/// the module, so this is server-authored content, not user input.
+pub fn dynamic_content_html(label: &str, content: &str, html: &HtmlAttrs) -> String {
+    format!(
+        r#"<div class="{class}"{extra}><h3 class="pgapp-region-title">{label}</h3>{content}</div>"#,
+        class = merged_class("pgapp-dynamic-content", html),
+        extra = extra_attrs(html),
+        label = escape(label),
+    )
+}
+
 /// Renders a header/footer chrome list — restricted at sync time to
 /// Text/Link/Region, so those are the only variants handled here.
 /// Chrome shows on every page regardless of that page's own `requires:`

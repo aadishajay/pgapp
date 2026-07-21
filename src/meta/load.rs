@@ -559,6 +559,13 @@ fn decode_component(
             requires,
             html,
         }),
+        "dynamic_content" => Ok(RuntimeComponent::DynamicContent {
+            label: json_str(&config, "label"),
+            name: json_str(&config, "name"),
+            config: config.get("config").cloned().unwrap_or(serde_json::json!({})),
+            requires,
+            html,
+        }),
         "action" => Ok(RuntimeComponent::Action {
             label: json_str(&config, "label"),
             name: json_str(&config, "name"),

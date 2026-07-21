@@ -456,7 +456,7 @@ body {
 }
 
 /* A region: a named query's rows rendered inline wherever it's placed. */
-.pgapp-region {
+.pgapp-region, .pgapp-dynamic-content {
   margin: 0 0 1.25rem;
   padding: 1rem;
   border: 1px solid hsl(var(--border));

@@ -385,7 +385,7 @@ a.pgapp-link:hover .pgapp-icon { color: var(--v-fuchsia); }
   border-radius: var(--v-radius);
   box-shadow: var(--v-shadow);
 }
-.pgapp-region { border-left: 5px solid var(--v-teal); }
+.pgapp-region, .pgapp-dynamic-content { border-left: 5px solid var(--v-teal); }
 .pgapp-chart { border-left: 5px solid var(--v-fuchsia); }
 .pgapp-region-title { margin: 0 0 0.75rem; font-size: 0.95rem; font-weight: 800; color: var(--v-ink); }
 .pgapp-region .pgapp-table { margin-bottom: 0; box-shadow: none; }

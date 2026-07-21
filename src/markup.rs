@@ -43,7 +43,8 @@
 //!            to refresh afterward — resolved client-side at dispatch
 //!            time, see runtime.js)
 //!
-//! component := (report | form | editable_table | chart | text | link | region | action) compsuffix*
+//! component := (report | form | editable_table | chart | text | link | region
+//!               | dynamic_content | action) compsuffix*
 //! compsuffix := "requires" ":" Ident | htmlattrs
 //!            (either order, either/both/neither present; "requires:"
 //!            here is a per-component role gate, same semantics as a
@@ -51,6 +52,11 @@
 //! htmlattrs := "attrs" "(" Ident ":" (String | Ident) ("," Ident ":" (String | Ident))* ")"
 //!            ("id"/"class" reserved; any other key -> a plain attribute,
 //!            its "_" rewritten to "-")
+//!
+//! dynamic_content := "dynamic_content" String "calls" Ident itemconfig?
+//!            (Oracle APEX's "PL/SQL Dynamic Content" region: the named
+//!            action module's returned string, rendered once per page
+//!            load as trusted HTML — see model::ComponentDef::DynamicContent)
 //!
 //! action    := "action" String "calls" Ident itemconfig?
 //!
@@ -682,6 +688,23 @@ impl Parser {
                 requires: None,
                 html: HtmlAttrs::default(),
             })
+        } else if self.at_keyword("dynamic_content") {
+            self.advance()?;
+            let label = self.expect_string()?;
+            self.expect_keyword("calls")?;
+            let name = self.expect_ident()?;
+            let config = if self.at_symbol('(') {
+                self.parse_item_config()?
+            } else {
+                serde_json::json!({})
+            };
+            Ok(ComponentDef::DynamicContent {
+                label,
+                name,
+                config,
+                requires: None,
+                html: HtmlAttrs::default(),
+            })
         } else if self.at_keyword("action") {
             self.advance()?;
             let label = self.expect_string()?;
@@ -725,7 +748,7 @@ impl Parser {
         } else {
             bail!(
                 "expected a component ('report', 'form', 'editable_table', 'chart', 'text', \
-                 'link', 'region', 'action', or 'button'), found {:?} (line {})",
+                 'link', 'region', 'dynamic_content', 'action', or 'button'), found {:?} (line {})",
                 self.peek(),
                 self.cur_line()
             );
