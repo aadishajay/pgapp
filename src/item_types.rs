@@ -18,12 +18,22 @@ use std::collections::HashMap;
 use crate::model::FieldType;
 
 mod checkbox;
+mod checkbox_group;
+mod color;
 mod date;
+mod list_manager;
+mod password;
 mod popup;
 mod radio;
 mod readonly;
+mod select;
+mod shuttle;
 mod slider;
+mod star_rating;
+mod switch;
 mod text;
+mod textarea;
+mod timestamp;
 
 /// Everything one item type needs to render its input. `choices` is the
 /// generic (value, label) list resolved from the field's config —
@@ -73,6 +83,16 @@ pub fn registry() -> Registry {
         Box::new(popup::Popup),
         Box::new(slider::Slider),
         Box::new(date::DatePicker),
+        Box::new(select::Select),
+        Box::new(switch::Switch),
+        Box::new(password::Password),
+        Box::new(color::ColorPicker),
+        Box::new(timestamp::TimestampPicker),
+        Box::new(textarea::Textarea),
+        Box::new(checkbox_group::CheckboxGroup),
+        Box::new(star_rating::StarRating),
+        Box::new(list_manager::ListManager),
+        Box::new(shuttle::Shuttle),
     ];
     components.into_iter().map(|c| (c.kind(), c)).collect()
 }

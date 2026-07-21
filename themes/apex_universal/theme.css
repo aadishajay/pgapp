@@ -164,6 +164,24 @@ body {
 .pgapp-radio-option { display: flex; align-items: center; gap: 0.35rem; font-weight: 400; }
 .pgapp-radio-option input { accent-color: var(--au-blue); }
 
+.pgapp-switch { display: inline-flex; align-items: center; cursor: pointer; }
+.pgapp-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.pgapp-switch-track { width: 2.4rem; height: 1.4rem; background: var(--au-border); border-radius: 999px; position: relative; transition: background 0.15s; }
+.pgapp-switch-track::before { content: ""; position: absolute; top: 0.15rem; left: 0.15rem; width: 1.1rem; height: 1.1rem; background: #fff; border-radius: 50%; transition: transform 0.15s; }
+.pgapp-switch input:checked + .pgapp-switch-track { background: var(--au-blue); }
+.pgapp-switch input:checked + .pgapp-switch-track::before { transform: translateX(1rem); }
+.pgapp-checkbox-group { display: flex; flex-direction: column; gap: 0.3rem; }
+.pgapp-checkbox-group-option { display: flex; align-items: center; gap: 0.35rem; font-weight: 400; }
+.pgapp-checkbox-group-option input { accent-color: var(--au-blue); }
+
+.pgapp-star-rating { display: inline-flex; }
+.pgapp-star { cursor: pointer; font-size: 1.4rem; color: var(--au-border); }
+.pgapp-star-on { color: var(--au-blue); }
+.pgapp-list-manager-items { list-style: none; margin: 0 0 0.4rem; padding: 0; }
+.pgapp-list-manager-items li { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.2rem 0; border-bottom: 1px solid var(--au-border); }
+.pgapp-list-manager-add { display: flex; gap: 0.4rem; }
+.pgapp-list-manager-add input { flex: 1; }
+
 .pgapp-popup { display: inline-block; }
 .pgapp-popup-dialog { min-width: 15rem; padding: 0.6rem; border: 1px solid var(--au-border); border-radius: var(--au-radius); background: var(--au-bg); box-shadow: 0 4px 14px rgb(0 0 0 / 0.15); }
 .pgapp-popup-search { width: 100%; margin-bottom: 0.45rem; }
@@ -319,3 +337,6 @@ body {
 }
 .pgapp-dialog-message { margin: 0 0 1rem; font-weight: 600; }
 .pgapp-dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
+.pgapp-shuttle { display: flex; align-items: center; gap: 0.5rem; }
+.pgapp-shuttle-list { flex: 1; min-width: 10rem; height: auto; }
+.pgapp-shuttle-controls { display: flex; flex-direction: column; gap: 0.3rem; }

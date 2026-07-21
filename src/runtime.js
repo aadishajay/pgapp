@@ -184,6 +184,124 @@ window.pgapp = (function () {
     if (search) search.focus();
   }
 
+  // Keeps a `checkbox_group` item's one real (hidden) input in sync
+  // with whichever of its display-only checkboxes are currently
+  // checked — called on every one of their onchange (see
+  // `item_types::checkbox_group`). `checkboxEl` is any checkbox inside
+  // the group; its `.pgapp-checkbox-group` ancestor holds both the
+  // hidden input and every sibling checkbox.
+  function syncCheckboxGroup(checkboxEl) {
+    var group = checkboxEl.closest(".pgapp-checkbox-group");
+    if (!group) return;
+    var hidden = group.querySelector('input[type="hidden"]');
+    if (!hidden) return;
+    var checked = group.querySelectorAll('input[type="checkbox"]:checked');
+    var values = [];
+    for (var i = 0; i < checked.length; i++) values.push(checked[i].value);
+    hidden.value = values.join(",");
+    hidden.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  // A `star_rating` item's click handler (see `item_types::star_rating`):
+  // fills every star up to `value` and writes it into the group's one
+  // real (hidden) input.
+  function setStarRating(starEl, value) {
+    var wrapper = starEl.closest(".pgapp-star-rating");
+    if (!wrapper) return;
+    var hidden = wrapper.querySelector('input[type="hidden"]');
+    var stars = wrapper.querySelectorAll(".pgapp-star");
+    for (var i = 0; i < stars.length; i++) {
+      var starValue = parseInt(stars[i].getAttribute("data-value"), 10);
+      if (starValue <= value) stars[i].classList.add("pgapp-star-on");
+      else stars[i].classList.remove("pgapp-star-on");
+    }
+    if (hidden) {
+      hidden.value = String(value);
+      hidden.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
+
+  // Rebuilds a `list_manager` item's one real (hidden) input from its
+  // currently-listed entries, in DOM order (see
+  // `item_types::list_manager`).
+  function syncListManager(wrapper) {
+    var hidden = wrapper.querySelector('input[type="hidden"]');
+    if (!hidden) return;
+    var items = wrapper.querySelectorAll(".pgapp-list-manager-items li span");
+    var values = [];
+    for (var i = 0; i < items.length; i++) values.push(items[i].textContent);
+    hidden.value = values.join(",");
+    hidden.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  // Appends `inputEl`'s current (trimmed) value as a new entry — called
+  // from the "+ Add" button or Enter in a `list_manager`'s text input.
+  // A no-op on an empty/whitespace-only value.
+  function addListManagerItem(inputEl) {
+    var value = inputEl.value.trim();
+    if (!value) return;
+    var wrapper = inputEl.closest(".pgapp-list-manager");
+    if (!wrapper) return;
+    var ul = wrapper.querySelector(".pgapp-list-manager-items");
+    var li = document.createElement("li");
+    var span = document.createElement("span");
+    span.textContent = value;
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
+    btn.textContent = "✕";
+    btn.addEventListener("click", function () {
+      removeListManagerItem(btn);
+    });
+    li.appendChild(span);
+    li.appendChild(btn);
+    ul.appendChild(li);
+    inputEl.value = "";
+    inputEl.focus();
+    syncListManager(wrapper);
+  }
+
+  // Removes `btnEl`'s own `<li>` from a `list_manager` — `btnEl` is
+  // either a server-rendered delete button (inline `onclick`) or one
+  // `addListManagerItem` just created (bound via `addEventListener`),
+  // both call this the same way.
+  function removeListManagerItem(btnEl) {
+    var wrapper = btnEl.closest(".pgapp-list-manager");
+    var li = btnEl.closest("li");
+    if (li) li.remove();
+    if (wrapper) syncListManager(wrapper);
+  }
+
+  // Moves every highlighted `<option>` between a `shuttle` item's two
+  // `<select multiple>`s (`toRight`: available -> selected, or back)
+  // and rebuilds the one real hidden input from the selected list's
+  // resulting option order (see `item_types::shuttle`). Moving the
+  // *whole* `<option>` node (not just its value) preserves each
+  // choice's label without re-deriving it from anywhere.
+  function shuttleMove(btnEl, toRight) {
+    var wrapper = btnEl.closest(".pgapp-shuttle");
+    if (!wrapper) return;
+    var available = wrapper.querySelector(".pgapp-shuttle-available");
+    var selected = wrapper.querySelector(".pgapp-shuttle-selected");
+    var from = toRight ? available : selected;
+    var to = toRight ? selected : available;
+    var moving = [];
+    for (var i = 0; i < from.options.length; i++) {
+      if (from.options[i].selected) moving.push(from.options[i]);
+    }
+    moving.forEach(function (opt) {
+      opt.selected = false;
+      to.appendChild(opt);
+    });
+    var hidden = wrapper.querySelector('input[type="hidden"]');
+    if (hidden) {
+      var values = [];
+      for (var j = 0; j < selected.options.length; j++) values.push(selected.options[j].value);
+      hidden.value = values.join(",");
+      hidden.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  }
+
   // ---- App Builder: drag-and-drop row reordering ----
   //
   // A region/report table wrapped in a ".pgapp-draggable-rows" element
@@ -2363,6 +2481,11 @@ window.pgapp = (function () {
     refreshRegion: refreshRegion,
     openPopup: openPopup,
     filterPopup: filterPopup,
+    syncCheckboxGroup: syncCheckboxGroup,
+    setStarRating: setStarRating,
+    addListManagerItem: addListManagerItem,
+    removeListManagerItem: removeListManagerItem,
+    shuttleMove: shuttleMove,
     alert: pgappAlert,
     confirm: pgappConfirm,
   };

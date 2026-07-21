@@ -629,6 +629,19 @@ popup.rs     "Pop Up LOV": <dialog> + search filter + pgapp.setItem(...)
 slider.rs    <input type=range>, reads min/max/step from config
 date.rs      <input type=date> for a text field storing "YYYY-MM-DD";
              optional min/max config bound the pickable range
+select.rs    <select> over args.choices ("Select List")
+switch.rs    boolean toggle, same read_value as checkbox ("Switch")
+password.rs  <input type=password>, autocomplete=new-password
+color.rs     <input type=color>, falls back to #000000 if invalid
+timestamp.rs <input type=datetime-local>; converts timestamptz's
+             "YYYY-MM-DD HH:MM:SS+TZ" to/from the control's "T" format
+textarea.rs  <textarea>, optional rows config (default 4)
+checkbox_group.rs  checkboxes over args.choices, comma-joined value
+             via hidden input + pgapp.syncCheckboxGroup ("Checkbox Group")
+star_rating.rs     click-to-rate stars, optional max config (default 5)
+list_manager.rs    add/remove free-text list, comma-joined value
+shuttle.rs   dual <select multiple> with move buttons, comma-joined
+             value in selected order
 ```
 
 Adding one: write `src/item_types/<name>.rs`, add one line to
