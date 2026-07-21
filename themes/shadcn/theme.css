@@ -633,6 +633,9 @@ a.pgapp-link:has(.pgapp-icon):hover .pgapp-icon {
 .pgapp-report-agg-row td { font-weight: 600; background: hsl(var(--muted)); border-top: 2px solid hsl(var(--border)); }
 .pgapp-agg-label { font-weight: 400; color: hsl(var(--muted-foreground)); font-size: 0.75rem; text-transform: uppercase; margin-right: 0.3rem; }
 
+/* Interactive Report's Control Break: a top border marks each new group. */
+.pgapp-break-row td { border-top: 2px solid hsl(var(--border)); }
+
 /* Calendar region: a month grid, one entry per day (see model::ComponentDef::Calendar). */
 .pgapp-calendar-header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.75rem; }
 .pgapp-calendar-header .pgapp-subtitle { margin: 0; }

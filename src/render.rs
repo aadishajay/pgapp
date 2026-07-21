@@ -1089,6 +1089,7 @@ pub fn report_html(
     formats: &HashMap<String, FormatMask>,
     aggregates: &HashMap<String, AggregateFn>,
     agg_values: &HashMap<String, Option<String>>,
+    break_on: Option<&str>,
     display: &str,
     sort: Option<(&str, bool)>,
     html: &HtmlAttrs,
@@ -1279,10 +1280,33 @@ pub fn report_html(
             }
             body.push_str("</tr></thead><tbody>");
 
+            // Interactive Report's Control Break: the first row of each
+            // new `break_on` value gets its own `<tr>` styling hook
+            // (`pgapp-break-row`) and shows the value; every following
+            // row sharing that same value renders a blank cell there
+            // instead of repeating it.
+            let mut last_break_value: Option<&str> = None;
             for row in rows {
-                body.push_str("<tr>");
+                let is_break_row = match break_on {
+                    Some(col) => {
+                        let value = row.get(col).and_then(|v| v.as_deref());
+                        let is_new_group = last_break_value != value;
+                        last_break_value = value;
+                        is_new_group
+                    }
+                    None => false,
+                };
+                if break_on.is_some() && is_break_row {
+                    body.push_str(r#"<tr class="pgapp-break-row">"#);
+                } else {
+                    body.push_str("<tr>");
+                }
                 let id = row.get("id").and_then(|v| v.as_deref()).unwrap_or("").to_string();
                 for col in columns {
+                    if break_on == Some(col.as_str()) && !is_break_row {
+                        body.push_str("<td></td>");
+                        continue;
+                    }
                     let cell = report_cell_html(app, row, col, link_column, formats);
                     body.push_str(&format!("<td>{cell}</td>"));
                 }

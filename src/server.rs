@@ -1282,6 +1282,7 @@ async fn render_component(
             computed,
             formats,
             aggregates,
+            break_on,
             display,
             html,
             ..
@@ -1298,7 +1299,13 @@ async fn render_component(
 
             let filters = ReportFilters::from_query(query, idx, columns)
                 .map_err(|(_, msg)| anyhow::anyhow!(msg))?;
-            let sort = SortSpec::from_query(query, idx, columns, computed).map_err(|(_, msg)| anyhow::anyhow!(msg))?;
+            // Control Break needs its rows actually grouped together to
+            // read as intended — an explicit column-header sort always
+            // wins, but absent one, `break_on` supplies its own default
+            // sort (ascending) rather than leaving row order undefined.
+            let sort = SortSpec::from_query(query, idx, columns, computed)
+                .map_err(|(_, msg)| anyhow::anyhow!(msg))?
+                .or_else(|| break_on.as_ref().map(|col| SortSpec { column: col.clone(), desc: false }));
             // Filter/sort params re-serialized for pagination and
             // column-header links, so Prev/Next/re-sorting stay inside
             // the same filtered (and, for sort, ordered) result set.
@@ -1447,6 +1454,7 @@ async fn render_component(
                 formats,
                 aggregates,
                 &agg_values,
+                break_on.as_deref(),
                 display,
                 sort_arg,
                 html,

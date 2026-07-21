@@ -337,6 +337,12 @@ fixed "page kind." Eleven kinds:
   same column also formats its aggregate value. Works for entity- and
   query-backed reports; not yet for collection-backed ones (an internal
   pgapp extension, not something a real APEX migration needs).
+  `break_on: <col>` adds Interactive Report's Control Break: consecutive
+  rows sharing that column's value show it only on the first row of the
+  group (table display mode only); a report with `break_on` and no
+  explicit column-header sort defaults to sorting by that column
+  ascending, since the rows need to actually be grouped together for
+  the break to read as intended.
 - **`form "Title" of <entity> { ... }`** — create/edit form. `fields`
   lists writable columns; `item <field> [as <kind> [(...)]] [attrs
   (...)]` picks a widget and/or sets `id`/`class`/attributes on that

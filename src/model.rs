@@ -447,6 +447,14 @@ pub enum ComponentDef {
         /// report source (entity, query, or collection-backed),
         /// computed over the whole filtered result set.
         aggregates: HashMap<String, AggregateFn>,
+        /// Interactive Report's Control Break: consecutive rows sharing
+        /// this column's value show it only on the first row of the
+        /// group, blank on the rest — table display mode only. Rows
+        /// need to actually be grouped together for this to read as
+        /// intended, so a report with `break_on` and no explicit
+        /// column-header sort defaults to sorting by this column
+        /// ascending (see `server::SortSpec`'s resolution).
+        break_on: Option<String>,
         /// One of `REPORT_DISPLAY_MODES` — `"table"` (default),
         /// `"cards"`, or `"list"`.
         display: String,

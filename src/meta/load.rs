@@ -525,6 +525,7 @@ fn decode_component(
                 computed: decode_computed(&config),
                 formats: decode_formats(&config),
                 aggregates: decode_aggregates(&config),
+                break_on: config.get("break_on").and_then(|v| v.as_str()).map(String::from),
                 display: config.get("display").and_then(|v| v.as_str()).unwrap_or("table").to_string(),
                 requires,
                 html,

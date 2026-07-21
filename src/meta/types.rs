@@ -119,6 +119,9 @@ pub enum RuntimeComponent {
         /// Interactive Report's per-column footer aggregates — see
         /// `model::AggregateFn`.
         aggregates: HashMap<String, AggregateFn>,
+        /// Interactive Report's Control Break column — see
+        /// `model::ComponentDef::Report::break_on`.
+        break_on: Option<String>,
         /// One of `model::REPORT_DISPLAY_MODES` — `"table"` (default),
         /// `"cards"`, or `"list"`.
         display: String,
@@ -284,6 +287,7 @@ impl RuntimeComponent {
                 computed,
                 formats,
                 aggregates,
+                break_on,
                 display,
                 requires,
                 html,
@@ -303,6 +307,7 @@ impl RuntimeComponent {
                 "computed": computed.iter().map(|c| serde_json::json!({"name": c.name, "sql": c.sql})).collect::<Vec<_>>(),
                 "formats": formats_json(formats),
                 "aggregates": aggregates_json(aggregates),
+                "break_on": break_on,
                 "display": display,
                 "requires": requires,
                 "html": html_attrs_json(html),

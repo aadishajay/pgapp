@@ -96,6 +96,10 @@
 //!             (Interactive Report's per-column footer aggregate,
 //!             computed over the whole filtered result set — see
 //!             model::AggregateFn; the column must be one of `columns`)
+//!             | "break_on" ":" Ident
+//!             (Interactive Report's Control Break — consecutive rows
+//!             sharing this column's value show it once; table display
+//!             mode only, see model::ComponentDef::Report::break_on)
 //!             | "display" ":" ("table" | "cards" | "list")
 //!             (default "table"; Oracle APEX's "Cards" region folded in
 //!             as a display mode — see model::REPORT_DISPLAY_MODES)
@@ -874,6 +878,7 @@ impl Parser {
         let mut computed = Vec::new();
         let mut formats = std::collections::HashMap::new();
         let mut aggregates = std::collections::HashMap::new();
+        let mut break_on = None;
         let mut display = "table".to_string();
         while !self.at_symbol('}') {
             if self.at_keyword("computed") {
@@ -940,6 +945,7 @@ impl Parser {
                     before_load = Some(PreAction { name, config });
                 }
                 "display" => display = self.expect_ident()?,
+                "break_on" => break_on = Some(self.expect_ident()?),
                 other => bail!("unknown report property '{other}' (line {})", self.cur_line()),
             }
         }
@@ -963,6 +969,7 @@ impl Parser {
             computed,
             formats,
             aggregates,
+            break_on,
             display,
             requires: None,
             html: HtmlAttrs::default(),

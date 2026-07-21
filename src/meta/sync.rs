@@ -624,6 +624,7 @@ fn build_component_config(
             computed,
             formats,
             aggregates,
+            break_on,
             display,
             ..
         } => {
@@ -661,6 +662,11 @@ fn build_component_config(
             for col in aggregates.keys() {
                 if !columns.contains(col) {
                     anyhow::bail!("{owner_label} report '{title}' aggregates column '{col}', which isn't in its 'columns:' list");
+                }
+            }
+            if let Some(col) = break_on {
+                if !columns.contains(col) {
+                    anyhow::bail!("{owner_label} report '{title}' breaks on column '{col}', which isn't in its 'columns:' list");
                 }
             }
             if let Some(q) = source_query {
@@ -709,6 +715,7 @@ fn build_component_config(
                     "computed": computed_json,
                     "formats": formats_json,
                     "aggregates": aggregates_json,
+                    "break_on": break_on,
                     "display": display,
                 }),
             ))
