@@ -79,6 +79,9 @@
 //!             own row, e.g. `computed total: "(select sum(x) from y
 //!             where y.bill_key = t.bill_key)"`)
 //!             | "format" Ident ":" formatmask
+//!             | "display" ":" ("table" | "cards" | "list")
+//!             (default "table"; Oracle APEX's "Cards" region folded in
+//!             as a display mode — see model::REPORT_DISPLAY_MODES)
 //! formatmask := "currency" | "percent"
 //!             | "number" ( "(" Number ")" )?
 //!             | "date" ( "(" String ")" )?
@@ -849,6 +852,7 @@ impl Parser {
         let mut before_load = None;
         let mut computed = Vec::new();
         let mut formats = std::collections::HashMap::new();
+        let mut display = "table".to_string();
         while !self.at_symbol('}') {
             if self.at_keyword("computed") {
                 self.advance()?;
@@ -903,10 +907,18 @@ impl Parser {
                     };
                     before_load = Some(PreAction { name, config });
                 }
+                "display" => display = self.expect_ident()?,
                 other => bail!("unknown report property '{other}' (line {})", self.cur_line()),
             }
         }
         self.expect_symbol('}')?;
+
+        if !crate::model::REPORT_DISPLAY_MODES.contains(&display.as_str()) {
+            bail!(
+                "report '{title}' has unknown display mode '{display}' (expected one of: {})",
+                crate::model::REPORT_DISPLAY_MODES.join(", ")
+            );
+        }
 
         Ok(ComponentDef::Report {
             title,
@@ -918,6 +930,7 @@ impl Parser {
             before_load,
             computed,
             formats,
+            display,
             requires: None,
             html: HtmlAttrs::default(),
         })

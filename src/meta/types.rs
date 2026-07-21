@@ -115,6 +115,9 @@ pub enum RuntimeComponent {
         /// Display formatting applied to a column's raw text value at
         /// render time — see `model::FormatMask`.
         formats: HashMap<String, FormatMask>,
+        /// One of `model::REPORT_DISPLAY_MODES` — `"table"` (default),
+        /// `"cards"`, or `"list"`.
+        display: String,
         /// Role (or auth scheme name) required to see/write through
         /// this one component, on top of whatever the page itself
         /// requires — see `server::auth::authorize`.
@@ -253,6 +256,7 @@ impl RuntimeComponent {
                 before_load,
                 computed,
                 formats,
+                display,
                 requires,
                 html,
             } => serde_json::json!({
@@ -270,6 +274,7 @@ impl RuntimeComponent {
                 "before_load": before_load.as_ref().map(|a| serde_json::json!({"name": a.name, "config": a.config})),
                 "computed": computed.iter().map(|c| serde_json::json!({"name": c.name, "sql": c.sql})).collect::<Vec<_>>(),
                 "formats": formats_json(formats),
+                "display": display,
                 "requires": requires,
                 "html": html_attrs_json(html),
             }),

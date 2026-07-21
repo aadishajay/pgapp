@@ -317,8 +317,13 @@ fixed "page kind." Eleven kinds:
   table. `columns`; `source: query <name>` sources rows from a query
   instead (writes still target the entity by id); `link: <field> ->
   page <Name> (extra: param, ...)` links a column, forwarding the row's
-  id plus extra params; `page_size` (default 20). A sibling `Form` for
-  the same entity on the same page gets automatic Edit/Delete actions.
+  id plus extra params; `page_size` (default 20); `display: table |
+  cards | list` (default `table`) — Oracle APEX's separate Card and List
+  regions, folded in as a display mode since everything else about a
+  report (entity binding, pagination, search/filter, the sibling-Form
+  edit/delete wiring) stays identical, only the per-row markup changes.
+  A sibling `Form` for the same entity on the same page gets automatic
+  Edit/Delete actions in every display mode.
 - **`form "Title" of <entity> { ... }`** — create/edit form. `fields`
   lists writable columns; `item <field> [as <kind> [(...)]] [attrs
   (...)]` picks a widget and/or sets `id`/`class`/attributes on that
@@ -1126,6 +1131,7 @@ piece goes:
 | `page N (name, title, ...)`                                   | `page "Title" { ... }` (see "Markup")                                        |
 | `region ... (type: interactiveReport, source { tableName })`  | `report "Title" of <entity> { columns: ... }`                                |
 | `region ... (type: staticContent)` / a plain query region     | `region "Label" from query <name> { columns: ... }`                          |
+| `region ... (type: cards)` / `region ... (type: list)`        | `report "Title" of <entity> { display: cards }` / `{ display: list }` — a display mode on the same `report`, not a separate region kind |
 | a region's `column NAME (heading, layout, appearance, ...)`   | one name in `columns:`, plus `format <column>: <mask>` for display formatting (see "Computed columns & format masks") — no per-column heading override yet (see "App Builder" for what's GUI-editable today) |
 | a column's "Derived Column"/computation                       | `computed <name>: "<sql>"` on the report (see "Computed columns & format masks") |
 | `region`'s `link { target: { page, items } }`                 | a report's `link: <field> -> page <Name> (extra: param, ...)`               |

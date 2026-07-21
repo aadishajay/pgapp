@@ -617,6 +617,7 @@ fn build_component_config(
             before_load,
             computed,
             formats,
+            display,
             ..
         } => {
             if !entity_ids.contains_key(entity) {
@@ -691,6 +692,7 @@ fn build_component_config(
                     "before_load": before_load_json_val,
                     "computed": computed_json,
                     "formats": formats_json,
+                    "display": display,
                 }),
             ))
         }

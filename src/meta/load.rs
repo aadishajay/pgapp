@@ -514,6 +514,7 @@ fn decode_component(
                 before_load: decode_before_load(&config),
                 computed: decode_computed(&config),
                 formats: decode_formats(&config),
+                display: config.get("display").and_then(|v| v.as_str()).unwrap_or("table").to_string(),
                 requires,
                 html,
             })

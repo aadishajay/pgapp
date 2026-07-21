@@ -951,6 +951,7 @@ async fn render_component(
             before_load,
             computed,
             formats,
+            display,
             html,
             ..
         } => {
@@ -1041,6 +1042,7 @@ async fn render_component(
                 &data.icons,
                 &extras,
                 formats,
+                display,
                 html,
             ))
         }

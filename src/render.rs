@@ -882,6 +882,54 @@ pub struct ReportExtras {
     pub warning: Option<String>,
 }
 
+/// One column's rendered cell value for a report row — shared across
+/// all three display modes (table/cards/list) so the link-column and
+/// format-mask logic only lives once.
+fn report_cell_html(
+    app: &str,
+    row: &BTreeMap<String, Option<String>>,
+    col: &str,
+    link_column: Option<&LinkColumn>,
+    formats: &HashMap<String, FormatMask>,
+) -> String {
+    let id = row.get("id").and_then(|v| v.as_deref()).unwrap_or("");
+    let raw = row.get(col).and_then(|v| v.as_deref()).unwrap_or("");
+    let display = match formats.get(col) {
+        Some(mask) => mask.apply(raw),
+        None => raw.to_string(),
+    };
+    match link_column {
+        Some(lc) if lc.field == col => {
+            let mut href = format!("/{}/{}?id={}", escape(app), escape(&lc.target_page), url_encode(id));
+            for (field, param) in &lc.extra_params {
+                let pval = row.get(field).and_then(|v| v.as_deref()).unwrap_or("");
+                href.push_str(&format!("&{}={}", escape(param), url_encode(pval)));
+            }
+            format!(r#"<a class="pgapp-link" href="{href}">{val}</a>"#, val = escape(&display))
+        }
+        _ => escape(&display),
+    }
+}
+
+/// One row's Edit/Delete actions — shared across all three display
+/// modes, same markup either way (a table cell wraps it in `<td>`
+/// itself; cards/list place it directly).
+fn report_row_actions_html(app: &str, page_name: &str, idx: usize, form_idx: usize, id: &str, icons: &Icons) -> String {
+    format!(
+        r#"<div class="pgapp-row-actions">
+<a class="pgapp-link" href="/{app}/{page}?edit_{form_idx}={id}#pgapp-c{idx}" title="Edit">{edit_icon}</a>
+<form class="pgapp-inline-form" method="post" action="/{app}/{page}/c/{form_idx}/delete/{id}" data-pgapp-confirm="Delete this row?">
+<button class="pgapp-btn pgapp-btn-destructive" type="submit" title="Delete">{delete_icon}</button>
+</form>
+</div>"#,
+        app = escape(app),
+        page = escape(page_name),
+        edit_icon = icons.render("edit"),
+        delete_icon = icons.render("delete"),
+        id = escape(id),
+    )
+}
+
 /// A read-only, paginated table — the `Report` component. Edit/delete
 /// row actions appear only when `sibling_form_idx` is `Some` (a `Form`
 /// bound to the same entity exists on this page); `prev_href`/
@@ -901,6 +949,7 @@ pub fn report_html(
     icons: &Icons,
     extras: &ReportExtras,
     formats: &HashMap<String, FormatMask>,
+    display: &str,
     html: &HtmlAttrs,
 ) -> String {
     let mut body = format!(
@@ -995,56 +1044,75 @@ pub fn report_html(
         val = escape(&extras.fval),
     ));
 
-    body.push_str(r#"<div class="pgapp-table-wrap"><table class="pgapp-table"><thead><tr>"#);
-    for col in columns {
-        body.push_str(&format!("<th>{}</th>", escape(col)));
-    }
-    if sibling_form_idx.is_some() {
-        body.push_str("<th></th>");
-    }
-    body.push_str("</tr></thead><tbody>");
-
-    for row in rows {
-        body.push_str("<tr>");
-        let id = row.get("id").and_then(|v| v.as_deref()).unwrap_or("");
-        for col in columns {
-            let raw = row.get(col).and_then(|v| v.as_deref()).unwrap_or("");
-            let display = match formats.get(col) {
-                Some(mask) => mask.apply(raw),
-                None => raw.to_string(),
-            };
-            let cell = match link_column {
-                Some(lc) if lc.field == *col => {
-                    let mut href = format!("/{}/{}?id={}", escape(app), escape(&lc.target_page), url_encode(id));
-                    for (field, param) in &lc.extra_params {
-                        let pval = row.get(field).and_then(|v| v.as_deref()).unwrap_or("");
-                        href.push_str(&format!("&{}={}", escape(param), url_encode(pval)));
-                    }
-                    format!(r#"<a class="pgapp-link" href="{href}">{val}</a>"#, val = escape(&display))
+    match display {
+        // Oracle APEX's "Cards" region, folded in as a Report display
+        // mode: same rows/pagination/filters/edit-delete wiring as the
+        // table, just one `<div class="pgapp-card">` per row instead of
+        // a `<tr>`.
+        "cards" => {
+            body.push_str(r#"<div class="pgapp-cards">"#);
+            for row in rows {
+                let id = row.get("id").and_then(|v| v.as_deref()).unwrap_or("").to_string();
+                body.push_str(r#"<div class="pgapp-card">"#);
+                for col in columns {
+                    let cell = report_cell_html(app, row, col, link_column, formats);
+                    body.push_str(&format!(
+                        r#"<div class="pgapp-card-field"><span class="pgapp-card-label">{}</span><span class="pgapp-card-value">{cell}</span></div>"#,
+                        escape(col)
+                    ));
                 }
-                _ => escape(&display),
-            };
-            body.push_str(&format!("<td>{cell}</td>"));
+                if let Some(form_idx) = sibling_form_idx {
+                    body.push_str(&report_row_actions_html(app, page_name, idx, form_idx, &id, icons));
+                }
+                body.push_str("</div>");
+            }
+            body.push_str("</div>");
         }
-        if let Some(form_idx) = sibling_form_idx {
-            body.push_str(&format!(
-                r#"<td class="pgapp-row-actions">
-<a class="pgapp-link" href="/{app}/{page}?edit_{form_idx}={id}#pgapp-c{idx}" title="Edit">{edit_icon}</a>
-<form class="pgapp-inline-form" method="post" action="/{app}/{page}/c/{form_idx}/delete/{id}" data-pgapp-confirm="Delete this row?">
-<button class="pgapp-btn pgapp-btn-destructive" type="submit" title="Delete">{delete_icon}</button>
-</form>
-</td>"#,
-                app = escape(app),
-                page = escape(page_name),
-                form_idx = form_idx,
-                id = escape(id),
-                edit_icon = icons.render("edit"),
-                delete_icon = icons.render("delete"),
-            ));
+        "list" => {
+            body.push_str(r#"<ul class="pgapp-list-view">"#);
+            for row in rows {
+                let id = row.get("id").and_then(|v| v.as_deref()).unwrap_or("").to_string();
+                body.push_str(r#"<li class="pgapp-list-row"><div class="pgapp-list-row-fields">"#);
+                for col in columns {
+                    let cell = report_cell_html(app, row, col, link_column, formats);
+                    body.push_str(&format!(
+                        r#"<span class="pgapp-list-row-field"><span class="pgapp-list-row-label">{}</span> {cell}</span>"#,
+                        escape(col)
+                    ));
+                }
+                body.push_str("</div>");
+                if let Some(form_idx) = sibling_form_idx {
+                    body.push_str(&report_row_actions_html(app, page_name, idx, form_idx, &id, icons));
+                }
+                body.push_str("</li>");
+            }
+            body.push_str("</ul>");
         }
-        body.push_str("</tr>");
+        _ => {
+            body.push_str(r#"<div class="pgapp-table-wrap"><table class="pgapp-table"><thead><tr>"#);
+            for col in columns {
+                body.push_str(&format!("<th>{}</th>", escape(col)));
+            }
+            if sibling_form_idx.is_some() {
+                body.push_str("<th></th>");
+            }
+            body.push_str("</tr></thead><tbody>");
+
+            for row in rows {
+                body.push_str("<tr>");
+                let id = row.get("id").and_then(|v| v.as_deref()).unwrap_or("").to_string();
+                for col in columns {
+                    let cell = report_cell_html(app, row, col, link_column, formats);
+                    body.push_str(&format!("<td>{cell}</td>"));
+                }
+                if let Some(form_idx) = sibling_form_idx {
+                    body.push_str(&format!("<td>{}</td>", report_row_actions_html(app, page_name, idx, form_idx, &id, icons)));
+                }
+                body.push_str("</tr>");
+            }
+            body.push_str("</tbody></table></div>");
+        }
     }
-    body.push_str("</tbody></table></div>");
 
     if prev_href.is_some() || next_href.is_some() {
         body.push_str(r#"<div class="pgapp-pagination">"#);

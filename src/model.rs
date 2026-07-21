@@ -173,6 +173,15 @@ pub struct FieldItem {
 /// sync-time error, not a silently blank chart.
 pub const CHART_TYPES: &[&str] = &["bar", "line", "area", "pie", "donut", "scatter"];
 
+/// How a `Report`'s rows render — Oracle APEX's separate "Cards"
+/// region type folded in as a display mode instead of a whole new
+/// component kind, since everything else about it (entity binding,
+/// pagination, search/filter, the sibling-Form edit/delete wiring) is
+/// identical to a plain table; only the per-row markup changes.
+/// Checked at parse time in `markup::parse_report`, same precedent as
+/// `CHART_TYPES`.
+pub const REPORT_DISPLAY_MODES: &[&str] = &["table", "cards", "list"];
+
 /// Optional `id`/`class`/extra-attribute overrides on a component,
 /// parsed from a trailing `attrs (id: "...", class: "...", ...)` suffix
 /// (see `markup::Parser::parse_html_attrs`) and spliced onto that
@@ -382,6 +391,9 @@ pub enum ComponentDef {
         before_load: Option<PreAction>,
         computed: Vec<ComputedColumn>,
         formats: HashMap<String, FormatMask>,
+        /// One of `REPORT_DISPLAY_MODES` — `"table"` (default),
+        /// `"cards"`, or `"list"`.
+        display: String,
         requires: Option<String>,
         html: HtmlAttrs,
     },
