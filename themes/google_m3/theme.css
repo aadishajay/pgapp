@@ -457,6 +457,13 @@ a.pgapp-link:hover .pgapp-icon { color: var(--m3-primary); }
 
 /* Map region: inline-SVG lat/lng scatter, no tile server (see model::ComponentDef::Map). */
 .pgapp-map { margin: 0 0 1.5rem; padding: 1.15rem 1.3rem; background: var(--m3-surface-container); border-radius: var(--m3-radius-lg); }
+
+/* Faceted Search: a panel of facets filtering a sibling Report (see model::ComponentDef::FacetedSearch). */
+.pgapp-facet-search { margin: 0 0 1.5rem; padding: 1.15rem 1.3rem; background: var(--m3-surface-container); border-radius: var(--m3-radius-lg); }
+.pgapp-facet-search form { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start; }
+.pgapp-facet-group { display: flex; flex-direction: column; gap: 0.35rem; min-width: 10rem; }
+.pgapp-facet-title { font-weight: 600; font-size: 0.85rem; }
+.pgapp-facet-group input[type="number"], .pgapp-facet-group input[type="date"] { width: 8rem; }
 .pgapp-map-svg { width: 100%; height: auto; color: var(--m3-error); }
 
 .pgapp-alert { border-radius: var(--m3-radius-md); padding: 0.85rem 1.15rem; margin-bottom: 1rem; font-size: 0.9rem; }

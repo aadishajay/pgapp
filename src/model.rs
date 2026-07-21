@@ -362,6 +362,46 @@ pub fn highlight_hidden_name(i: usize) -> String {
     format!("__pgapp_hl_{i}")
 }
 
+/// Oracle APEX's Faceted Search facet types — see
+/// `ComponentDef::FacetedSearch`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FacetKind {
+    /// One checkbox per distinct value in the column, each with a live
+    /// row count; checking any number ORs them together.
+    CheckboxList,
+    /// A `>=`/`<=` range over a numeric (`integer`) column.
+    Range,
+    /// A `>=`/`<=` range over a `timestamp` column.
+    DateRange,
+}
+
+impl FacetKind {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "checkbox_list" => Some(FacetKind::CheckboxList),
+            "range" => Some(FacetKind::Range),
+            "date_range" => Some(FacetKind::DateRange),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            FacetKind::CheckboxList => "checkbox_list",
+            FacetKind::Range => "range",
+            FacetKind::DateRange => "date_range",
+        }
+    }
+}
+
+/// One facet on a `FacetedSearch` region — a column of the region's
+/// bound entity, plus how it's filtered on.
+#[derive(Debug, Clone)]
+pub struct Facet {
+    pub column: String,
+    pub kind: FacetKind,
+}
+
 /// Groups digits in `n` (rounded to `decimals` places) with `,` every
 /// three places left of the point — the shared core of `Currency`,
 /// `Number`, and `Percent`.
@@ -653,6 +693,20 @@ pub enum ComponentDef {
         requires: Option<String>,
         html: HtmlAttrs,
     },
+    /// Oracle APEX's Faceted Search: a panel of facets filtering a
+    /// sibling `Report` bound to the same entity, on the same page
+    /// (found by entity match, same "sibling by shared entity"
+    /// convention as `Report`'s companion `Form`). Entity-backed
+    /// reports only — same restriction as `computed`/`highlight`,
+    /// since facet conditions are spliced directly against the
+    /// entity's own table.
+    FacetedSearch {
+        title: String,
+        entity: String,
+        facets: Vec<Facet>,
+        requires: Option<String>,
+        html: HtmlAttrs,
+    },
 }
 
 impl ComponentDef {
@@ -672,7 +726,8 @@ impl ComponentDef {
             | ComponentDef::Action { html, .. }
             | ComponentDef::Button { html, .. }
             | ComponentDef::Calendar { html, .. }
-            | ComponentDef::Map { html, .. } => *html = new_html,
+            | ComponentDef::Map { html, .. }
+            | ComponentDef::FacetedSearch { html, .. } => *html = new_html,
             ComponentDef::DynamicAction { .. } => {}
         }
     }
@@ -695,7 +750,8 @@ impl ComponentDef {
             | ComponentDef::Action { requires, .. }
             | ComponentDef::Button { requires, .. }
             | ComponentDef::Calendar { requires, .. }
-            | ComponentDef::Map { requires, .. } => *requires = new_requires,
+            | ComponentDef::Map { requires, .. }
+            | ComponentDef::FacetedSearch { requires, .. } => *requires = new_requires,
             ComponentDef::DynamicAction { .. } => {}
         }
     }

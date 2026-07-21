@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::model::{AggregateFn, ComputedColumn, FieldItem, FormatMask, HighlightRule, HtmlAttrs, PreAction};
+use crate::model::{AggregateFn, ComputedColumn, Facet, FieldItem, FormatMask, HighlightRule, HtmlAttrs, PreAction};
 
 /// A named query, compiled at load time: `sql` already uses positional
 /// `$N::TYPE` parameters, and `bind_names[i]` is the bind context key
@@ -240,6 +240,15 @@ pub enum RuntimeComponent {
         requires: Option<String>,
         html: HtmlAttrs,
     },
+    /// Oracle APEX's Faceted Search — see
+    /// `model::ComponentDef::FacetedSearch`.
+    FacetedSearch {
+        title: String,
+        entity: RuntimeEntity,
+        facets: Vec<Facet>,
+        requires: Option<String>,
+        html: HtmlAttrs,
+    },
 }
 
 impl RuntimeComponent {
@@ -264,6 +273,7 @@ impl RuntimeComponent {
             RuntimeComponent::DynamicAction { .. } => "dynamic_action",
             RuntimeComponent::Calendar { .. } => "calendar",
             RuntimeComponent::Map { .. } => "map",
+            RuntimeComponent::FacetedSearch { .. } => "faceted_search",
         }
     }
 
@@ -441,6 +451,14 @@ impl RuntimeComponent {
                 "lng_field": lng_field,
                 "title_field": title_field,
                 "link_page": link_page,
+                "requires": requires,
+                "html": html_attrs_json(html),
+            }),
+            RuntimeComponent::FacetedSearch { title, entity, facets, requires, html } => serde_json::json!({
+                "title": title,
+                "entity": entity.name,
+                "entity_fields": entity_fields_json(entity),
+                "facets": facets.iter().map(|f| serde_json::json!({"column": f.column, "kind": f.kind.as_str()})).collect::<Vec<_>>(),
                 "requires": requires,
                 "html": html_attrs_json(html),
             }),

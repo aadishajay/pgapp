@@ -587,6 +587,13 @@ a.pgapp-link:has(.pgapp-icon):hover .pgapp-icon {
 .pgapp-map { margin: 0 0 1.5rem; padding: 1.25rem 1.5rem; background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: var(--radius); }
 .pgapp-map-svg { width: 100%; height: auto; color: hsl(var(--destructive)); }
 
+/* Faceted Search: a panel of facets filtering a sibling Report (see model::ComponentDef::FacetedSearch). */
+.pgapp-facet-search { margin: 0 0 1.5rem; padding: 1.25rem 1.5rem; background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: var(--radius); }
+.pgapp-facet-search form { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start; }
+.pgapp-facet-group { display: flex; flex-direction: column; gap: 0.35rem; min-width: 10rem; }
+.pgapp-facet-title { font-weight: 600; font-size: 0.85rem; }
+.pgapp-facet-group input[type="number"], .pgapp-facet-group input[type="date"] { width: 8rem; }
+
 /* Report toolbar, saved views, actions, notices */
 .pgapp-report-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
 .pgapp-report-toolbar .pgapp-input[type="search"] { min-width: 14rem; }

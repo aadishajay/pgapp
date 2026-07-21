@@ -71,6 +71,14 @@
 //!            scatter of one entity's rows by lat/lng — see
 //!            model::ComponentDef::Map)
 //!
+//! faceted_search := "faceted_search" String "of" Ident "{" facetprop* "}"
+//! facetprop := "facet" Ident "as" ("checkbox_list" | "range" | "date_range")
+//!            (Oracle APEX's Faceted Search: a panel of facets filtering
+//!            a sibling Report bound to the same entity, on the same
+//!            page — found by entity match, same convention as a
+//!            Report's companion Form. Entity-backed reports only — see
+//!            model::ComponentDef::FacetedSearch)
+//!
 //! action    := "action" String "calls" Ident itemconfig?
 //!
 //! button    := "button" String ( "->" "page" Ident ( "(" paramlist ")" )?
@@ -760,6 +768,8 @@ impl Parser {
             self.parse_calendar()
         } else if self.at_keyword("map") {
             self.parse_map()
+        } else if self.at_keyword("faceted_search") {
+            self.parse_faceted_search()
         } else if self.at_keyword("button") {
             self.advance()?;
             let label = self.expect_string()?;
@@ -1116,6 +1126,43 @@ impl Parser {
             lng_field,
             title_field,
             link_page,
+            requires: None,
+            html: HtmlAttrs::default(),
+        })
+    }
+
+    /// `"faceted_search" String "of" Ident "{" ("facet" Ident "as"
+    /// ("checkbox_list" | "range" | "date_range"))* "}"` — Oracle
+    /// APEX's Faceted Search region, bound to a sibling `Report` on the
+    /// same entity (see `model::ComponentDef::FacetedSearch`).
+    fn parse_faceted_search(&mut self) -> Result<ComponentDef> {
+        self.expect_keyword("faceted_search")?;
+        let title = self.expect_string()?;
+        self.expect_keyword("of")?;
+        let entity = self.expect_ident()?;
+        self.expect_symbol('{')?;
+
+        let mut facets = Vec::new();
+        while !self.at_symbol('}') {
+            self.expect_keyword("facet")?;
+            let column = self.expect_ident()?;
+            self.expect_keyword("as")?;
+            let kind_name = self.expect_ident()?;
+            let kind = crate::model::FacetKind::parse(&kind_name).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "unknown facet kind '{kind_name}' on faceted search '{title}' (line {}) — \
+                     expected checkbox_list, range, or date_range",
+                    self.cur_line()
+                )
+            })?;
+            facets.push(crate::model::Facet { column, kind });
+        }
+        self.expect_symbol('}')?;
+
+        Ok(ComponentDef::FacetedSearch {
+            title,
+            entity,
+            facets,
             requires: None,
             html: HtmlAttrs::default(),
         })

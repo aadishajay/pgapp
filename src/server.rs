@@ -47,7 +47,7 @@ use crate::icons::Icons;
 use crate::instance;
 use crate::item_types;
 use crate::meta::{self, Chrome, NavNode, RegionRows, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimePage, RuntimeQuery};
-use crate::model::{AggregateFn, ComputedColumn, FieldItem, HtmlAttrs, PreAction, CHART_TYPES};
+use crate::model::{AggregateFn, ComputedColumn, Facet, FieldItem, HtmlAttrs, PreAction, CHART_TYPES};
 use crate::markup;
 use crate::page_reorder;
 use crate::render;
@@ -348,7 +348,8 @@ fn component_requires(component: &RuntimeComponent) -> Option<&str> {
         | RuntimeComponent::Action { requires, .. }
         | RuntimeComponent::Button { requires, .. }
         | RuntimeComponent::Calendar { requires, .. }
-        | RuntimeComponent::Map { requires, .. } => requires.as_deref(),
+        | RuntimeComponent::Map { requires, .. }
+        | RuntimeComponent::FacetedSearch { requires, .. } => requires.as_deref(),
         RuntimeComponent::DynamicAction { .. } => None,
     }
 }
@@ -386,6 +387,41 @@ fn companion_report_idx(page: &RuntimePage, entity_name: &str) -> Option<usize> 
     page.components
         .iter()
         .position(|c| matches!(c, RuntimeComponent::Report { entity, .. } if entity.name == entity_name))
+}
+
+/// The `FacetedSearch` (if any) bound to the same entity as a `Report`
+/// on this page — same "sibling by shared entity" lookup as
+/// `sibling_form_idx`.
+fn sibling_faceted_search<'a>(page: &'a RuntimePage, entity_name: &str) -> Option<(usize, &'a Vec<Facet>)> {
+    page.components.iter().enumerate().find_map(|(i, c)| match c {
+        RuntimeComponent::FacetedSearch { entity, facets, .. } if entity.name == entity_name => Some((i, facets)),
+        _ => None,
+    })
+}
+
+/// Re-serializes a `FacetedSearch`'s currently-active facets back into
+/// `&f<fs_idx>_...=...` query-string fragments — the facet-search
+/// counterpart of the report's own `filter_qs`/`base_qs`, so sort
+/// links, pagination, the CSV download, and saved views all preserve
+/// the active facet selection instead of resetting it.
+fn facet_query_string(fs_idx: usize, facets: &[FacetFilter]) -> String {
+    let mut qs = String::new();
+    for f in facets {
+        match f {
+            FacetFilter::In { column, values } => {
+                qs.push_str(&format!("&f{fs_idx}_{column}={}", url_encode(&values.join(","))));
+            }
+            FacetFilter::Between { column, low_suffix, high_suffix, low, high, .. } => {
+                if let Some(low) = low {
+                    qs.push_str(&format!("&f{fs_idx}_{column}_{low_suffix}={}", url_encode(low)));
+                }
+                if let Some(high) = high {
+                    qs.push_str(&format!("&f{fs_idx}_{column}_{high_suffix}={}", url_encode(high)));
+                }
+            }
+        }
+    }
+    qs
 }
 
 /// Where a redirect after a component action should scroll back to: a
@@ -469,13 +505,98 @@ struct ReportPage {
     has_next: bool,
 }
 
+/// One `FacetedSearch` facet's currently-selected filter state, already
+/// validated against that facet's declared column/kind — see
+/// `FacetFilter::from_query`. Carried inside `ReportFilters` so every
+/// report row-fetcher picks these up for free through the existing
+/// `ReportFilters::to_sql` call, no extra plumbing needed.
+#[derive(Debug, Clone)]
+enum FacetFilter {
+    /// `checkbox_list`: any number of selected values, ORed together.
+    In { column: String, values: Vec<String> },
+    /// `range`/`date_range`: an inclusive `[low, high]` bound, either
+    /// end optional. `cast` is the field's own SQL type (`integer` or
+    /// `timestamp`), so the bind compares numerically/chronologically
+    /// rather than as text. `low_suffix`/`high_suffix` are the wire
+    /// param suffixes this facet's kind uses (`min`/`max` for `range`,
+    /// `from`/`to` for `date_range`), kept alongside so re-serializing
+    /// back to a query string (`facet_query_string`) uses the same ones
+    /// it was parsed from.
+    Between {
+        column: String,
+        cast: &'static str,
+        low_suffix: &'static str,
+        high_suffix: &'static str,
+        low: Option<String>,
+        high: Option<String>,
+    },
+}
+
+impl FacetFilter {
+    /// The column this filter applies to — used to exclude one facet's
+    /// own selection from its *own* checkbox_list count query (see the
+    /// `RuntimeComponent::FacetedSearch` render arm) by column identity,
+    /// not by position: `FacetFilter::from_query` only returns *active*
+    /// facets, packed contiguously, so its own index never lines up
+    /// with the declared facet list's index.
+    fn column(&self) -> &str {
+        match self {
+            FacetFilter::In { column, .. } | FacetFilter::Between { column, .. } => column,
+        }
+    }
+
+    /// Parses every facet's selection out of the query string for the
+    /// `FacetedSearch` component at `fs_idx`, validated against its
+    /// declared facets — a column/kind not declared there is silently
+    /// ignored (same "just doesn't filter" tolerance as an unknown
+    /// column would get, since these are markup-validated at sync time,
+    /// not user input). Wire format: `f{fs_idx}_{col}` (checkbox_list,
+    /// comma-joined values), `f{fs_idx}_{col}_min`/`_max` (range),
+    /// `f{fs_idx}_{col}_from`/`_to` (date_range).
+    fn from_query(query: &HashMap<String, String>, fs_idx: usize, facets: &[Facet], entity: &RuntimeEntity) -> Vec<FacetFilter> {
+        let mut out = Vec::new();
+        for f in facets {
+            match f.kind {
+                crate::model::FacetKind::CheckboxList => {
+                    let key = format!("f{fs_idx}_{}", f.column);
+                    if let Some(raw) = query.get(&key) {
+                        let values: Vec<String> = raw.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                        if !values.is_empty() {
+                            out.push(FacetFilter::In { column: f.column.clone(), values });
+                        }
+                    }
+                }
+                crate::model::FacetKind::Range | crate::model::FacetKind::DateRange => {
+                    let (lo_suffix, hi_suffix) = if f.kind == crate::model::FacetKind::Range { ("min", "max") } else { ("from", "to") };
+                    let low = query.get(&format!("f{fs_idx}_{}_{lo_suffix}", f.column)).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                    let high = query.get(&format!("f{fs_idx}_{}_{hi_suffix}", f.column)).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                    if low.is_some() || high.is_some() {
+                        let cast = entity.field(&f.column).map(|fd| fd.data_type.sql_cast()).unwrap_or("text");
+                        out.push(FacetFilter::Between {
+                            column: f.column.clone(),
+                            cast,
+                            low_suffix: lo_suffix,
+                            high_suffix: hi_suffix,
+                            low,
+                            high,
+                        });
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
 /// A report's live filter state, from its `r<idx>_q` (search across
 /// visible columns) and `r<idx>_col`/`r<idx>_val` (single-column
-/// filter) URL parameters.
+/// filter) URL parameters, plus any sibling `FacetedSearch`'s active
+/// facets (see `FacetFilter`) — ANDed together with the rest.
 #[derive(Debug, Clone, Default)]
 struct ReportFilters {
     q: Option<String>,
     col: Option<(String, String)>,
+    facets: Vec<FacetFilter>,
 }
 
 impl ReportFilters {
@@ -502,7 +623,7 @@ impl ReportFilters {
             }
             _ => None,
         };
-        Ok(ReportFilters { q: get("q"), col })
+        Ok(ReportFilters { q: get("q"), col, facets: Vec::new() })
     }
 
     /// Builds the SQL conditions for these filters. `prefix` qualifies a
@@ -531,6 +652,31 @@ impl ReportFilters {
             let n = first_param + binds.len();
             conditions.push(format!("({})::text ilike ${n}", expr_for(col)));
             binds.push(format!("%{val}%"));
+        }
+        for facet in &self.facets {
+            match facet {
+                FacetFilter::In { column, values } => {
+                    let mut ors = Vec::new();
+                    for v in values {
+                        let n = first_param + binds.len();
+                        ors.push(format!("{prefix}{column} = ${n}"));
+                        binds.push(v.clone());
+                    }
+                    conditions.push(format!("({})", ors.join(" or ")));
+                }
+                FacetFilter::Between { column, cast, low, high, .. } => {
+                    if let Some(low) = low {
+                        let n = first_param + binds.len();
+                        conditions.push(format!("{prefix}{column} >= ${n}::{cast}"));
+                        binds.push(low.clone());
+                    }
+                    if let Some(high) = high {
+                        let n = first_param + binds.len();
+                        conditions.push(format!("{prefix}{column} <= ${n}::{cast}"));
+                        binds.push(high.clone());
+                    }
+                }
+            }
         }
         (conditions, binds)
     }
@@ -1272,6 +1418,87 @@ async fn render_component(
             Ok(render::map_html(app, title, &points, link_page.as_deref(), html))
         }
 
+        RuntimeComponent::FacetedSearch { title, entity, facets, html, .. } => {
+            let report_idx = companion_report_idx(page, &entity.name);
+            // This facet search's own currently-active selections (wire
+            // format: `f{idx}_...`, same `idx` this component renders
+            // at) — needed both to pre-check/pre-fill each facet's
+            // control and, per checkbox_list facet below, to exclude
+            // that one facet's own selection from its count query (so
+            // checking a box narrows the *other* facets' counts without
+            // making its own other options disappear).
+            let all_facets = FacetFilter::from_query(query, idx, facets, entity);
+
+            let (report_filters, report_columns) = match report_idx.and_then(|ridx| page.components.get(ridx)) {
+                Some(RuntimeComponent::Report { columns, .. }) => {
+                    let f = ReportFilters::from_query(query, report_idx.unwrap(), columns).unwrap_or_default();
+                    (f, columns.clone())
+                }
+                _ => (ReportFilters::default(), Vec::new()),
+            };
+
+            let mut ui = Vec::new();
+            for f in facets {
+                match f.kind {
+                    crate::model::FacetKind::CheckboxList => {
+                        let mut filters = report_filters.clone();
+                        filters.facets = all_facets.iter().filter(|ff| ff.column() != f.column).cloned().collect();
+                        let (conditions, binds) = filters.to_sql("t.", &report_columns, &[], 1);
+                        let where_clause = if conditions.is_empty() {
+                            String::new()
+                        } else {
+                            format!("where {}", conditions.join(" and "))
+                        };
+                        let sql = format!(
+                            "select (t.{col})::text as v, count(*) as cnt from {schema}.{table} t {where_clause} group by t.{col} order by t.{col}",
+                            col = f.column,
+                            schema = data.app.data_schema,
+                            table = entity.table_name,
+                        );
+                        let mut sql_query = sqlx::query(&sql);
+                        for b in &binds {
+                            sql_query = sql_query.bind(b.as_str());
+                        }
+                        let db_rows = sql_query.fetch_all(&state.pool).await?;
+                        let selected: Vec<String> = all_facets
+                            .iter()
+                            .find_map(|ff| match ff {
+                                FacetFilter::In { column, values } if *column == f.column => Some(values.clone()),
+                                _ => None,
+                            })
+                            .unwrap_or_default();
+                        let options: Vec<(String, i64, bool)> = db_rows
+                            .iter()
+                            .map(|r| {
+                                let v: Option<String> = r.try_get("v").unwrap_or(None);
+                                let v = v.unwrap_or_default();
+                                let cnt: i64 = r.try_get("cnt").unwrap_or(0);
+                                let checked = selected.contains(&v);
+                                (v, cnt, checked)
+                            })
+                            .collect();
+                        ui.push(render::FacetUi::CheckboxList { column: f.column.clone(), options });
+                    }
+                    crate::model::FacetKind::Range | crate::model::FacetKind::DateRange => {
+                        let (low, high) = all_facets
+                            .iter()
+                            .find_map(|ff| match ff {
+                                FacetFilter::Between { column, low, high, .. } if *column == f.column => Some((low.clone(), high.clone())),
+                                _ => None,
+                            })
+                            .unwrap_or((None, None));
+                        if f.kind == crate::model::FacetKind::Range {
+                            ui.push(render::FacetUi::Range { column: f.column.clone(), min: low, max: high });
+                        } else {
+                            ui.push(render::FacetUi::DateRange { column: f.column.clone(), from: low, to: high });
+                        }
+                    }
+                }
+            }
+
+            Ok(render::faceted_search_html(app, page_name, idx, title, report_idx, &ui, html))
+        }
+
         RuntimeComponent::Report {
             title,
             entity,
@@ -1301,8 +1528,18 @@ async fn render_component(
             let p_before = format!("r{idx}_before");
             let p_page = format!("r{idx}_page");
 
-            let filters = ReportFilters::from_query(query, idx, columns)
+            let mut filters = ReportFilters::from_query(query, idx, columns)
                 .map_err(|(_, msg)| anyhow::anyhow!(msg))?;
+            // A sibling FacetedSearch on the same entity ANDs its active
+            // facets into this report's own filters — same "sibling by
+            // shared entity" convention as the companion Form.
+            let facet_qs = match sibling_faceted_search(page, &entity.name) {
+                Some((fs_idx, facets_decl)) => {
+                    filters.facets = FacetFilter::from_query(query, fs_idx, facets_decl, entity);
+                    facet_query_string(fs_idx, &filters.facets)
+                }
+                None => String::new(),
+            };
             // Control Break needs its rows actually grouped together to
             // read as intended — an explicit column-header sort always
             // wins, but absent one, `break_on` supplies its own default
@@ -1323,6 +1560,7 @@ async fn render_component(
             if let Some(s) = &sort {
                 filter_qs.push_str(&format!("&r{idx}_sort={}:{}", url_encode(&s.column), s.dir_str()));
             }
+            filter_qs.push_str(&facet_qs);
 
             // A report is query-paginated when it declares `source:` or
             // its entity is query-backed (`entity ... from query`);
@@ -1465,6 +1703,7 @@ async fn render_component(
 
             let mut extras = report_extras(app, state, data, page_name, idx, &filters, auth_ctx).await?;
             extras.warning = before_load_warning;
+            extras.facet_qs = facet_qs;
 
             let sort_arg = sort.as_ref().map(|s| (s.column.as_str(), s.desc));
             Ok(render::report_html(
@@ -1609,6 +1848,7 @@ async fn report_extras(
         fval: filters.col.as_ref().map(|(_, v)| v.clone()).unwrap_or_default(),
         views,
         warning: None,
+        facet_qs: String::new(),
     })
 }
 
@@ -1976,7 +2216,10 @@ async fn report_csv(
         return Err((StatusCode::BAD_REQUEST, format!("component #{idx} is not a report")));
     };
 
-    let filters = ReportFilters::from_query(&query, idx, columns)?;
+    let mut filters = ReportFilters::from_query(&query, idx, columns)?;
+    if let Some((fs_idx, facets_decl)) = sibling_faceted_search(page, &entity.name) {
+        filters.facets = FacetFilter::from_query(&query, fs_idx, facets_decl, entity);
+    }
     let sort = SortSpec::from_query(&query, idx, columns, computed)?;
     let effective_query = source_query.as_deref().or(entity.source_query.as_deref());
 

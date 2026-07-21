@@ -10,7 +10,7 @@ use super::types::{
     wrap_to_jsonb, ButtonBehavior, LinkColumn, NavNode, RuntimeApp, RuntimeComponent, RuntimeEntity,
     RuntimeField, RuntimePage, RuntimeQuery,
 };
-use crate::model::{AggregateFn, ComputedColumn, FieldItem, FieldType, FormatMask, HighlightRule, HtmlAttrs, PreAction};
+use crate::model::{AggregateFn, ComputedColumn, Facet, FacetKind, FieldItem, FieldType, FormatMask, HighlightRule, HtmlAttrs, PreAction};
 
 /// One piece of a named query's SQL text, as split by `tokenize_binds`:
 /// either literal SQL or a `:name` bind marker.
@@ -649,8 +649,30 @@ fn decode_component(
             requires,
             html,
         }),
+        "faceted_search" => Ok(RuntimeComponent::FacetedSearch {
+            title: json_str(&config, "title"),
+            entity: resolve_entity(entities, &json_str(&config, "entity"))?,
+            facets: decode_facets(&config),
+            requires,
+            html,
+        }),
         other => anyhow::bail!("unknown component kind '{other}' in pgapp_meta.components"),
     }
+}
+
+fn decode_facets(config: &serde_json::Value) -> Vec<Facet> {
+    config
+        .get("facets")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|f| {
+            Some(Facet {
+                column: f.get("column")?.as_str()?.to_string(),
+                kind: FacetKind::parse(f.get("kind")?.as_str()?)?,
+            })
+        })
+        .collect()
 }
 
 /// Decodes a JSON array of `[field, param]` pairs (or an absent/null

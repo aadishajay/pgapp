@@ -430,6 +430,7 @@ fn component_kind_name(c: &ComponentDef) -> &'static str {
         ComponentDef::DynamicAction { .. } => "dynamic_action",
         ComponentDef::Calendar { .. } => "calendar",
         ComponentDef::Map { .. } => "map",
+        ComponentDef::FacetedSearch { .. } => "faceted_search",
     }
 }
 
@@ -453,7 +454,8 @@ fn component_html(c: &ComponentDef) -> &HtmlAttrs {
         | ComponentDef::Action { html, .. }
         | ComponentDef::Button { html, .. }
         | ComponentDef::Calendar { html, .. }
-        | ComponentDef::Map { html, .. } => html,
+        | ComponentDef::Map { html, .. }
+        | ComponentDef::FacetedSearch { html, .. } => html,
         ComponentDef::DynamicAction { .. } => &EMPTY,
     }
 }
@@ -475,7 +477,8 @@ fn component_requires(c: &ComponentDef) -> Option<&str> {
         | ComponentDef::Action { requires, .. }
         | ComponentDef::Button { requires, .. }
         | ComponentDef::Calendar { requires, .. }
-        | ComponentDef::Map { requires, .. } => requires.as_deref(),
+        | ComponentDef::Map { requires, .. }
+        | ComponentDef::FacetedSearch { requires, .. } => requires.as_deref(),
         ComponentDef::DynamicAction { .. } => None,
     }
 }
@@ -1013,6 +1016,56 @@ fn build_component_config(
                     "lng_field": lng_field,
                     "title_field": title_field,
                     "link_page": link_page,
+                }),
+            ))
+        }
+        ComponentDef::FacetedSearch { title, entity, facets, .. } => {
+            if !entity_ids.contains_key(entity) {
+                anyhow::bail!("{owner_label} faceted search '{title}' references unknown entity '{entity}'");
+            }
+            let entity_def = app.entity(entity).expect("checked above");
+            if entity_def.source_query.is_some() {
+                anyhow::bail!(
+                    "{owner_label} faceted search '{title}' binds to entity '{entity}', which is \
+                     query-backed — faceted search only works against a real table"
+                );
+            }
+            if entity_def.source_collection.is_some() {
+                anyhow::bail!(
+                    "{owner_label} faceted search '{title}' binds to entity '{entity}', which is \
+                     collection-backed — faceted search only works against a real table"
+                );
+            }
+            for f in facets {
+                let field = entity_def
+                    .fields
+                    .iter()
+                    .find(|fd| fd.name == f.column)
+                    .ok_or_else(|| anyhow::anyhow!("{owner_label} faceted search '{title}' facet column '{}' is not a field of '{entity}'", f.column))?;
+                match f.kind {
+                    crate::model::FacetKind::Range if field.ty != FieldType::Integer => {
+                        anyhow::bail!(
+                            "{owner_label} faceted search '{title}' facet '{}' is 'range', but its field isn't 'integer'",
+                            f.column
+                        );
+                    }
+                    crate::model::FacetKind::DateRange if field.ty != FieldType::Timestamp => {
+                        anyhow::bail!(
+                            "{owner_label} faceted search '{title}' facet '{}' is 'date_range', but its field isn't 'timestamp'",
+                            f.column
+                        );
+                    }
+                    _ => {}
+                }
+            }
+            let facets_json: Vec<serde_json::Value> =
+                facets.iter().map(|f| serde_json::json!({"column": f.column, "kind": f.kind.as_str()})).collect();
+            Ok((
+                "faceted_search",
+                serde_json::json!({
+                    "title": title,
+                    "entity": entity,
+                    "facets": facets_json,
                 }),
             ))
         }

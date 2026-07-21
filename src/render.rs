@@ -330,6 +330,101 @@ pub fn map_html(app: &str, title: &str, points: &[(f64, f64, String, String)], l
     )
 }
 
+/// One facet's resolved, ready-to-render state — see
+/// `model::Facet`/`model::FacetKind`. `column` is also used as that
+/// facet's plain-text label (no `heading:`-style override, unlike a
+/// Report column — a facet search is a small sidebar, not a table with
+/// header real estate to spare).
+pub enum FacetUi {
+    /// `(value, row count, currently checked)` per distinct value —
+    /// counted over the sibling Report's own filters plus every *other*
+    /// active facet (not this one), so checking a box narrows the rest
+    /// without making its own unchecked options disappear.
+    CheckboxList { column: String, options: Vec<(String, i64, bool)> },
+    Range { column: String, min: Option<String>, max: Option<String> },
+    DateRange { column: String, from: Option<String>, to: Option<String> },
+}
+
+/// Oracle APEX's Faceted Search: a panel of facets filtering a sibling
+/// `Report` bound to the same entity (`report_idx`), on the same page.
+/// A GET form, same "state lives in the URL" idiom as a Report's own
+/// search toolbar — Apply/Clear land back on the Report's anchor so the
+/// page doesn't reset scroll to the top. Checkbox lists reuse the
+/// `checkbox_group` item type's exact markup/JS (`pgapp.syncCheckboxGroup`)
+/// so they're themed identically with no new CSS/JS of their own.
+pub fn faceted_search_html(
+    app: &str,
+    page_name: &str,
+    idx: usize,
+    title: &str,
+    report_idx: Option<usize>,
+    facets: &[FacetUi],
+    html: &HtmlAttrs,
+) -> String {
+    let anchor = report_idx.unwrap_or(idx);
+    let mut body = format!(
+        r#"<div class="{class}"{extra}><h2 class="pgapp-subtitle">{title}</h2>"#,
+        class = merged_class("pgapp-facet-search", html),
+        extra = extra_attrs(html),
+        title = escape(title),
+    );
+    body.push_str(&format!(
+        r#"<form method="get" action="/{app}/{page}#pgapp-c{anchor}">"#,
+        app = escape(app),
+        page = escape(page_name),
+    ));
+    for facet in facets {
+        body.push_str(r#"<div class="pgapp-facet-group">"#);
+        match facet {
+            FacetUi::CheckboxList { column, options } => {
+                let selected: Vec<&str> = options.iter().filter(|(_, _, checked)| *checked).map(|(v, _, _)| v.as_str()).collect();
+                body.push_str(&format!(
+                    r#"<div class="pgapp-facet-title">{}</div><div class="pgapp-checkbox-group"><input type="hidden" name="f{idx}_{column}" value="{value}">"#,
+                    escape(column),
+                    value = escape(&selected.join(",")),
+                ));
+                for (value, count, checked) in options {
+                    body.push_str(&format!(
+                        r#"<label class="pgapp-checkbox-group-option"><input type="checkbox" value="{v}"{checked} onchange="pgapp.syncCheckboxGroup(this)"> {v} ({count})</label>"#,
+                        v = escape(value),
+                        checked = if *checked { " checked" } else { "" },
+                    ));
+                }
+                body.push_str("</div>");
+            }
+            FacetUi::Range { column, min, max } => {
+                body.push_str(&format!(
+                    r#"<div class="pgapp-facet-title">{label}</div>
+<input class="pgapp-input" type="number" name="f{idx}_{column}_min" value="{min}" placeholder="min">
+<input class="pgapp-input" type="number" name="f{idx}_{column}_max" value="{max}" placeholder="max">"#,
+                    label = escape(column),
+                    min = escape(min.as_deref().unwrap_or("")),
+                    max = escape(max.as_deref().unwrap_or("")),
+                ));
+            }
+            FacetUi::DateRange { column, from, to } => {
+                body.push_str(&format!(
+                    r#"<div class="pgapp-facet-title">{label}</div>
+<input class="pgapp-input" type="date" name="f{idx}_{column}_from" value="{from}">
+<input class="pgapp-input" type="date" name="f{idx}_{column}_to" value="{to}">"#,
+                    label = escape(column),
+                    from = escape(from.as_deref().unwrap_or("")),
+                    to = escape(to.as_deref().unwrap_or("")),
+                ));
+            }
+        }
+        body.push_str("</div>");
+    }
+    body.push_str(&format!(
+        r#"<button class="pgapp-btn pgapp-btn-secondary" type="submit">Apply</button>
+<a class="pgapp-link" href="/{app}/{page}#pgapp-c{anchor}">Clear</a>
+</form></div>"#,
+        app = escape(app),
+        page = escape(page_name),
+    ));
+    body
+}
+
 /// Renders a header/footer chrome list — restricted at sync time to
 /// Text/Link/Region, so those are the only variants handled here.
 /// Chrome shows on every page regardless of that page's own `requires:`
@@ -1018,6 +1113,12 @@ pub struct ReportExtras {
     pub fval: String,
     pub views: Vec<ReportViewLink>,
     pub warning: Option<String>,
+    /// A sibling `FacetedSearch`'s currently-active facets, pre-encoded
+    /// as `&f<idx>_...=...` query-string fragments (empty when there's
+    /// no sibling facet search, or none of its facets are active) — so
+    /// sort links, pagination, the CSV download, and saved views all
+    /// keep the same facet selection instead of silently resetting it.
+    pub facet_qs: String,
 }
 
 /// One column's rendered cell value for a report row — shared across
@@ -1127,6 +1228,10 @@ pub fn report_html(
         csv_qs.push_str(&format!("r{idx}_sort={}:{}&", url_encode(c), if desc { "desc" } else { "asc" }));
     }
     csv_qs.pop();
+    if !extras.facet_qs.is_empty() {
+        csv_qs.push_str(&extras.facet_qs);
+    }
+    let csv_qs = csv_qs.trim_start_matches('&');
     body.push_str(&format!(
         r#"<a class="pgapp-link pgapp-btn pgapp-btn-secondary" href="/{app}/{page}/c/{idx}/csv{sep}{csv_qs}">Download CSV</a>"#,
         app = escape(app),
@@ -1278,6 +1383,7 @@ pub fn report_html(
             if !extras.fcol.is_empty() {
                 base_qs.push_str(&format!("&r{idx}_col={}&r{idx}_val={}", url_encode(&extras.fcol), url_encode(&extras.fval)));
             }
+            base_qs.push_str(&extras.facet_qs);
 
             // Classic Report's column alignment: `align:` on a column
             // not listed here falls back to the browser's default

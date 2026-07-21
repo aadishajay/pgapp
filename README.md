@@ -358,6 +358,22 @@ fixed "page kind." Eleven kinds:
   column name in the search toolbar's column picker and the CSV
   header row. `align <col>: left | center | right` sets a column's
   Classic-Report alignment (default left).
+- **`faceted_search "Title" of <entity> { facet <col> as (checkbox_list | range | date_range) }`**
+  — Oracle APEX's Faceted Search: a panel of facets filtering a sibling
+  `Report` bound to the same entity, on the same page (found by entity
+  match, same convention as a Report's companion `Form`). `checkbox_list`
+  shows every distinct value in that column with a live row count
+  (recomputed against the Report's own filters plus every *other*
+  active facet, so checking a box narrows the rest without making its
+  own unchecked options disappear); the column can be any type.
+  `range` is a min/max number-input pair over an `integer` column;
+  `date_range` a from/to date-input pair over a `timestamp` column.
+  Selecting any combination of facets ANDs them into the Report's row
+  fetch, its footer aggregates, and its CSV export alike — the active
+  facet selection also survives the Report's own column-header sort,
+  pagination, and CSV download links (though not a saved view, which
+  doesn't yet capture facets). Entity-backed reports only, same
+  restriction as `computed`/`highlight`.
 - **`form "Title" of <entity> { ... }`** — create/edit form. `fields`
   lists writable columns; `item <field> [as <kind> [(...)]] [attrs
   (...)]` picks a widget and/or sets `id`/`class`/attributes on that
