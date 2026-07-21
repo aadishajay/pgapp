@@ -834,6 +834,13 @@ async fn render_component(
             Ok(render::action_html(app, page_name, idx, label, name, html))
         }
 
+        RuntimeComponent::Button { label, behavior, html } => match behavior {
+            meta::ButtonBehavior::Redirect { target_page, extra_params } => {
+                Ok(render::button_redirect_html(app, label, target_page, extra_params, query, html))
+            }
+            meta::ButtonBehavior::RunAction { name, .. } => Ok(render::action_html(app, page_name, idx, label, name, html)),
+        },
+
         RuntimeComponent::Chart { title, query: qname, chart_type, x, y, html } => {
             let rq = page
                 .resolve_query(&data.app, qname)
@@ -1160,11 +1167,15 @@ async fn run_action(
     let page = page_or_404(&data.app, &page_name)?;
     auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
-    let RuntimeComponent::Action { name, config, .. } = component else {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!("page '{page_name}' component #{idx} is not an action"),
-        ));
+    let (name, config) = match component {
+        RuntimeComponent::Action { name, config, .. } => (name, config),
+        RuntimeComponent::Button { behavior: meta::ButtonBehavior::RunAction { name, config }, .. } => (name, config),
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                format!("page '{page_name}' component #{idx} is not an action"),
+            ));
+        }
     };
     let module = state.actions.get(name.as_str()).ok_or_else(|| {
         (

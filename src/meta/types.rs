@@ -71,6 +71,13 @@ pub struct LinkColumn {
     pub extra_params: Vec<(String, String)>,
 }
 
+/// Runtime counterpart of [`crate::model::ButtonBehavior`].
+#[derive(Debug, Clone)]
+pub enum ButtonBehavior {
+    Redirect { target_page: String, extra_params: Vec<(String, String)> },
+    RunAction { name: String, config: serde_json::Value },
+}
+
 /// One independently-rendered piece of a page (or of the app-wide
 /// header/footer chrome) — the runtime counterpart of
 /// [`crate::model::ComponentDef`], with entity names already resolved
@@ -137,6 +144,12 @@ pub enum RuntimeComponent {
         label: String,
         name: String,
         config: serde_json::Value,
+        html: HtmlAttrs,
+    },
+    /// A standalone button — see `model::ComponentDef::Button`.
+    Button {
+        label: String,
+        behavior: ButtonBehavior,
         html: HtmlAttrs,
     },
     /// A client-side dynamic action; `config` is the full

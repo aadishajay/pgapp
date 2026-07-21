@@ -784,6 +784,41 @@ fn input_for_field(
     )
 }
 
+/// A standalone button whose behavior is `ButtonBehavior::Redirect` —
+/// unlike `link_html` (a bare page target, no parameters), each of
+/// `extra_params` is `(current_page_field, target_param_name)`: looked
+/// up in `query` (this page's own already-received query-string
+/// context — a button isn't row-bound the way a report's `link:` is,
+/// so there's no per-row value to read instead) and forwarded under the
+/// new name, same shape as `LinkColumn::extra_params` one row up.
+pub fn button_redirect_html(
+    app: &str,
+    label: &str,
+    target_page: &str,
+    extra_params: &[(String, String)],
+    query: &HashMap<String, String>,
+    html: &HtmlAttrs,
+) -> String {
+    let mut href = format!("/{}/{}", escape(app), escape(target_page));
+    if !extra_params.is_empty() {
+        let pairs: Vec<String> = extra_params
+            .iter()
+            .map(|(field, param)| {
+                let val = query.get(field).map(|s| s.as_str()).unwrap_or("");
+                format!("{}={}", escape(param), url_encode(val))
+            })
+            .collect();
+        href.push('?');
+        href.push_str(&pairs.join("&"));
+    }
+    format!(
+        r#"<a class="{class}" href="{href}"{extra}>{label}</a>"#,
+        class = merged_class("pgapp-btn pgapp-btn-primary", html),
+        extra = extra_attrs(html),
+        label = escape(label),
+    )
+}
+
 /// A server-side action component: a button posting to the action's
 /// run route. The outcome comes back as a notice/error banner.
 pub fn action_html(app: &str, page_name: &str, idx: usize, label: &str, module: &str, html: &HtmlAttrs) -> String {

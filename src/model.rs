@@ -136,6 +136,23 @@ pub struct LinkColumn {
     pub extra_params: Vec<(String, String)>,
 }
 
+/// What a `ComponentDef::Button` click actually does — see its doc for
+/// why this is a separate variant from `Link`/`Action` rather than
+/// reusing either directly.
+#[derive(Debug, Clone)]
+pub enum ButtonBehavior {
+    /// `-> page <Name> (<param>: <source_field>, ...)`: navigates to
+    /// another page, forwarding `<source_field>`'s *current* value —
+    /// looked up in the page's own query-string context at render time,
+    /// the same way `LinkColumn::extra_params` looks a row column up in
+    /// the current report row — under the new `<param>` name. Empty
+    /// `extra_params` is a plain redirect with no forwarded parameters.
+    Redirect { target_page: String, extra_params: Vec<(String, String)> },
+    /// `calls <name> (...)`: runs a registered server-side action
+    /// module on click, identical to `ComponentDef::Action`.
+    RunAction { name: String, config: serde_json::Value },
+}
+
 /// How a form/editable-table field is presented: `kind` names a
 /// registered component (see `src/item_types.rs`, e.g. "text", "radio",
 /// "slider"), and `config` is whatever that component wants — a generic
@@ -276,6 +293,21 @@ pub enum ComponentDef {
         config: serde_json::Value,
         html: HtmlAttrs,
     },
+    /// A standalone clickable button, independent of any report row —
+    /// unlike `Link` (a plain page target, no parameters) or `Action`
+    /// (always a server action), `Button` is either: a redirect to
+    /// another page with parameters mapped in from the *current page's*
+    /// own query-string context (mirroring Oracle APEX's "Redirect to
+    /// Page" button behavior — see `ButtonBehavior::Redirect`), or a
+    /// server action run on click (`ButtonBehavior::RunAction`,
+    /// identical to `Action` — kept as a `Button` variant rather than
+    /// folded into `Action` so both button shapes share one component
+    /// kind and one place in the App Builder's "Add Component" list).
+    Button {
+        label: String,
+        behavior: ButtonBehavior,
+        html: HtmlAttrs,
+    },
     /// A client-side dynamic action: `on <event> of <item> { ops }`.
     /// Not rendered as visible content — the page emits all of these as
     /// one JSON blob that the DB-stored runtime.js dispatcher binds, so
@@ -301,7 +333,8 @@ impl ComponentDef {
             | ComponentDef::Text { html, .. }
             | ComponentDef::Link { html, .. }
             | ComponentDef::Region { html, .. }
-            | ComponentDef::Action { html, .. } => *html = new_html,
+            | ComponentDef::Action { html, .. }
+            | ComponentDef::Button { html, .. } => *html = new_html,
             ComponentDef::DynamicAction { .. } => {}
         }
     }

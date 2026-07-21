@@ -7,8 +7,8 @@ use sqlx::{Executor, PgPool, TypeInfo};
 use std::collections::HashMap;
 
 use super::types::{
-    wrap_to_jsonb, LinkColumn, NavNode, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimeField,
-    RuntimePage, RuntimeQuery,
+    wrap_to_jsonb, ButtonBehavior, LinkColumn, NavNode, RuntimeApp, RuntimeComponent, RuntimeEntity,
+    RuntimeField, RuntimePage, RuntimeQuery,
 };
 use crate::model::{FieldItem, FieldType, HtmlAttrs, PreAction};
 
@@ -451,23 +451,11 @@ fn decode_component(
         "report" => {
             let entity = resolve_entity(entities, &json_str(&config, "entity"))?;
             let link_column = match config.get("link") {
-                Some(v) if !v.is_null() => {
-                    let extra_params = v
-                        .get("extra_params")
-                        .and_then(|v| v.as_array())
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|pair| {
-                            let arr = pair.as_array()?;
-                            Some((arr.first()?.as_str()?.to_string(), arr.get(1)?.as_str()?.to_string()))
-                        })
-                        .collect();
-                    Some(LinkColumn {
-                        field: json_str(v, "field"),
-                        target_page: json_str(v, "target_page"),
-                        extra_params,
-                    })
-                }
+                Some(v) if !v.is_null() => Some(LinkColumn {
+                    field: json_str(v, "field"),
+                    target_page: json_str(v, "target_page"),
+                    extra_params: decode_extra_params(v.get("extra_params")),
+                }),
                 _ => None,
             };
             Ok(RuntimeComponent::Report {
@@ -523,9 +511,37 @@ fn decode_component(
             config: config.get("config").cloned().unwrap_or(serde_json::json!({})),
             html,
         }),
+        "button" => {
+            let behavior = match config.get("behavior").and_then(|v| v.as_str()) {
+                Some("run_action") => ButtonBehavior::RunAction {
+                    name: json_str(&config, "name"),
+                    config: config.get("config").cloned().unwrap_or(serde_json::json!({})),
+                },
+                _ => ButtonBehavior::Redirect {
+                    target_page: json_str(&config, "target_page"),
+                    extra_params: decode_extra_params(config.get("extra_params")),
+                },
+            };
+            Ok(RuntimeComponent::Button { label: json_str(&config, "label"), behavior, html })
+        }
         "dynamic_action" => Ok(RuntimeComponent::DynamicAction { config }),
         other => anyhow::bail!("unknown component kind '{other}' in pgapp_meta.components"),
     }
+}
+
+/// Decodes a JSON array of `[field, param]` pairs (or an absent/null
+/// value) into `Vec<(String, String)>` — the wire shape both a
+/// report's `LinkColumn::extra_params` and a button's
+/// `ButtonBehavior::Redirect::extra_params` share.
+fn decode_extra_params(v: Option<&serde_json::Value>) -> Vec<(String, String)> {
+    v.and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|pair| {
+            let arr = pair.as_array()?;
+            Some((arr.first()?.as_str()?.to_string(), arr.get(1)?.as_str()?.to_string()))
+        })
+        .collect()
 }
 
 fn build_nav_tree(

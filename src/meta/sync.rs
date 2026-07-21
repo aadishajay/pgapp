@@ -402,6 +402,7 @@ fn component_kind_name(c: &ComponentDef) -> &'static str {
         ComponentDef::Link { .. } => "link",
         ComponentDef::Region { .. } => "region",
         ComponentDef::Action { .. } => "action",
+        ComponentDef::Button { .. } => "button",
         ComponentDef::DynamicAction { .. } => "dynamic_action",
     }
 }
@@ -422,7 +423,8 @@ fn component_html(c: &ComponentDef) -> &HtmlAttrs {
         | ComponentDef::Text { html, .. }
         | ComponentDef::Link { html, .. }
         | ComponentDef::Region { html, .. }
-        | ComponentDef::Action { html, .. } => html,
+        | ComponentDef::Action { html, .. }
+        | ComponentDef::Button { html, .. } => html,
         ComponentDef::DynamicAction { .. } => &EMPTY,
     }
 }
@@ -731,6 +733,40 @@ fn build_component_config(
                 serde_json::json!({ "label": label, "name": name, "config": config }),
             ))
         }
+        ComponentDef::Button { label, behavior, .. } => match behavior {
+            crate::model::ButtonBehavior::Redirect { target_page, extra_params } => {
+                if !page_ids.contains_key(target_page) {
+                    anyhow::bail!("{owner_label} button '{label}' redirects to unknown page '{target_page}'");
+                }
+                Ok((
+                    "button",
+                    serde_json::json!({
+                        "label": label,
+                        "behavior": "redirect",
+                        "target_page": target_page,
+                        "extra_params": extra_params,
+                    }),
+                ))
+            }
+            crate::model::ButtonBehavior::RunAction { name, config } => {
+                if !action_registry.contains_key(name.as_str()) {
+                    let known: Vec<&str> = action_registry.keys().copied().collect();
+                    anyhow::bail!(
+                        "{owner_label} button '{label}' calls unknown module '{name}' (known: {})",
+                        known.join(", ")
+                    );
+                }
+                Ok((
+                    "button",
+                    serde_json::json!({
+                        "label": label,
+                        "behavior": "run_action",
+                        "name": name,
+                        "config": config,
+                    }),
+                ))
+            }
+        },
         ComponentDef::DynamicAction { event, item, ops } => {
             let ops_json: Vec<serde_json::Value> = ops.iter().map(|op| op.to_json()).collect();
             for op in ops {

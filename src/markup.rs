@@ -39,6 +39,13 @@
 //!
 //! action    := "action" String "calls" Ident itemconfig?
 //!
+//! button    := "button" String ( "->" "page" Ident ( "(" paramlist ")" )?
+//!                                | "calls" Ident itemconfig? )
+//!            (the first form redirects, forwarding the current page's
+//!            own query-string values under new names, same shape as a
+//!            report's "link" property above; the second runs a
+//!            server-side action module, same as "action")
+//!
 //! report    := "report" String "of" Ident "{" reportprop* "}"
 //! reportprop := "columns" ":" identlist
 //!             | "source" ":" "query" Ident
@@ -117,8 +124,8 @@
 use anyhow::{bail, Context, Result};
 
 use crate::model::{
-    AppDef, ComponentDef, DaOp, EntityDef, FieldDef, FieldItem, FieldType, HtmlAttrs, LinkColumn,
-    NavItem, PageDef, PreAction, QueryDef, CHART_TYPES,
+    AppDef, ButtonBehavior, ComponentDef, DaOp, EntityDef, FieldDef, FieldItem, FieldType, HtmlAttrs,
+    LinkColumn, NavItem, PageDef, PreAction, QueryDef, CHART_TYPES,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -631,10 +638,32 @@ impl Parser {
                 config,
                 html: HtmlAttrs::default(),
             })
+        } else if self.at_keyword("button") {
+            self.advance()?;
+            let label = self.expect_string()?;
+            let behavior = if matches!(self.peek(), Some(Token::Arrow)) {
+                let target_page = self.parse_page_target()?;
+                let extra_params = if self.at_symbol('(') { self.parse_param_list()? } else { Vec::new() };
+                ButtonBehavior::Redirect { target_page, extra_params }
+            } else {
+                self.expect_keyword("calls")?;
+                let name = self.expect_ident()?;
+                let config = if self.at_symbol('(') {
+                    self.parse_item_config()?
+                } else {
+                    serde_json::json!({})
+                };
+                ButtonBehavior::RunAction { name, config }
+            };
+            Ok(ComponentDef::Button {
+                label,
+                behavior,
+                html: HtmlAttrs::default(),
+            })
         } else {
             bail!(
                 "expected a component ('report', 'form', 'editable_table', 'chart', 'text', \
-                 'link', 'region', or 'action'), found {:?} (line {})",
+                 'link', 'region', 'action', or 'button'), found {:?} (line {})",
                 self.peek(),
                 self.cur_line()
             );
@@ -1552,6 +1581,82 @@ app "Demo" {
         assert_eq!(da.2.len(), 5);
         assert!(matches!(&da.2[0], DaOp::Set { item, expr } if item == "name" && expr == "'x'"));
         assert!(matches!(&da.2[4], DaOp::Refresh(q) if q == "stats"));
+    }
+
+    #[test]
+    fn parses_both_button_behaviors() {
+        let src = r#"
+            app "Demo" {
+                entity "t" { field id: id field name: text }
+
+                page "List" {
+                    button "Create" -> page Entry (name: default_name)
+                }
+
+                page "Entry" {
+                    form "Entry" of t { fields: name }
+                    button "Sync" calls run_query (query: "stats")
+                }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+
+        let list_page = app.pages.iter().find(|p| p.name == "List").unwrap();
+        let redirect = list_page
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Button { label, behavior, .. } => Some((label, behavior)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(redirect.0, "Create");
+        match redirect.1 {
+            ButtonBehavior::Redirect { target_page, extra_params } => {
+                assert_eq!(target_page, "Entry");
+                assert_eq!(extra_params, &[("name".to_string(), "default_name".to_string())]);
+            }
+            other => panic!("expected Redirect, got {other:?}"),
+        }
+
+        let entry_page = app.pages.iter().find(|p| p.name == "Entry").unwrap();
+        let run_action = entry_page
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Button { label, behavior, .. } => Some((label, behavior)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(run_action.0, "Sync");
+        match run_action.1 {
+            ButtonBehavior::RunAction { name, config } => {
+                assert_eq!(name, "run_query");
+                assert_eq!(config["query"], "stats");
+            }
+            other => panic!("expected RunAction, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_plain_redirect_button_needs_no_parameters() {
+        let src = r#"
+            app "Demo" {
+                page "P" {
+                    button "Go" -> page P
+                }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+        let button = app.pages[0]
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Button { behavior, .. } => Some(behavior),
+                _ => None,
+            })
+            .unwrap();
+        assert!(matches!(button, ButtonBehavior::Redirect { extra_params, .. } if extra_params.is_empty()));
     }
 
     #[test]

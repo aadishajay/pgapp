@@ -520,8 +520,9 @@ window.pgapp = (function () {
     editable_table: '    editable_table "New Table" of <entity_name> {\n      columns: <col1>, <col2>\n    }',
     form: '    form "New Form" of <entity_name> {\n      fields: <field1>, <field2>\n    }',
     chart: '    chart "New Chart" from query <query_name> {\n      type: bar\n      x: <label_column>\n      y: <value_column>\n    }',
-    action: '    action "Run action" runs <action_name>',
+    action: '    action "Run action" calls <action_name>',
     link: '    link "Go" -> page <PageName>',
+    button: '    button "Go" -> page <PageName>',
   };
 
   // The App Builder's "Add Component" panel: a `text ... attrs (id:
@@ -529,7 +530,7 @@ window.pgapp = (function () {
   // raw markup textarea appended into it. Picking a kind just seeds the
   // textarea with a starter template (COMPONENT_TEMPLATES) — the
   // textarea's own content, not the kind picker, is what's actually
-  // submitted, so any of the 8 component kinds and any of their
+  // submitted, so any of the 9 component kinds and any of their
   // attributes can be added, not a fixed structured-fields subset. If
   // the textarea's text targets a page (a `link` component, or a
   // report's `link:` property), `renderLinkControls` also renders a
@@ -765,14 +766,27 @@ window.pgapp = (function () {
       if (linkComponent) {
         return { kind: "link-component", lineIndex: i, prefix: linkComponent[1], page: linkComponent[2] };
       }
+      // A button's redirect behavior (its "calls <action>" behavior has
+      // no page target, so it never matches this and gets no dropdown).
+      var buttonRedirect = line.match(/^(\s*button\s+"(?:[^"\\]|\\.)*"\s*->\s*page\s+)([A-Za-z_][A-Za-z0-9_]*)\s*(?:\(([^)]*)\))?\s*$/);
+      if (buttonRedirect) {
+        return {
+          kind: "button-redirect",
+          lineIndex: i,
+          prefix: buttonRedirect[1],
+          page: buttonRedirect[2],
+          params: buttonRedirect[3] || "",
+        };
+      }
     }
     return null;
   }
 
   // Structured, GUI-proper editing for the one property that's
   // genuinely error-prone to hand-type: a page target, plus (for a
-  // report's `link:`) its row-column -> page-param mappings. Inserted
-  // right before `textarea` inside `container`; rewrites the relevant
+  // report's `link:` or a button's redirect behavior) its source-field
+  // -> page-param mappings. Inserted right before `textarea` inside
+  // `container`; rewrites the relevant
   // line in `textarea.value` directly on every change, so Save still
   // just submits the textarea's own text — this is a convenience layer
   // on top of the raw editor, not a replacement for it. Rendered once
@@ -806,15 +820,28 @@ window.pgapp = (function () {
     targetRow.appendChild(label);
     wrap.appendChild(targetRow);
 
+    // Each parenthesized pair is `<source_field>: <target_param_name>`
+    // — for a report's `link:`, the CURRENT ROW's own column; for a
+    // button's redirect, the CURRENT PAGE's own query-string value
+    // (buttons aren't row-bound) — either way forwarded under a
+    // (possibly different) name on the target page's own query string
+    // (see `render.rs`'s `for (field, param) in extra_params` — `field`
+    // is read first, `param` is what shows up in the URL).
+    // `rowColumn`/`pageParam` below name the two halves the same way in
+    // both cases, so the UI can't get them backwards the way a generic
+    // `name`/`value` pair invites.
     var paramRows = [];
-    if (parsed.kind === "report-link") {
+    var hasParams = parsed.kind === "report-link" || parsed.kind === "button-redirect";
+    if (hasParams) {
       parsed.params.split(",").forEach(function (pair) {
         pair = pair.trim();
         if (!pair) return;
         var sep = pair.indexOf(":");
         if (sep === -1) return;
-        paramRows.push({ name: pair.slice(0, sep).trim(), value: pair.slice(sep + 1).trim() });
+        paramRows.push({ rowColumn: pair.slice(0, sep).trim(), pageParam: pair.slice(sep + 1).trim() });
       });
+
+      var sourceLabel = parsed.kind === "report-link" ? "row column" : "page field";
 
       var paramsList = document.createElement("div");
       paramsList.className = "pgapp-link-params-list";
@@ -824,25 +851,25 @@ window.pgapp = (function () {
         paramRows.forEach(function (row, i) {
           var rowEl = document.createElement("div");
           rowEl.className = "pgapp-link-param-row";
-          var nameInput = document.createElement("input");
-          nameInput.className = "pgapp-input";
-          nameInput.placeholder = "page param";
-          nameInput.value = row.name;
-          var valueInput = document.createElement("input");
-          valueInput.className = "pgapp-input";
-          valueInput.placeholder = "row column";
-          valueInput.value = row.value;
+          var columnInput = document.createElement("input");
+          columnInput.className = "pgapp-input";
+          columnInput.placeholder = sourceLabel;
+          columnInput.value = row.rowColumn;
+          var paramInput = document.createElement("input");
+          paramInput.className = "pgapp-input";
+          paramInput.placeholder = "page param";
+          paramInput.value = row.pageParam;
           var removeBtn = document.createElement("button");
           removeBtn.type = "button";
           removeBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
           removeBtn.title = "Remove parameter";
           removeBtn.textContent = "✕";
-          nameInput.addEventListener("input", function () {
-            row.name = nameInput.value;
+          columnInput.addEventListener("input", function () {
+            row.rowColumn = columnInput.value;
             applyChange();
           });
-          valueInput.addEventListener("input", function () {
-            row.value = valueInput.value;
+          paramInput.addEventListener("input", function () {
+            row.pageParam = paramInput.value;
             applyChange();
           });
           removeBtn.addEventListener("click", function () {
@@ -850,9 +877,9 @@ window.pgapp = (function () {
             rerenderParams();
             applyChange();
           });
-          rowEl.appendChild(nameInput);
+          rowEl.appendChild(columnInput);
           rowEl.appendChild(document.createTextNode(":"));
-          rowEl.appendChild(valueInput);
+          rowEl.appendChild(paramInput);
           rowEl.appendChild(removeBtn);
           paramsList.appendChild(rowEl);
         });
@@ -864,7 +891,7 @@ window.pgapp = (function () {
       addParamBtn.className = "pgapp-btn pgapp-btn-secondary";
       addParamBtn.textContent = "+ Add parameter";
       addParamBtn.addEventListener("click", function () {
-        paramRows.push({ name: "", value: "" });
+        paramRows.push({ rowColumn: "", pageParam: "" });
         rerenderParams();
         applyChange();
       });
@@ -872,7 +899,7 @@ window.pgapp = (function () {
       var paramsRow = document.createElement("div");
       paramsRow.className = "pgapp-link-controls-row";
       var paramsLabel = document.createElement("label");
-      paramsLabel.textContent = "Link parameters";
+      paramsLabel.textContent = "Link parameters (" + sourceLabel + " : page param)";
       paramsRow.appendChild(paramsLabel);
       paramsRow.appendChild(paramsList);
       paramsRow.appendChild(addParamBtn);
@@ -886,14 +913,17 @@ window.pgapp = (function () {
       } else {
         var paramsStr = paramRows
           .filter(function (r) {
-            return r.name;
+            return r.rowColumn;
           })
           .map(function (r) {
-            return r.name + ": " + r.value;
+            return r.rowColumn + ": " + r.pageParam;
           })
           .join(", ");
+        var parenthetical = paramsStr ? " (" + paramsStr + ")" : "";
         lines[parsed.lineIndex] =
-          parsed.prefix + parsed.column + parsed.arrow + select.value + (paramsStr ? " (" + paramsStr + ")" : "");
+          parsed.kind === "report-link"
+            ? parsed.prefix + parsed.column + parsed.arrow + select.value + parenthetical
+            : parsed.prefix + select.value + parenthetical;
       }
       textarea.value = lines.join("\n");
     }

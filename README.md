@@ -289,7 +289,7 @@ conflicts.
 ## Components
 
 A page's body is `Vec<ComponentDef>` (`src/model.rs`) — there's no
-fixed "page kind." Eight kinds:
+fixed "page kind." Ten kinds:
 
 - **`report "Title" of <entity> { ... }`** — read-only, paginated
   table. `columns`; `source: query <name>` sources rows from a query
@@ -314,6 +314,17 @@ fixed "page kind." Eight kinds:
   result columns show (default: every column, alphabetically).
 - **`action "Label" calls <module> (config...)`** — a button running a
   server-side action module; see "Server-side actions".
+- **`button "Label" -> page <Name> (extra: param, ...)`** or **`button
+  "Label" calls <module> (config...)`** — a standalone button
+  independent of any report row: the first form redirects, forwarding
+  the current page's own query-string values under new names (same
+  shape as a report's `link:` above, but from the page's own context
+  instead of a row); the second runs a server-side action, identical to
+  `action` above. Two behaviors, one component kind, so the App
+  Builder's "Add Component" panel only needs one entry for both — the
+  closest pgapp equivalent to Oracle APEX's button (`redirectThisApp`
+  vs. a process-submitting button; see "Migrating from Oracle APEX"
+  below).
 - **`on <event> of <item> { ... }`** — a client-side dynamic action;
   see "Dynamic actions".
 - Any component can end with **`attrs (id: "...", class: "...",
@@ -864,6 +875,41 @@ a dedicated route instead. Errors (bad theme, unknown/disabled
 workspace, a slug collision) land in that same row's `status`/`result`
 columns rather than a page-level warning banner, so they stay visible
 on every later load too, not just the one right after submission.
+
+### Migrating from Oracle APEX
+
+There's no automated importer for an APEX application export (the
+`apexlang` `.apx` format) — a real export is dozens of files covering
+far more ground than pgapp's markup does (per-column report formatting,
+shared LOVs/authorization/authentication schemes, processes,
+session-state protection, and more), and translating that faithfully
+is its own project, not a feature of this one. What pgapp does give you
+is a concept-for-concept map, so a hand migration knows where each
+piece goes:
+
+| Oracle APEX (`apexlang`)                                   | pgapp equivalent                                                             |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| `page N (name, title, ...)`                                   | `page "Title" { ... }` (see "Markup")                                        |
+| `region ... (type: interactiveReport, source { tableName })`  | `report "Title" of <entity> { columns: ... }`                                |
+| `region ... (type: staticContent)` / a plain query region     | `region "Label" from query <name> { columns: ... }`                          |
+| a region's `column NAME (heading, layout, appearance, ...)`   | one name in `columns:` — no per-column heading/format override yet (see "App Builder" for what's GUI-editable today) |
+| `region`'s `link { target: { page, items } }`                 | a report's `link: <field> -> page <Name> (extra: param, ...)`               |
+| `button ... (behavior { action: redirectThisApp, target })`  | `button "Label" -> page <Name> (extra: param, ...)`                          |
+| `button ... (behavior { action: submit }, serverSideCondition { whenButtonPressed })` + a `process` | `button "Label" calls <action_name> (config...)` — write the process's logic as a registered action module (see "Server-side actions") instead of PL/SQL |
+| a page item (`P7_TRIP_ID`, etc.)                              | a `Form`/`EditableTable` field, or a cross-page query-string parameter        |
+| `dynamicAction ... (when { event }, action { action: ... })`  | `on <event> of <item> { show/hide/toggle/set/refresh }` (native APEX events beyond click/change aren't supported) |
+| shared LOV (`shared-components/lovs.apx`)                     | `query <name> { sql: "..." }` referenced inline from `item ... as popup from query <name>` — not a standalone reusable object yet |
+| `authentication`/`authorization` schemes                      | the app-level `auth { }` block (on/off; roles via `requires: <role>` on a page) — no separate scheme objects |
+| `process` (PL/SQL)                                            | a registered Rust action module (`src/actions.rs`) called from `before_load`, `action`, or a `button calls` |
+
+For each APEX page: create the matching pgapp `page`, then migrate its
+regions/reports one at a time, using the App Builder's raw component
+editor (see "App Builder" above) to iterate quickly without restarting
+the server. Anything with no row in this table (per-column formatting,
+LOVs/auth schemes as objects, processes as a distinct type) has no
+pgapp equivalent yet — reimplement that logic in the target page's own
+query SQL, a registered action module, or a dynamic action, whichever
+fits.
 
 ## Report edit/create popup
 
