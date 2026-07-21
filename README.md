@@ -271,6 +271,20 @@ app by name (Terraform-shaped, no `include`, no import graph):
   blocks, referencing each other by name exactly as in one file.
 - The same name declared in two files is a startup error naming both.
 
+This merge-by-name is deliberately unopinionated about *where* a
+declaration lives — any file, anywhere in the tree, merges the same
+way, so an existing directory can be organized however suits the app
+(by module, by feature, whatever). `pgapp new --dir` (see
+"Scaffolding") follows one specific convention on top of that
+mechanism, though: `pages/<name>.pgapp` (one file per page) and
+`shared_components/<kind>/<name>.pgapp` (entities today; queries and
+auth_schemes too, once an app has any) — the same split-by-kind shape
+a real Oracle APEX application export uses
+(`pages/page_NNNNN.sql`, `shared_components/<kind>/...`). It's a
+starting-point convention the scaffold follows, not something
+`src/source.rs` enforces — nothing stops an author from reorganizing
+afterward.
+
 `examples/helpdesk-modular/` is the helpdesk app split this way — run
 it with `pgapp run examples/helpdesk-modular
 --workspace <slug>`; it syncs to the same metadata as the single-file

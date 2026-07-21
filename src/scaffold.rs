@@ -217,9 +217,11 @@ mode" section):
                   markup, so spaces are fine: "My Project")
   [path]          where to write it (default: a slugified <AppName>,
                   plus ".pgapp" unless --dir is given)
-  --dir           scaffold a directory of files instead of one file
-                  (app.pgapp + items.pgapp + pages/items.pgapp) — the
-                  layout examples/helpdesk-modular/ demonstrates
+  --dir           scaffold a directory of files instead of one file:
+                  app.pgapp, pages/items.pgapp (one file per page),
+                  shared_components/entities/items.pgapp — the same
+                  split-by-kind shape a real Oracle APEX application
+                  export uses (see README's "One file, or a directory")
   --theme <name>  starting theme (default: shadcn) — see themes/ for
                   what's shipped (plain, shadcn, vivid, google_m3)
   --create, -i    force the interactive prompts even when an <AppName>
@@ -321,14 +323,26 @@ app "{name}" {{
     Ok(())
 }
 
+/// The directory layout `--dir` generates — one file per page under
+/// `pages/`, shared objects (entities today; queries/auth_schemes when
+/// an app grows into them) split by kind under `shared_components/`,
+/// mirroring the split-export shape a real Oracle APEX application
+/// export uses (`pages/page_00001.sql` one-per-page,
+/// `shared_components/<kind>/...`) — see README's "One file, or a
+/// directory" section. Nothing about `src/source.rs`'s merge-by-name
+/// engine requires this particular shape (any file, anywhere in the
+/// tree, still merges the same way); this is the *convention* the
+/// scaffold follows, not a rule it enforces.
 pub fn scaffold_dir(target: &str, name: &str, theme: &str) -> Result<()> {
     refuse_to_overwrite(target)?;
     let base = std::path::Path::new(target);
     let pages_dir = base.join("pages");
+    let entities_dir = base.join("shared_components").join("entities");
     std::fs::create_dir_all(&pages_dir).with_context(|| format!("failed to create directory '{}'", pages_dir.display()))?;
+    std::fs::create_dir_all(&entities_dir).with_context(|| format!("failed to create directory '{}'", entities_dir.display()))?;
 
     let app_path = base.join("app.pgapp");
-    let entity_path = base.join("items.pgapp");
+    let entity_path = entities_dir.join("items.pgapp");
     let page_path = pages_dir.join("items.pgapp");
 
     let app_markup = format!(
@@ -337,7 +351,14 @@ pub fn scaffold_dir(target: &str, name: &str, theme: &str) -> Result<()> {
 # one app. Exactly one file — this one — declares the `app` block
 # (settings, nav, header/footer); every other file holds top-level
 # entity/page/query blocks, referencing each other by name exactly as
-# they would inside a single file. Register and run it with:
+# they would inside a single file.
+#
+# Layout convention (not enforced — the merge engine doesn't care where
+# a file lives, only what it declares): one file per page under
+# pages/, and shared objects split by kind under shared_components/ —
+# entities/ today, queries/ and auth_schemes/ too once an app has any.
+# This mirrors a real Oracle APEX application export's own split
+# layout (pages/page_NNNNN.sql, shared_components/<kind>/...).
 #
 #   pgapp instance init                          (once, ever — one instance per machine)
 #   pgapp workspace create --schema <name>       (once per schema)
@@ -352,16 +373,24 @@ app "{name}" {{
 }}
 "#
     );
+    let entity_markup = format!(
+        r#"# shared_components/entities/ — one file per entity once there's more
+# than one; small apps can keep several in one file, same as any other
+# fragment.
+{}"#,
+        entity_block()
+    );
     let page_markup = format!(
-        r#"# The classic CRUD pattern: a Report and a Form for the same entity
-# on one page. Edit/Delete actions on each row appear automatically
-# because the Form is here too — no extra config needed.
+        r#"# pages/ — one file per page. The classic CRUD pattern: a Report and
+# a Form for the same entity on one page. Edit/Delete actions on each
+# row appear automatically because the Form is here too — no extra
+# config needed.
 {}"#,
         page_block()
     );
 
     std::fs::write(&app_path, app_markup).with_context(|| format!("failed to write '{}'", app_path.display()))?;
-    std::fs::write(&entity_path, entity_block()).with_context(|| format!("failed to write '{}'", entity_path.display()))?;
+    std::fs::write(&entity_path, entity_markup).with_context(|| format!("failed to write '{}'", entity_path.display()))?;
     std::fs::write(&page_path, page_markup).with_context(|| format!("failed to write '{}'", page_path.display()))?;
     Ok(())
 }
