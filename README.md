@@ -524,7 +524,7 @@ The PL/SQL analog: named Rust modules under `src/actions/`
 invoked via `action "Label" calls <module> (config...)` — a button
 posting to `/:page/c/:idx/run`, gated by the page's `requires:` role.
 `ActionContext` carries the pool, app, page, config, and request params.
-Ships five modules:
+Ships seven modules:
 
 - **`run_query`** — executes a named query raw (may be a plain
   `UPDATE`/`DELETE`/`INSERT`); binds are still `:name` markers, never
@@ -593,6 +593,25 @@ Ships five modules:
   `content_type: "html"` sends the body as `text/html` instead of the
   default `text/plain`. Implicit-TLS-only providers (port 465) aren't
   covered — only STARTTLS.
+- **`set_session_state`** / **`clear_session_state`** — an
+  approximation of APEX's per-item session state, a less natural fit
+  here than the other modules since pgapp has no server-tracked item
+  state outside the database. Writes/deletes a single row in
+  `pgapp_meta.collections` under `name:` (scoped to the current
+  caller), readable back with `entity "x" from collection "<name>" {
+  field value: text }` like any other collection — no new read
+  mechanism. `{{item}}` in `value` interpolates that page item's
+  current value, same convention as every other action module:
+
+  ```text
+  action "Save filter" calls set_session_state (
+    name: "selected_status",
+    value: "{{status}}"
+  )
+  action "Clear filter" calls clear_session_state (
+    name: "selected_status"
+  )
+  ```
 
 Rust and PL/pgSQL aren't a migration path away from each other: HTTP
 calls belong in Rust (`http_request`) since Postgres has no native

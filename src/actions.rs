@@ -22,6 +22,7 @@ use sqlx::PgPool;
 use crate::meta::{RuntimeApp, RuntimePage};
 
 mod call_function;
+mod clear_session_state;
 /// Not a `ServerAction` (see its own doc) — `pub` so `server.rs`'s
 /// dedicated create-app route can call it directly, `AppState` access
 /// an action module doesn't have.
@@ -30,6 +31,7 @@ mod http_request;
 mod log_values;
 mod run_query;
 mod send_email;
+mod set_session_state;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -89,6 +91,8 @@ pub fn registry() -> Registry {
         Box::new(log_values::LogValues),
         Box::new(http_request::HttpRequest),
         Box::new(send_email::SendEmail),
+        Box::new(set_session_state::SetSessionState),
+        Box::new(clear_session_state::ClearSessionState),
     ];
     modules.into_iter().map(|m| (m.name(), m)).collect()
 }
