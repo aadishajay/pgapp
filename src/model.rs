@@ -481,6 +481,13 @@ pub enum ComponentDef {
         /// `HighlightRule`. Entity-backed reports only, checked in
         /// order, first match wins.
         highlights: Vec<HighlightRule>,
+        /// Classic Report's column heading override: a column not
+        /// listed here just displays its own name as its header.
+        headings: HashMap<String, String>,
+        /// Classic Report's column alignment: `"left"` (default),
+        /// `"center"`, or `"right"` — a column not listed here aligns
+        /// left, same as never setting it.
+        aligns: HashMap<String, String>,
         /// One of `REPORT_DISPLAY_MODES` — `"table"` (default),
         /// `"cards"`, or `"list"`.
         display: String,

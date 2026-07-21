@@ -1285,6 +1285,8 @@ async fn render_component(
             aggregates,
             break_on,
             highlights,
+            headings,
+            aligns,
             display,
             html,
             ..
@@ -1483,6 +1485,8 @@ async fn render_component(
                 &agg_values,
                 break_on.as_deref(),
                 highlights,
+                headings,
+                aligns,
                 display,
                 sort_arg,
                 html,
@@ -1968,7 +1972,7 @@ async fn report_csv(
     auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
     let component = component_at(page, idx)?;
     auth::authorize(&data, component_requires(component), &auth_ctx)?;
-    let RuntimeComponent::Report { title, entity, columns, source_query, computed, formats, .. } = component else {
+    let RuntimeComponent::Report { title, entity, columns, source_query, computed, formats, headings, .. } = component else {
         return Err((StatusCode::BAD_REQUEST, format!("component #{idx} is not a report")));
     };
 
@@ -2023,7 +2027,11 @@ async fn report_csv(
         rp.rows
     };
 
-    let mut csv = columns.iter().map(|c| csv_field(c)).collect::<Vec<_>>().join(",");
+    let mut csv = columns
+        .iter()
+        .map(|c| csv_field(headings.get(c).map(|h| h.as_str()).unwrap_or(c)))
+        .collect::<Vec<_>>()
+        .join(",");
     csv.push_str("\r\n");
     for row in &rows {
         let fields: Vec<String> = columns

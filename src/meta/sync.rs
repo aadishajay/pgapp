@@ -626,6 +626,8 @@ fn build_component_config(
             aggregates,
             break_on,
             highlights,
+            headings,
+            aligns,
             display,
             ..
         } => {
@@ -674,6 +676,16 @@ fn build_component_config(
             if let Some(col) = break_on {
                 if !columns.contains(col) {
                     anyhow::bail!("{owner_label} report '{title}' breaks on column '{col}', which isn't in its 'columns:' list");
+                }
+            }
+            for col in headings.keys() {
+                if !columns.contains(col) {
+                    anyhow::bail!("{owner_label} report '{title}' has a heading for column '{col}', which isn't in its 'columns:' list");
+                }
+            }
+            for col in aligns.keys() {
+                if !columns.contains(col) {
+                    anyhow::bail!("{owner_label} report '{title}' aligns column '{col}', which isn't in its 'columns:' list");
                 }
             }
             if let Some(q) = source_query {
@@ -728,6 +740,8 @@ fn build_component_config(
                     "aggregates": aggregates_json,
                     "break_on": break_on,
                     "highlights": highlights_json,
+                    "headings": headings,
+                    "aligns": aligns,
                     "display": display,
                 }),
             ))

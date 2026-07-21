@@ -125,6 +125,12 @@ pub enum RuntimeComponent {
         /// Interactive Report's row highlight rules — see
         /// `model::HighlightRule`.
         highlights: Vec<HighlightRule>,
+        /// Classic Report's column heading override — see
+        /// `model::ComponentDef::Report::headings`.
+        headings: HashMap<String, String>,
+        /// Classic Report's column alignment — see
+        /// `model::ComponentDef::Report::aligns`.
+        aligns: HashMap<String, String>,
         /// One of `model::REPORT_DISPLAY_MODES` — `"table"` (default),
         /// `"cards"`, or `"list"`.
         display: String,
@@ -292,6 +298,8 @@ impl RuntimeComponent {
                 aggregates,
                 break_on,
                 highlights,
+                headings,
+                aligns,
                 display,
                 requires,
                 html,
@@ -313,6 +321,8 @@ impl RuntimeComponent {
                 "aggregates": aggregates_json(aggregates),
                 "break_on": break_on,
                 "highlights": highlights.iter().map(|h| serde_json::json!({"when": h.when, "color": h.color})).collect::<Vec<_>>(),
+                "headings": headings,
+                "aligns": aligns,
                 "display": display,
                 "requires": requires,
                 "html": html_attrs_json(html),

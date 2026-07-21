@@ -352,7 +352,12 @@ fixed "page kind." Eleven kinds:
   "Download CSV" link (`GET .../c/<idx>/csv`), no markup needed:
   it streams every row matching the report's *current* filters and
   sort as CSV — not just the page on screen — with the same columns
-  and `format:` masks the table shows.
+  and `format:` masks the table shows. `heading <col>: "Label"`
+  overrides a column's Classic-Report header (a column not listed
+  here just shows its own name); the label also replaces the raw
+  column name in the search toolbar's column picker and the CSV
+  header row. `align <col>: left | center | right` sets a column's
+  Classic-Report alignment (default left).
 - **`form "Title" of <entity> { ... }`** — create/edit form. `fields`
   lists writable columns; `item <field> [as <kind> [(...)]] [attrs
   (...)]` picks a widget and/or sets `id`/`class`/attributes on that

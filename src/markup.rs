@@ -105,6 +105,11 @@
 //!             SQL boolean expression, entity-backed reports only, same
 //!             `t.<field>` convention as `computed`'s SQL; repeatable,
 //!             first matching rule per row wins — see model::HighlightRule)
+//!             | "heading" Ident ":" String
+//!             (Classic Report's column heading override — a column not
+//!             listed here just shows its own name)
+//!             | "align" Ident ":" ("left" | "center" | "right")
+//!             (Classic Report's column alignment; default left)
 //!             | "display" ":" ("table" | "cards" | "list")
 //!             (default "table"; Oracle APEX's "Cards" region folded in
 //!             as a display mode — see model::REPORT_DISPLAY_MODES)
@@ -885,6 +890,8 @@ impl Parser {
         let mut aggregates = std::collections::HashMap::new();
         let mut break_on = None;
         let mut highlights = Vec::new();
+        let mut headings = std::collections::HashMap::new();
+        let mut aligns = std::collections::HashMap::new();
         let mut display = "table".to_string();
         while !self.at_symbol('}') {
             if self.at_keyword("computed") {
@@ -927,6 +934,28 @@ impl Parser {
                     .ok_or_else(|| anyhow::anyhow!("highlight on report '{title}' is missing required 'color:' (line {})", self.cur_line()))?
                     .to_string();
                 highlights.push(crate::model::HighlightRule { when, color });
+                continue;
+            }
+            if self.at_keyword("heading") {
+                self.advance()?;
+                let name = self.expect_ident()?;
+                self.expect_symbol(':')?;
+                let label = self.expect_string()?;
+                headings.insert(name, label);
+                continue;
+            }
+            if self.at_keyword("align") {
+                self.advance()?;
+                let name = self.expect_ident()?;
+                self.expect_symbol(':')?;
+                let a = self.expect_ident()?;
+                if !matches!(a.as_str(), "left" | "center" | "right") {
+                    anyhow::bail!(
+                        "invalid align '{a}' on report '{title}' (line {}) — expected left, center, or right",
+                        self.cur_line()
+                    );
+                }
+                aligns.insert(name, a);
                 continue;
             }
             let prop = self.expect_ident()?;
@@ -993,6 +1022,8 @@ impl Parser {
             aggregates,
             break_on,
             highlights,
+            headings,
+            aligns,
             display,
             requires: None,
             html: HtmlAttrs::default(),

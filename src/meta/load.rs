@@ -487,6 +487,18 @@ fn decode_highlights(config: &serde_json::Value) -> Vec<HighlightRule> {
         .collect()
 }
 
+/// Decodes a plain `{col: string}` map — Classic Report's per-column
+/// `headings`/`aligns` overrides.
+fn decode_string_map(config: &serde_json::Value, key: &str) -> HashMap<String, String> {
+    config
+        .get(key)
+        .and_then(|v| v.as_object())
+        .into_iter()
+        .flatten()
+        .filter_map(|(col, v)| Some((col.clone(), v.as_str()?.to_string())))
+        .collect()
+}
+
 fn decode_item_types(v: &serde_json::Value) -> HashMap<String, FieldItem> {
     v.as_object()
         .into_iter()
@@ -542,6 +554,8 @@ fn decode_component(
                 aggregates: decode_aggregates(&config),
                 break_on: config.get("break_on").and_then(|v| v.as_str()).map(String::from),
                 highlights: decode_highlights(&config),
+                headings: decode_string_map(&config, "headings"),
+                aligns: decode_string_map(&config, "aligns"),
                 display: config.get("display").and_then(|v| v.as_str()).unwrap_or("table").to_string(),
                 requires,
                 html,

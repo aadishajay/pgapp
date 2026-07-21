@@ -1091,10 +1091,15 @@ pub fn report_html(
     agg_values: &HashMap<String, Option<String>>,
     break_on: Option<&str>,
     highlights: &[HighlightRule],
+    headings: &HashMap<String, String>,
+    aligns: &HashMap<String, String>,
     display: &str,
     sort: Option<(&str, bool)>,
     html: &HtmlAttrs,
 ) -> String {
+    fn heading_for<'a>(headings: &'a HashMap<String, String>, col: &'a str) -> &'a str {
+        headings.get(col).map(|h| h.as_str()).unwrap_or(col)
+    }
     let mut body = format!(
         r#"<div class="{class}"{extra}><div class="pgapp-report-header"><h2 class="pgapp-subtitle">{title}</h2>"#,
         class = merged_class("pgapp-report", html),
@@ -1154,8 +1159,9 @@ pub fn report_html(
     for col in columns {
         let selected = if *col == extras.fcol { " selected" } else { "" };
         body.push_str(&format!(
-            r#"<option value="{c}"{selected}>{c}</option>"#,
-            c = escape(col)
+            r#"<option value="{c}"{selected}>{label}</option>"#,
+            c = escape(col),
+            label = escape(heading_for(headings, col)),
         ));
     }
     body.push_str(&format!(
@@ -1230,7 +1236,7 @@ pub fn report_html(
                     let cell = report_cell_html(app, row, col, link_column, formats);
                     body.push_str(&format!(
                         r#"<div class="pgapp-card-field"><span class="pgapp-card-label">{}</span><span class="pgapp-card-value">{cell}</span></div>"#,
-                        escape(col)
+                        escape(heading_for(headings, col))
                     ));
                 }
                 if let Some(form_idx) = sibling_form_idx {
@@ -1249,7 +1255,7 @@ pub fn report_html(
                     let cell = report_cell_html(app, row, col, link_column, formats);
                     body.push_str(&format!(
                         r#"<span class="pgapp-list-row-field"><span class="pgapp-list-row-label">{}</span> {cell}</span>"#,
-                        escape(col)
+                        escape(heading_for(headings, col))
                     ));
                 }
                 body.push_str("</div>");
@@ -1273,6 +1279,14 @@ pub fn report_html(
                 base_qs.push_str(&format!("&r{idx}_col={}&r{idx}_val={}", url_encode(&extras.fcol), url_encode(&extras.fval)));
             }
 
+            // Classic Report's column alignment: `align:` on a column
+            // not listed here falls back to the browser's default
+            // (left), same as never setting it.
+            let align_style = |col: &str| match aligns.get(col).map(|s| s.as_str()) {
+                Some("center") => r#" style="text-align:center""#,
+                Some("right") => r#" style="text-align:right""#,
+                _ => "",
+            };
             body.push_str(r#"<div class="pgapp-table-wrap"><table class="pgapp-table"><thead><tr>"#);
             for col in columns {
                 // Interactive Report's clickable column-header sort:
@@ -1289,11 +1303,12 @@ pub fn report_html(
                     _ => ("asc", ""),
                 };
                 body.push_str(&format!(
-                    r#"<th><a class="pgapp-link pgapp-sort-link" href="/{app}/{page}?r{idx}_sort={col_enc}:{next_dir}{base_qs}#pgapp-c{idx}">{col}{arrow}</a></th>"#,
+                    r#"<th{align}><a class="pgapp-link pgapp-sort-link" href="/{app}/{page}?r{idx}_sort={col_enc}:{next_dir}{base_qs}#pgapp-c{idx}">{label}{arrow}</a></th>"#,
+                    align = align_style(col),
                     app = escape(app),
                     page = escape(page_name),
                     col_enc = url_encode(col),
-                    col = escape(col),
+                    label = escape(heading_for(headings, col)),
                 ));
             }
             if sibling_form_idx.is_some() {
@@ -1341,11 +1356,11 @@ pub fn report_html(
                 let id = row.get("id").and_then(|v| v.as_deref()).unwrap_or("").to_string();
                 for col in columns {
                     if break_on == Some(col.as_str()) && !is_break_row {
-                        body.push_str("<td></td>");
+                        body.push_str(&format!("<td{}></td>", align_style(col)));
                         continue;
                     }
                     let cell = report_cell_html(app, row, col, link_column, formats);
-                    body.push_str(&format!("<td>{cell}</td>"));
+                    body.push_str(&format!("<td{}>{cell}</td>", align_style(col)));
                 }
                 if let Some(form_idx) = sibling_form_idx {
                     body.push_str(&format!("<td>{}</td>", report_row_actions_html(app, page_name, idx, form_idx, &id, icons)));
