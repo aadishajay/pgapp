@@ -262,6 +262,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/:workspace/:app/:page/c/:idx/update/:id", post(update))
         .route("/:workspace/:app/:page/c/:idx/delete/:id", post(delete))
         .route("/:workspace/:app/:page/c/:idx/run", post(run_action))
+        .route("/:workspace/:app/:page/c/:idx/call/:op_idx", post(call_dynamic_action))
         .route("/:workspace/:app/:page/c/:idx/views", post(save_view))
         .route("/:workspace/:app/:page/c/:idx/views/:vid/delete", post(delete_view))
         .layer(middleware::from_fn_with_state(state.clone(), auth::require_login))
@@ -1164,17 +1165,28 @@ async fn show(
     }
 
     // All the page's dynamic actions, as one JSON blob the runtime.js
-    // dispatcher binds on DOMContentLoaded.
-    let dyn_actions: Vec<&serde_json::Value> = page
+    // dispatcher binds on DOMContentLoaded. Each gets its own
+    // component index merged in as "idx" — needed to address a `call`
+    // op's own `/c/:idx/call/:op_idx` route (see call_dynamic_action);
+    // every other op ignores it.
+    let dyn_actions: Vec<serde_json::Value> = page
         .components
         .iter()
-        .filter_map(|c| match c {
-            RuntimeComponent::DynamicAction { config } => Some(config),
+        .enumerate()
+        .filter_map(|(idx, c)| match c {
+            RuntimeComponent::DynamicAction { config } => {
+                let mut with_idx = config.clone();
+                if let Some(obj) = with_idx.as_object_mut() {
+                    obj.insert("idx".to_string(), serde_json::json!(idx));
+                }
+                Some(with_idx)
+            }
             _ => None,
         })
         .collect();
     if !dyn_actions.is_empty() {
-        body.push_str(&render::dynamic_actions_script(&dyn_actions));
+        let dyn_actions_refs: Vec<&serde_json::Value> = dyn_actions.iter().collect();
+        body.push_str(&render::dynamic_actions_script(&dyn_actions_refs));
     }
 
     let nav = visible_nav(&data.app, &data.app.nav, &data, &auth_ctx);
@@ -1280,6 +1292,77 @@ async fn run_action(
     match outcome {
         Ok(msg) => Ok(Redirect::to(&format!("/{app}/{page_name}?notice={}#pgapp-c{anchor}", url_encode(&msg))).into_response()),
         Err(e) => Ok(Redirect::to(&format!("/{app}/{page_name}?error={}#pgapp-c{anchor}", url_encode(&e.to_string()))).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/:page/c/:idx/call/:op_idx — the "ajax
+/// callback": a `DynamicAction`'s `call <action> (...) into <target>`
+/// op (`model::DaOp::Call`), invoked from `pgapp.runDynamicActionCall`
+/// in `/runtime.js` via `fetch()` instead of a full-page form POST like
+/// `run_action` above. `idx` addresses the `DynamicAction` component
+/// itself; `op_idx` addresses which of its `ops` array entries to run,
+/// since one dynamic action can hold more than one `call`. Runs the
+/// exact same `ActionContext`/module dispatch as `run_action` — the
+/// only difference is the response shape (JSON, not a redirect), since
+/// the caller is client-side JS that applies the result to `target`
+/// itself rather than a full page navigation showing a notice banner.
+async fn call_dynamic_action(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Extension(caller): Extension<auth::CallerKey>,
+    Path((workspace, app, page_name, idx, op_idx)): Path<(String, String, String, usize, usize)>,
+    Query(query): Query<HashMap<String, String>>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let app = format!("{workspace}/{app}");
+    let entry = state.app_or_404(&app)?;
+    let data = entry.data();
+    let page = page_or_404(&data.app, &page_name)?;
+    auth::authorize(&data, page.required_role.as_deref(), &auth_ctx)?;
+    let component = component_at(page, idx)?;
+    auth::authorize(&data, component_requires(component), &auth_ctx)?;
+
+    let RuntimeComponent::DynamicAction { config } = component else {
+        return Err((StatusCode::BAD_REQUEST, format!("page '{page_name}' component #{idx} is not a dynamic action")));
+    };
+    let op = config
+        .get("ops")
+        .and_then(|v| v.as_array())
+        .and_then(|ops| ops.get(op_idx))
+        .ok_or_else(|| (StatusCode::NOT_FOUND, "no such dynamic-action op".to_string()))?;
+    if op.get("op").and_then(|v| v.as_str()) != Some("call") {
+        return Err((StatusCode::BAD_REQUEST, "that dynamic-action op isn't a 'call'".to_string()));
+    }
+    let name = op.get("action").and_then(|v| v.as_str()).ok_or_else(|| {
+        (StatusCode::INTERNAL_SERVER_ERROR, "malformed 'call' op: missing 'action'".to_string())
+    })?;
+    let op_config = op.get("config").cloned().unwrap_or_else(|| serde_json::json!({}));
+
+    let module = state.actions.get(name).ok_or_else(|| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("action module '{name}' is in metadata but not registered (rebuild?)"),
+        )
+    })?;
+
+    // Same merge order as run_action: URL query params, form fields on top.
+    let mut merged = query.clone();
+    merged.extend(values);
+
+    let outcome = module
+        .run(ActionContext {
+            pool: &state.pool,
+            app: &data.app,
+            page,
+            config: &op_config,
+            values: &merged,
+            caller_key: &caller.0,
+        })
+        .await;
+
+    match outcome {
+        Ok(result) => Ok(axum::Json(json!({ "ok": true, "result": result })).into_response()),
+        Err(e) => Ok((StatusCode::BAD_REQUEST, axum::Json(json!({ "ok": false, "error": e.to_string() }))).into_response()),
     }
 }
 

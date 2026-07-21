@@ -543,6 +543,21 @@ pub enum DaOp {
     /// Re-fetch one region's rows (by query name), sending the page's
     /// current item values as bind parameters.
     Refresh(String),
+    /// The "ajax callback": runs a server-side action module without a
+    /// page reload (`POST /:page/c/:idx/call`, see `server.rs`), then
+    /// applies its result to `target` — an item (`pgapp.setItem`) if
+    /// `target` names one, otherwise a region/query to refresh
+    /// (`pgapp.refreshRegion`, same as `Refresh` above; the callback's
+    /// own result string is only used for the item case). Which of the
+    /// two `target` is resolved at dispatch time in runtime.js, not
+    /// here — same lax non-validation as `item` on `Show`/`Hide`/
+    /// `Toggle`/`Set` above, since pgapp has no registry of valid item
+    /// names to check against.
+    Call {
+        action: String,
+        config: serde_json::Value,
+        target: String,
+    },
 }
 
 impl DaOp {
@@ -553,6 +568,9 @@ impl DaOp {
             DaOp::Toggle { item, when } => serde_json::json!({"op": "toggle", "item": item, "when": when}),
             DaOp::Set { item, expr } => serde_json::json!({"op": "set", "item": item, "expr": expr}),
             DaOp::Refresh(query) => serde_json::json!({"op": "refresh", "query": query}),
+            DaOp::Call { action, config, target } => {
+                serde_json::json!({"op": "call", "action": action, "config": config, "target": target})
+            }
         }
     }
 }

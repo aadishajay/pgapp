@@ -861,6 +861,15 @@ fn build_component_config(
                         );
                     }
                 }
+                if let crate::model::DaOp::Call { action, .. } = op {
+                    if !action_registry.contains_key(action.as_str()) {
+                        let known: Vec<&str> = action_registry.keys().copied().collect();
+                        anyhow::bail!(
+                            "{owner_label} dynamic action on '{item}' calls unknown module '{action}' (known: {})",
+                            known.join(", ")
+                        );
+                    }
+                }
             }
             Ok((
                 "dynamic_action",

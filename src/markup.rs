@@ -36,6 +36,12 @@
 //!            | "toggle" Ident "when" String
 //!            | "set" Ident "to" String
 //!            | "refresh" Ident
+//!            | "call" Ident itemconfig? "into" Ident
+//!            (the "ajax callback": runs a server-side action module
+//!            without a page reload, POST /:page/c/:idx/call; "into"
+//!            names an item to set from the result, or a region/query
+//!            to refresh afterward — resolved client-side at dispatch
+//!            time, see runtime.js)
 //!
 //! component := (report | form | editable_table | chart | text | link | region | action) compsuffix*
 //! compsuffix := "requires" ":" Ident | htmlattrs
@@ -785,9 +791,16 @@ impl Parser {
             } else if self.at_keyword("refresh") {
                 self.advance()?;
                 ops.push(DaOp::Refresh(self.expect_ident()?));
+            } else if self.at_keyword("call") {
+                self.advance()?;
+                let action = self.expect_ident()?;
+                let config = if self.at_symbol('(') { self.parse_item_config()? } else { serde_json::json!({}) };
+                self.expect_keyword("into")?;
+                let target = self.expect_ident()?;
+                ops.push(DaOp::Call { action, config, target });
             } else {
                 bail!(
-                    "expected 'show', 'hide', 'toggle', 'set', or 'refresh' inside an \
+                    "expected 'show', 'hide', 'toggle', 'set', 'refresh', or 'call' inside an \
                      'on ... of ...' block, found {:?} (line {})",
                     self.peek(),
                     self.cur_line()

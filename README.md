@@ -644,6 +644,35 @@ Ops: `show`/`hide <item>`, `toggle <item> when "<js expr>"`, `set
 item values as query params). Dispatched by the DB-stored runtime.js;
 `setItem` fires `change` events so actions chain (depth-guarded).
 
+### Ajax callback
+
+`call <action> (config...) into <target>` — the one op that reaches
+the server without a page reload, APEX's "ajax callback" process type:
+
+```text
+on change of trigger_val {
+  call log_values into result_val
+}
+on click of refresh_button {
+  call run_query (query: "bump_counter") into widget_count
+}
+```
+
+Posts to `POST /:workspace/:app/:page/c/:idx/call/:op_idx` (`idx`
+addresses the `DynamicAction` component, `op_idx` which of its `ops`
+entries — one dynamic action can hold more than one `call`) with the
+page's current item values as the body, and runs the exact same
+`ActionContext`/module dispatch `action`/`button calls` use — any
+registered module works here, validated against the action registry at
+sync time just like they are. The response is JSON (`{"ok", "result"}`
+or `{"ok": false, "error"}`), not a redirect, since the caller is
+client-side JS (`pgapp.runDynamicActionCall` in `/runtime.js`), not a
+full-page form POST. `target` is resolved client-side: if it names a
+region/query currently on the page, that region gets refreshed (the
+callback's own result string is just the trigger, not injected
+directly into the region); otherwise `target` is treated as an item and
+set to the result string via `pgapp.setItem`.
+
 ## Item types
 
 A form field's widget is one small Rust file (`src/item_types/`)
@@ -1257,6 +1286,7 @@ component kinds, e.g.
 - `GET  /:workspace/:app/uploads/:id`                   — streams a previously uploaded file back
 - `GET  /:workspace/:app/:page/region/:query`           — one region re-rendered as a fragment (dynamic-action refresh)
 - `POST /:workspace/:app/:page/c/:idx/run`              — run an `action` component's server-side module
+- `POST /:workspace/:app/:page/c/:idx/call/:op_idx`     — the ajax callback: run a dynamic action's `call` op, JSON response
 - `POST /:workspace/:app/:page/c/:idx/views` (+ delete) — save / delete a report's saved view
 - `GET  /:workspace/:app/login` / `POST /:workspace/:app/login`    — sign-in page (or first-run admin setup) — apps with `auth { }` only
 - `POST /:workspace/:app/setup`                         — one-time admin bootstrap; refuses once any user exists

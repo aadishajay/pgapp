@@ -110,7 +110,7 @@ window.pgapp = (function () {
       });
   }
 
-  function runOps(ops) {
+  function runOps(ops, componentIdx) {
     if (daDepth > 8) return; // break show/set feedback loops
     daDepth++;
     try {
@@ -121,10 +121,40 @@ window.pgapp = (function () {
         else if (op.op === "toggle") setItemVisible(op.item, !!evalExpr(op.when));
         else if (op.op === "set") setItem(op.item, String(evalExpr(op.expr)));
         else if (op.op === "refresh") refreshRegion(op.query);
+        else if (op.op === "call") runDynamicActionCall(componentIdx, i, op.target);
       }
     } finally {
       daDepth--;
     }
+  }
+
+  // The "ajax callback" (model::DaOp::Call): posts to the
+  // DynamicAction component's own /c/:idx/call/:op_idx route
+  // (server.rs's call_dynamic_action) with the page's current item
+  // values as the body — same params refreshRegion sends, and the same
+  // server-side action-module dispatch run_action uses, just returning
+  // JSON instead of a redirect. Applying the result: if `target` names
+  // a region/query currently on the page, that region gets refreshed
+  // (the callback's own result string is just the trigger, not
+  // injected directly — see model::DaOp::Call's doc); otherwise
+  // `target` is treated as an item and set to the result string.
+  function runDynamicActionCall(componentIdx, opIdx, target) {
+    var url = location.pathname + "/c/" + componentIdx + "/call/" + opIdx;
+    fetch(url, { method: "POST", body: collectItemParams() })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        if (!data.ok) throw new Error(data.error || "call failed");
+        if (document.querySelector('[data-pgapp-region="' + target + '"]')) {
+          refreshRegion(target);
+        } else {
+          setItem(target, data.result);
+        }
+      })
+      .catch(function (e) {
+        pgappAlert("Ajax callback failed: " + e.message);
+      });
   }
 
   function bindDynamicActions() {
@@ -141,7 +171,7 @@ window.pgapp = (function () {
       var els = elements(da.item);
       for (var i = 0; i < els.length; i++) {
         els[i].addEventListener(da.event, function () {
-          runOps(da.ops);
+          runOps(da.ops, da.idx);
         });
       }
     });
