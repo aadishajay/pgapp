@@ -523,6 +523,7 @@ window.pgapp = (function () {
     action: '    action "Run action" calls <action_name>',
     link: '    link "Go" -> page <PageName>',
     button: '    button "Go" -> page <PageName>',
+    dynamic_action: '    on change of <item> {\n      show <other_item>\n    }',
   };
 
   // The App Builder's "Add Component" panel: a `text ... attrs (id:
@@ -539,6 +540,32 @@ window.pgapp = (function () {
   // otherwise easy to typo, re-rendered whenever the kind changes.
   // POSTs the raw text to the target app's own
   // `/admin/pages/:page/components/add`.
+  function submitNewComponent(target, sourceText) {
+    fetch(pgappAdminPagesUrl(target, "/components/add"), {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "source=" + encodeURIComponent(sourceText),
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        if (data.ok) location.reload();
+        else pgappAlert("Couldn't add component: " + data.error);
+      })
+      .catch(function (e) {
+        pgappAlert("pgapp: " + e);
+      });
+  }
+
+  // The App Builder's "Add Component" panel: a kind picker plus an
+  // "Add..." button that opens the same structured, per-attribute
+  // editor `bindComponentRowActions`'s Edit button uses (see
+  // `pgappStructuredEditor`), just prefilled blank instead of from an
+  // existing component's data. A secondary "Add as raw markup" link
+  // reveals the original kind-picker + raw-textarea flow (still backed
+  // by `COMPONENT_TEMPLATES`) as a fallback/escape hatch for anything
+  // the structured form doesn't cover well.
   function bindAddComponentForm() {
     var slot = document.getElementById("pgapp-add-component-slot");
     if (!slot) return;
@@ -552,61 +579,89 @@ window.pgapp = (function () {
     title.textContent = "Add Component";
     slot.appendChild(title);
 
-    var form = document.createElement("form");
-    form.className = "pgapp-add-component-form";
-
     var kindSel = document.createElement("select");
     kindSel.className = "pgapp-select";
-    Object.keys(COMPONENT_TEMPLATES).forEach(function (k) {
+    // The structured picker's own kind list (every kind with a real
+    // `PGAPP_KIND_RENDERERS` entry) — a superset of `COMPONENT_TEMPLATES`,
+    // since `dynamic_action` has a structured editor but was never one of
+    // the original raw-textarea starter templates.
+    Object.keys(PGAPP_KIND_RENDERERS).forEach(function (k) {
       var opt = document.createElement("option");
       opt.value = k;
       opt.textContent = k;
       kindSel.appendChild(opt);
     });
+    slot.appendChild(kindSel);
+
+    var addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "pgapp-btn pgapp-btn-primary";
+    addBtn.textContent = "Add…";
+    addBtn.addEventListener("click", function () {
+      fetchAppMeta(target).then(function (meta) {
+        pgappStructuredEditor("Add component (" + kindSel.value + ")", kindSel.value, {}, meta).then(function (generated) {
+          if (generated === null) return;
+          submitNewComponent(target, generated);
+        });
+      });
+    });
+    slot.appendChild(addBtn);
+
+    var rawToggle = document.createElement("a");
+    rawToggle.href = "#";
+    rawToggle.className = "pgapp-link";
+    rawToggle.textContent = "Add as raw markup";
+    rawToggle.style.display = "block";
+    rawToggle.style.marginTop = "0.5rem";
+    slot.appendChild(rawToggle);
+
+    var rawForm = document.createElement("form");
+    rawForm.className = "pgapp-add-component-form";
+    rawForm.style.display = "none";
+
+    var rawKindSel = document.createElement("select");
+    rawKindSel.className = "pgapp-select";
+    Object.keys(COMPONENT_TEMPLATES).forEach(function (k) {
+      var opt = document.createElement("option");
+      opt.value = k;
+      opt.textContent = k;
+      rawKindSel.appendChild(opt);
+    });
 
     var sourceArea = document.createElement("textarea");
     sourceArea.className = "pgapp-input pgapp-source-textarea";
     sourceArea.rows = 4;
-    sourceArea.value = COMPONENT_TEMPLATES[kindSel.value];
+    sourceArea.value = COMPONENT_TEMPLATES[rawKindSel.value];
 
     var pagesListCache = [];
     fetchPagesList(target).then(function (pages) {
       pagesListCache = pages;
-      renderLinkControls(form, sourceArea, pagesListCache);
+      renderLinkControls(rawForm, sourceArea, pagesListCache);
     });
 
-    kindSel.addEventListener("change", function () {
-      sourceArea.value = COMPONENT_TEMPLATES[kindSel.value];
-      renderLinkControls(form, sourceArea, pagesListCache);
+    rawKindSel.addEventListener("change", function () {
+      sourceArea.value = COMPONENT_TEMPLATES[rawKindSel.value];
+      renderLinkControls(rawForm, sourceArea, pagesListCache);
     });
 
-    var addBtn = document.createElement("button");
-    addBtn.type = "submit";
-    addBtn.className = "pgapp-btn pgapp-btn-primary";
-    addBtn.textContent = "Add";
+    var rawAddBtn = document.createElement("button");
+    rawAddBtn.type = "submit";
+    rawAddBtn.className = "pgapp-btn pgapp-btn-primary";
+    rawAddBtn.textContent = "Add";
 
-    [kindSel, sourceArea, addBtn].forEach(function (el) {
-      form.appendChild(el);
+    [rawKindSel, sourceArea, rawAddBtn].forEach(function (el) {
+      rawForm.appendChild(el);
     });
-    slot.appendChild(form);
+    slot.appendChild(rawForm);
 
-    form.addEventListener("submit", function (ev) {
+    rawToggle.addEventListener("click", function (ev) {
       ev.preventDefault();
-      fetch(pgappAdminPagesUrl(target, "/components/add"), {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: "source=" + encodeURIComponent(sourceArea.value),
-      })
-        .then(function (r) {
-          return r.json();
-        })
-        .then(function (data) {
-          if (data.ok) location.reload();
-          else pgappAlert("Couldn't add component: " + data.error);
-        })
-        .catch(function (e) {
-          pgappAlert("pgapp: " + e);
-        });
+      rawForm.style.display = rawForm.style.display === "none" ? "" : "none";
+    });
+
+    rawForm.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      submitNewComponent(target, sourceArea.value);
     });
   }
 
@@ -624,6 +679,1034 @@ window.pgapp = (function () {
     region: "▥",
     action: "⚡",
   };
+
+  // ------------------------------------------------------------------
+  // Structured component editor — an APEX-Page-Designer-style property
+  // sheet: pick a component, get real typed fields for every attribute
+  // it supports (including its own nested lists — a Report's computed
+  // columns/format masks, a Form's per-field item types, a dynamic
+  // action's ops, ...) instead of a raw markup textarea. Prefilled from
+  // `RuntimeComponent::to_json` (see `admin_component_structured` in
+  // server.rs) and `admin_app_meta`'s entity/query/action/item-type/
+  // page lists (for dropdowns). On Save, walks the form and *generates*
+  // fresh markup text client-side (mirroring the grammar `markup.rs`
+  // parses — see each `pgappGenerate*` below) and submits that through
+  // the exact same raw-text `/components/.../add`|`edit` routes the
+  // original raw editor already used, so no new write-side route was
+  // needed: this only ever *generates* markup, never *parses* it back
+  // (the server already validates whatever comes out via
+  // `validate_markup` before writing, same as the raw editor).
+  //
+  // Every row-list (`pgappRowList`) — used for anything the grammar
+  // itself repeats zero-or-more times — is entirely client-side DOM
+  // bookkeeping: add/remove/reorder never round-trips to the server,
+  // unlike the page-level component reorder feature (`bindDraggableRows`)
+  // which persists on every drop. Only this dialog's own Save button
+  // ever writes anything.
+
+  // Escapes a string for a double-quoted markup string literal —
+  // mirrors `page_reorder::escape_string` exactly (`\` and `"` doubled,
+  // nothing else).
+  function pgappMarkupStr(s) {
+    return '"' + String(s == null ? "" : s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+  }
+
+  // A one-time stylesheet for the structured editor's own layout hooks
+  // — injected lazily (once) rather than added to every theme's
+  // theme.css, since this is App-Builder-only chrome, not part of the
+  // served app's own themed UI.
+  function pgappEnsureBuilderStyle() {
+    if (document.getElementById("pgapp-builder-style")) return;
+    var style = document.createElement("style");
+    style.id = "pgapp-builder-style";
+    style.textContent =
+      ".pgapp-builder-form-box { max-width: 40rem; } " +
+      ".pgapp-builder-form-body { max-height: 60vh; overflow-y: auto; text-align: left; } " +
+      ".pgapp-builder-section-title { font-weight: 700; margin: 1rem 0 0.35rem; } " +
+      ".pgapp-builder-rowlist { margin-bottom: 0.5rem; } " +
+      ".pgapp-builder-rowlist table { width: 100%; margin-bottom: 0.4rem; } " +
+      ".pgapp-builder-row-actions { white-space: nowrap; } " +
+      ".pgapp-builder-attrs { margin-bottom: 0.5rem; } " +
+      ".pgapp-builder-two-col { display: flex; gap: 0.75rem; } " +
+      ".pgapp-builder-two-col > div { flex: 1; }";
+    document.head.appendChild(style);
+  }
+
+  function pgappFieldRow(container, labelText, inputEl) {
+    var row = document.createElement("div");
+    row.className = "pgapp-field";
+    var label = document.createElement("label");
+    label.className = "pgapp-label";
+    label.textContent = labelText;
+    row.appendChild(label);
+    row.appendChild(inputEl);
+    container.appendChild(row);
+    return inputEl;
+  }
+
+  function pgappTextInput(value) {
+    var el = document.createElement("input");
+    el.type = "text";
+    el.className = "pgapp-input";
+    el.value = value == null ? "" : value;
+    return el;
+  }
+
+  function pgappNumberInput(value) {
+    var el = document.createElement("input");
+    el.type = "number";
+    el.className = "pgapp-input";
+    el.value = value == null ? "" : value;
+    return el;
+  }
+
+  function pgappTextArea(value, rows) {
+    var el = document.createElement("textarea");
+    el.className = "pgapp-input";
+    el.rows = rows || 3;
+    el.value = value == null ? "" : value;
+    return el;
+  }
+
+  // `options` empty falls back to a plain text input — e.g. a fresh app
+  // with no entities/queries/pages yet shouldn't leave the editor
+  // completely unusable, just less guided.
+  function pgappSelect(options, value) {
+    if (!options || options.length === 0) return pgappTextInput(value);
+    var el = document.createElement("select");
+    el.className = "pgapp-select";
+    options.forEach(function (opt) {
+      var o = document.createElement("option");
+      o.value = opt;
+      o.textContent = opt;
+      el.appendChild(o);
+    });
+    if (value != null && options.indexOf(value) !== -1) el.value = value;
+    return el;
+  }
+
+  function pgappSectionTitle(container, text) {
+    var h = document.createElement("div");
+    h.className = "pgapp-builder-section-title";
+    h.textContent = text;
+    container.appendChild(h);
+  }
+
+  // A minimal, dependency-free repeatable-row editor: given `cols` (an
+  // array of `{key, label, type: "text"|"select"|"textarea", options}`)
+  // and `rows` (an initial array of `{<key>: <value>, ...}` objects),
+  // renders an editable `<table>` with one `<tr>` per row plus Add/
+  // Remove/reorder (▲▼) controls. `getRows()` reads the table's current
+  // live values back out in display order, silently skipping any row
+  // every column is still blank on (so a stray "Add row" click that's
+  // never filled in doesn't turn into a bogus markup line).
+  function pgappRowList(cols, rows) {
+    var wrap = document.createElement("div");
+    wrap.className = "pgapp-builder-rowlist";
+    var table = document.createElement("table");
+    table.className = "pgapp-table";
+    var thead = document.createElement("thead");
+    var headRow = document.createElement("tr");
+    cols.forEach(function (c) {
+      var th = document.createElement("th");
+      th.textContent = c.label;
+      headRow.appendChild(th);
+    });
+    headRow.appendChild(document.createElement("th"));
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+    var tbody = document.createElement("tbody");
+    table.appendChild(tbody);
+    wrap.appendChild(table);
+
+    function addRow(initial) {
+      var tr = document.createElement("tr");
+      cols.forEach(function (c) {
+        var td = document.createElement("td");
+        var field;
+        if (c.type === "select") {
+          field = pgappSelect(c.options, initial ? initial[c.key] : null);
+        } else if (c.type === "textarea") {
+          field = pgappTextArea(initial ? initial[c.key] : "", 2);
+        } else {
+          field = pgappTextInput(initial ? initial[c.key] : "");
+        }
+        field.dataset.key = c.key;
+        td.appendChild(field);
+        tr.appendChild(td);
+      });
+      var actionsTd = document.createElement("td");
+      actionsTd.className = "pgapp-builder-row-actions";
+      var upBtn = document.createElement("button");
+      upBtn.type = "button";
+      upBtn.className = "pgapp-icon-btn";
+      upBtn.title = "Move up";
+      upBtn.textContent = "▲";
+      upBtn.addEventListener("click", function () {
+        var prev = tr.previousElementSibling;
+        if (prev) tbody.insertBefore(tr, prev);
+      });
+      var downBtn = document.createElement("button");
+      downBtn.type = "button";
+      downBtn.className = "pgapp-icon-btn";
+      downBtn.title = "Move down";
+      downBtn.textContent = "▼";
+      downBtn.addEventListener("click", function () {
+        var next = tr.nextElementSibling;
+        if (next) tbody.insertBefore(next, tr);
+      });
+      var delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
+      delBtn.title = "Remove row";
+      delBtn.textContent = "✕";
+      delBtn.addEventListener("click", function () {
+        tr.remove();
+      });
+      actionsTd.appendChild(upBtn);
+      actionsTd.appendChild(downBtn);
+      actionsTd.appendChild(delBtn);
+      tr.appendChild(actionsTd);
+      tbody.appendChild(tr);
+    }
+
+    (rows || []).forEach(function (r) {
+      addRow(r);
+    });
+
+    var addBtn = document.createElement("button");
+    addBtn.type = "button";
+    addBtn.className = "pgapp-btn pgapp-btn-secondary";
+    addBtn.textContent = "+ Add row";
+    addBtn.addEventListener("click", function () {
+      addRow(null);
+    });
+    wrap.appendChild(addBtn);
+
+    function getRows() {
+      var out = [];
+      var trs = tbody.querySelectorAll("tr");
+      for (var i = 0; i < trs.length; i++) {
+        var row = {};
+        var fields = trs[i].querySelectorAll("[data-key]");
+        var allBlank = true;
+        for (var j = 0; j < fields.length; j++) {
+          var v = fields[j].value;
+          row[fields[j].dataset.key] = v;
+          if (v && v.trim() !== "") allBlank = false;
+        }
+        if (!allBlank) out.push(row);
+      }
+      return out;
+    }
+
+    return { el: wrap, getRows: getRows };
+  }
+
+  // An ordered subset of an entity's own fields — what a Report's
+  // `columns:`, a Form's `fields:`, and an EditableTable's `columns:`
+  // all actually are. Modeled as a row list of one `<select>` column
+  // (the field to include next), so add/remove/reorder all just work
+  // via `pgappRowList`.
+  function pgappFieldPickerList(entityFields, selected) {
+    var options = (entityFields || []).map(function (f) {
+      return f.name;
+    });
+    var initial = (selected || []).map(function (name) {
+      return { field: name };
+    });
+    return pgappRowList([{ key: "field", label: "Field", type: "select", options: options }], initial);
+  }
+
+  function pgappFieldPickerText(rowList) {
+    return rowList
+      .getRows()
+      .map(function (r) {
+        return r.field;
+      })
+      .filter(function (f) {
+        return f && f.trim() !== "";
+      })
+      .join(", ");
+  }
+
+  // The shared `attrs (id: "...", class: "...", <key>: "<value>", ...)`
+  // suffix every component kind (and every form/editable_table field)
+  // accepts — one widget, reused everywhere instead of rebuilt per kind.
+  function pgappAttrsEditor(container, html) {
+    html = html || { id: null, class: null, attrs: [] };
+    pgappSectionTitle(container, "Attributes");
+    var idInput = pgappTextInput(html.id);
+    pgappFieldRow(container, "id", idInput);
+    var classInput = pgappTextInput(html.class);
+    pgappFieldRow(container, "class", classInput);
+    var extraLabel = document.createElement("div");
+    extraLabel.className = "pgapp-label";
+    extraLabel.textContent = "Extra attributes (use _ for a hyphen, e.g. data_foo)";
+    container.appendChild(extraLabel);
+    var rowList = pgappRowList(
+      [
+        { key: "key", label: "Attribute", type: "text" },
+        { key: "value", label: "Value", type: "text" },
+      ],
+      (html.attrs || []).map(function (pair) {
+        return { key: pair[0], value: pair[1] };
+      })
+    );
+    container.appendChild(rowList.el);
+
+    return function generateAttrsClause() {
+      var parts = [];
+      if (idInput.value.trim()) parts.push("id: " + pgappMarkupStr(idInput.value.trim()));
+      if (classInput.value.trim()) parts.push("class: " + pgappMarkupStr(classInput.value.trim()));
+      rowList.getRows().forEach(function (r) {
+        var key = (r.key || "").trim();
+        if (!key) return;
+        parts.push(key.replace(/-/g, "_") + ": " + pgappMarkupStr(r.value));
+      });
+      if (parts.length === 0) return "";
+      return " attrs (" + parts.join(", ") + ")";
+    };
+  }
+
+  // `requires: <role-or-scheme>` — a plain text field (any role/scheme
+  // name is valid; roles themselves are never a fixed list, only
+  // auth_schemes are, and those are offered as a `<datalist>` so a
+  // known scheme can be picked without giving up free text for a
+  // literal role).
+  function pgappRequiresEditor(container, requires, authSchemes) {
+    pgappSectionTitle(container, "Access");
+    var input = pgappTextInput(requires);
+    input.placeholder = "role or auth_scheme name (blank = no restriction)";
+    if (authSchemes && authSchemes.length > 0) {
+      var listId = "pgapp-builder-schemes-" + Math.random().toString(36).slice(2);
+      var datalist = document.createElement("datalist");
+      datalist.id = listId;
+      authSchemes.forEach(function (name) {
+        var opt = document.createElement("option");
+        opt.value = name;
+        datalist.appendChild(opt);
+      });
+      container.appendChild(datalist);
+      input.setAttribute("list", listId);
+    }
+    pgappFieldRow(container, "requires:", input);
+    return function generateRequiresClause() {
+      var t = input.value.trim();
+      return t ? " requires: " + t : "";
+    };
+  }
+
+  // A generic `(<key>: "<value>", ...)` config editor — used by
+  // `action`/`button calls`/`before_load`'s generic config blob (every
+  // value always emitted as a quoted string; `markup.rs`'s
+  // `parse_item_config` accepts a bare identifier or number too, but a
+  // quoted string round-trips as the same JSON value either way).
+  function pgappConfigEditor(container, config) {
+    pgappSectionTitle(container, "Config");
+    var initial = Object.keys(config || {}).map(function (k) {
+      return { key: k, value: config[k] };
+    });
+    var rowList = pgappRowList(
+      [
+        { key: "key", label: "Key", type: "text" },
+        { key: "value", label: "Value", type: "text" },
+      ],
+      initial
+    );
+    container.appendChild(rowList.el);
+    return function generateConfigClause() {
+      var parts = rowList
+        .getRows()
+        .filter(function (r) {
+          return (r.key || "").trim() !== "";
+        })
+        .map(function (r) {
+          return r.key.trim() + ": " + pgappMarkupStr(r.value);
+        });
+      if (parts.length === 0) return "";
+      return " (" + parts.join(", ") + ")";
+    };
+  }
+
+  function pgappEntityFields(meta, name) {
+    var entities = meta.entities || [];
+    for (var i = 0; i < entities.length; i++) {
+      if (entities[i].name === name) return entities[i].fields;
+    }
+    return [];
+  }
+
+  function pgappEntityNames(meta) {
+    return (meta.entities || []).map(function (e) {
+      return e.name;
+    });
+  }
+
+  // A field's default item-type kind, purely from its column type —
+  // mirrors `item_types::default_kind_for`'s tiny fixed mapping. Used
+  // to decide whether a Form/EditableTable field's `item_types` row is
+  // actually redundant (kind == this field's own default, config
+  // empty) and can be skipped when regenerating markup, rather than
+  // emitting a needless explicit `item <field> as <kind>` line for
+  // every single field every time.
+  function pgappDefaultKindFor(fieldType) {
+    if (fieldType === "boolean") return "checkbox";
+    if (fieldType === "id") return "readonly";
+    return "text";
+  }
+
+  // Renders the per-field `item <field> [as <kind> [(...)]] [attrs
+  // (...)]` editor for a Form/EditableTable: one row per field the
+  // component actually includes (`fieldNames`, in order), each with an
+  // item-type-kind dropdown, a raw config-string input (comma-separated
+  // `key: value` pairs — a full sub-row-list per field would be one
+  // nesting level too many for this dialog to stay usable), and its own
+  // `attrs (...)` sub-editor. Returns a function producing every
+  // needed `item ...` line (one per field that actually differs from
+  // its type's default with no config/attrs — matching how a hand-
+  // written file only bothers with `item` lines it actually needs).
+  function pgappItemTypesEditor(container, fieldNames, entityFields, itemTypes, fieldHtml, itemTypeKinds) {
+    pgappSectionTitle(container, "Field item types");
+    var byName = {};
+    (itemTypes || []).forEach(function (row) {
+      byName[row.field] = row;
+    });
+    var htmlByName = {};
+    (fieldHtml || []).forEach(function (row) {
+      htmlByName[row.field] = row.html;
+    });
+    var fieldTypeByName = {};
+    (entityFields || []).forEach(function (f) {
+      fieldTypeByName[f.name] = f.type;
+    });
+
+    var rows = [];
+    fieldNames.forEach(function (name) {
+      var current = byName[name] || { kind: pgappDefaultKindFor(fieldTypeByName[name]), config: {} };
+      var configText = "";
+      var configKeys = Object.keys(current.config || {});
+      if (configKeys.length === 1 && configKeys[0] === "query") {
+        configText = "from query " + current.config.query;
+      } else {
+        configText = configKeys
+          .map(function (k) {
+            var v = current.config[k];
+            if (k === "choices" && Array.isArray(v)) return v.join(", ");
+            return k + ": " + v;
+          })
+          .join(", ");
+      }
+      var row = document.createElement("div");
+      row.className = "pgapp-field";
+      var label = document.createElement("label");
+      label.className = "pgapp-label";
+      label.textContent = name;
+      row.appendChild(label);
+      var kindSel = pgappSelect(itemTypeKinds, current.kind);
+      kindSel.dataset.field = name;
+      row.appendChild(kindSel);
+      var configInput = pgappTextInput(configText);
+      configInput.placeholder = 'key: "value", ... OR "choice1", "choice2" OR from query <name>';
+      configInput.dataset.field = name;
+      row.appendChild(configInput);
+      container.appendChild(row);
+      var attrsGen = pgappAttrsEditor(container, htmlByName[name]);
+      rows.push({ field: name, kindSel: kindSel, configInput: configInput, attrsGen: attrsGen, fieldType: fieldTypeByName[name] });
+    });
+
+    return function generateItemLines() {
+      var lines = [];
+      rows.forEach(function (r) {
+        var kind = r.kindSel.value;
+        var raw = r.configInput.value.trim();
+        var configClause = "";
+        if (raw.indexOf("from query ") === 0) {
+          configClause = " from query " + raw.slice("from query ".length).trim();
+        } else if (raw) {
+          // Either a comma-separated `key: value` list, or a comma-separated
+          // list of bare choices (no colons at all) — mirrors
+          // `parse_item_config`'s two accepted shapes.
+          var parts = raw.split(",").map(function (s) {
+            return s.trim();
+          });
+          var hasColon = parts.some(function (p) {
+            return p.indexOf(":") !== -1;
+          });
+          if (hasColon) {
+            var kvs = parts.map(function (p) {
+              var idx = p.indexOf(":");
+              var k = p.slice(0, idx).trim();
+              var v = p.slice(idx + 1).trim().replace(/^"|"$/g, "");
+              return k + ": " + pgappMarkupStr(v);
+            });
+            configClause = " (" + kvs.join(", ") + ")";
+          } else {
+            var choices = parts.map(function (p) {
+              return pgappMarkupStr(p.replace(/^"|"$/g, ""));
+            });
+            configClause = " (" + choices.join(", ") + ")";
+          }
+        }
+        var attrsClause = r.attrsGen();
+        var isDefaultKind = kind === pgappDefaultKindFor(r.fieldType) && !configClause;
+        if (isDefaultKind && !attrsClause) return;
+        var asClause = isDefaultKind ? "" : " as " + kind;
+        lines.push("      item " + r.field + asClause + configClause + attrsClause);
+      });
+      return lines;
+    };
+  }
+
+  // Every RuntimeComponent kind's structured-editor renderer: `(container,
+  // data, meta) -> { generate() }`. `data`/`meta` are `{}`/already-
+  // fetched JSON (see `admin_component_structured`/`admin_app_meta`);
+  // `generate()` returns the complete markup text for exactly one
+  // component (no page wrapper), 4-space indented to match
+  // `page_reorder`'s splice points and the existing `COMPONENT_TEMPLATES`
+  // convention.
+  var PGAPP_KIND_RENDERERS = {
+    text: function (container, data, meta) {
+      var textArea = pgappTextArea(data.text, 3);
+      pgappFieldRow(container, "Text", textArea);
+      var requiresGen = pgappRequiresEditor(container, data.requires, meta.auth_schemes);
+      var attrsGen = pgappAttrsEditor(container, data.html);
+      return {
+        generate: function () {
+          return "    text " + pgappMarkupStr(textArea.value) + requiresGen() + attrsGen();
+        },
+      };
+    },
+
+    link: function (container, data, meta) {
+      var labelInput = pgappTextInput(data.label);
+      pgappFieldRow(container, "Label", labelInput);
+      var pageSel = pgappSelect(meta.pages, data.target_page);
+      pgappFieldRow(container, "Target page", pageSel);
+      var requiresGen = pgappRequiresEditor(container, data.requires, meta.auth_schemes);
+      var attrsGen = pgappAttrsEditor(container, data.html);
+      return {
+        generate: function () {
+          return "    link " + pgappMarkupStr(labelInput.value) + " -> page " + pageSel.value + requiresGen() + attrsGen();
+        },
+      };
+    },
+
+    region: function (container, data, meta) {
+      var labelInput = pgappTextInput(data.label);
+      pgappFieldRow(container, "Label", labelInput);
+      var querySel = pgappSelect(meta.queries, data.query);
+      pgappFieldRow(container, "From query", querySel);
+      pgappSectionTitle(container, "Columns (blank = show every column the query returns)");
+      var colsList = pgappRowList([{ key: "col", label: "Column", type: "text" }], (data.columns || []).map(function (c) {
+        return { col: c };
+      }));
+      container.appendChild(colsList.el);
+      var requiresGen = pgappRequiresEditor(container, data.requires, meta.auth_schemes);
+      var attrsGen = pgappAttrsEditor(container, data.html);
+      return {
+        generate: function () {
+          var cols = colsList
+            .getRows()
+            .map(function (r) {
+              return r.col;
+            })
+            .filter(function (c) {
+              return c && c.trim() !== "";
+            });
+          var body = cols.length > 0 ? " {\n      columns: " + cols.join(", ") + "\n    }" : "";
+          return (
+            "    region " + pgappMarkupStr(labelInput.value) + " from query " + querySel.value + body + requiresGen() + attrsGen()
+          );
+        },
+      };
+    },
+
+    action: function (container, data, meta) {
+      var labelInput = pgappTextInput(data.label);
+      pgappFieldRow(container, "Label", labelInput);
+      var nameSel = pgappSelect(meta.actions, data.name);
+      pgappFieldRow(container, "Calls", nameSel);
+      var configGen = pgappConfigEditor(container, data.config || {});
+      var requiresGen = pgappRequiresEditor(container, data.requires, meta.auth_schemes);
+      var attrsGen = pgappAttrsEditor(container, data.html);
+      return {
+        generate: function () {
+          return (
+            "    action " + pgappMarkupStr(labelInput.value) + " calls " + nameSel.value + configGen() + requiresGen() + attrsGen()
+          );
+        },
+      };
+    },
+
+    button: function (container, data, meta) {
+      var labelInput = pgappTextInput(data.label);
+      pgappFieldRow(container, "Label", labelInput);
+      var behavior = (data.behavior && data.behavior.type) || "redirect";
+      var behaviorSel = pgappSelect(["redirect", "run_action"], behavior);
+      pgappFieldRow(container, "Behavior", behaviorSel);
+
+      var redirectWrap = document.createElement("div");
+      var pageSel = pgappSelect(meta.pages, data.behavior && data.behavior.target_page);
+      pgappFieldRow(redirectWrap, "Target page", pageSel);
+      pgappSectionTitle(redirectWrap, "Forwarded parameters (this page's field -> new name)");
+      var paramsList = pgappRowList(
+        [
+          { key: "param", label: "New param name", type: "text" },
+          { key: "source", label: "Source field on this page", type: "text" },
+        ],
+        ((data.behavior && data.behavior.extra_params) || []).map(function (pair) {
+          return { param: pair[0], source: pair[1] };
+        })
+      );
+      redirectWrap.appendChild(paramsList.el);
+      container.appendChild(redirectWrap);
+
+      var runActionWrap = document.createElement("div");
+      var actionSel = pgappSelect(meta.actions, data.behavior && data.behavior.name);
+      pgappFieldRow(runActionWrap, "Calls", actionSel);
+      var configGen = pgappConfigEditor(runActionWrap, (data.behavior && data.behavior.config) || {});
+      container.appendChild(runActionWrap);
+
+      function syncVisibility() {
+        redirectWrap.style.display = behaviorSel.value === "redirect" ? "" : "none";
+        runActionWrap.style.display = behaviorSel.value === "run_action" ? "" : "none";
+      }
+      behaviorSel.addEventListener("change", syncVisibility);
+      syncVisibility();
+
+      var requiresGen = pgappRequiresEditor(container, data.requires, meta.auth_schemes);
+      var attrsGen = pgappAttrsEditor(container, data.html);
+      return {
+        generate: function () {
+          var head = "    button " + pgappMarkupStr(labelInput.value);
+          if (behaviorSel.value === "redirect") {
+            var params = paramsList.getRows().filter(function (r) {
+              return r.param && r.param.trim() && r.source && r.source.trim();
+            });
+            var paramsClause = params.length > 0
+              ? " (" + params.map(function (r) { return r.source.trim() + ": " + r.param.trim(); }).join(", ") + ")"
+              : "";
+            return head + " -> page " + pageSel.value + paramsClause + requiresGen() + attrsGen();
+          }
+          return head + " calls " + actionSel.value + configGen() + requiresGen() + attrsGen();
+        },
+      };
+    },
+
+    chart: function (container, data, meta) {
+      var titleInput = pgappTextInput(data.title);
+      pgappFieldRow(container, "Title", titleInput);
+      var querySel = pgappSelect(meta.queries, data.query);
+      pgappFieldRow(container, "From query", querySel);
+      var typeSel = pgappSelect(meta.chart_types, data.chart_type || "bar");
+      pgappFieldRow(container, "Chart type", typeSel);
+      var xInput = pgappTextInput(data.x);
+      pgappFieldRow(container, "X column", xInput);
+      var yInput = pgappTextInput(data.y);
+      pgappFieldRow(container, "Y column", yInput);
+      var requiresGen = pgappRequiresEditor(container, data.requires, meta.auth_schemes);
+      var attrsGen = pgappAttrsEditor(container, data.html);
+      return {
+        generate: function () {
+          return (
+            "    chart " +
+            pgappMarkupStr(titleInput.value) +
+            " from query " +
+            querySel.value +
+            " {\n      type: " +
+            typeSel.value +
+            "\n      x: " +
+            xInput.value.trim() +
+            "\n      y: " +
+            yInput.value.trim() +
+            "\n    }" +
+            requiresGen() +
+            attrsGen()
+          );
+        },
+      };
+    },
+
+    report: function (container, data, meta) {
+      var titleInput = pgappTextInput(data.title);
+      pgappFieldRow(container, "Title", titleInput);
+      var entitySel = pgappSelect(pgappEntityNames(meta), data.entity);
+      pgappFieldRow(container, "Of entity", entitySel);
+      var entityFields = data.entity_fields && data.entity_fields.length > 0 ? data.entity_fields : pgappEntityFields(meta, entitySel.value);
+
+      pgappSectionTitle(container, "Columns");
+      var colsList = pgappFieldPickerList(entityFields, data.columns);
+      container.appendChild(colsList.el);
+
+      pgappSectionTitle(container, "Read-only computed columns (name: SQL expression)");
+      var computedList = pgappRowList(
+        [
+          { key: "name", label: "Name", type: "text" },
+          { key: "sql", label: "SQL (e.g. t.qty * t.rate)", type: "text" },
+        ],
+        (data.computed || []).map(function (c) {
+          return { name: c.name, sql: c.sql };
+        })
+      );
+      container.appendChild(computedList.el);
+
+      pgappSectionTitle(container, "Display format masks");
+      var formatsList = pgappRowList(
+        [
+          { key: "field", label: "Column", type: "text" },
+          { key: "kind", label: "Mask", type: "select", options: ["currency", "percent", "number", "date"] },
+          { key: "param", label: "Decimals (number) / pattern (date)", type: "text" },
+        ],
+        (data.formats || []).map(function (f) {
+          var param = f.mask.kind === "number" ? String(f.mask.decimals || 0) : f.mask.kind === "date" ? f.mask.pattern || "%Y-%m-%d" : "";
+          return { field: f.field, kind: f.mask.kind, param: param };
+        })
+      );
+      container.appendChild(formatsList.el);
+
+      pgappSectionTitle(container, "Link a column to another page");
+      var linkWrap = document.createElement("div");
+      var linkFieldSel = pgappSelect(entityFields.map(function (f) { return f.name; }).concat(computedNamesPlaceholder(computedList)), data.link_column && data.link_column.field);
+      pgappFieldRow(linkWrap, "Column", linkFieldSel);
+      var linkPageSel = pgappSelect(["(none)"].concat(meta.pages || []), (data.link_column && data.link_column.target_page) || "(none)");
+      pgappFieldRow(linkWrap, "Target page", linkPageSel);
+      var linkParamsList = pgappRowList(
+        [
+          { key: "field", label: "Row field", type: "text" },
+          { key: "param", label: "New param name", type: "text" },
+        ],
+        ((data.link_column && data.link_column.extra_params) || []).map(function (pair) {
+          return { field: pair[0], param: pair[1] };
+        })
+      );
+      pgappSectionTitle(linkWrap, "Extra forwarded parameters");
+      linkWrap.appendChild(linkParamsList.el);
+      container.appendChild(linkWrap);
+
+      var pageSizeInput = pgappNumberInput(data.page_size == null ? 20 : data.page_size);
+      pgappFieldRow(container, "Rows per page", pageSizeInput);
+
+      pgappSectionTitle(container, "Run an action automatically before this report loads (optional)");
+      var beforeLoadWrap = document.createElement("div");
+      var beforeLoadSel = pgappSelect(["(none)"].concat(meta.actions || []), (data.before_load && data.before_load.name) || "(none)");
+      pgappFieldRow(beforeLoadWrap, "Before-load action", beforeLoadSel);
+      var beforeLoadConfigGen = pgappConfigEditor(beforeLoadWrap, (data.before_load && data.before_load.config) || {});
+      container.appendChild(beforeLoadWrap);
+
+      var requiresGen = pgappRequiresEditor(container, data.requires, meta.auth_schemes);
+      var attrsGen = pgappAttrsEditor(container, data.html);
+
+      return {
+        generate: function () {
+          var lines = [];
+          lines.push("    report " + pgappMarkupStr(titleInput.value) + " of " + entitySel.value + " {");
+          lines.push("      columns: " + pgappFieldPickerText(colsList));
+          if (linkPageSel.value !== "(none)") {
+            var params = linkParamsList.getRows().filter(function (r) {
+              return r.field && r.field.trim() && r.param && r.param.trim();
+            });
+            var paramsClause = params.length > 0
+              ? " (" + params.map(function (r) { return r.field.trim() + ": " + r.param.trim(); }).join(", ") + ")"
+              : "";
+            lines.push("      link: " + linkFieldSel.value + " -> page " + linkPageSel.value + paramsClause);
+          }
+          lines.push("      page_size: " + (parseInt(pageSizeInput.value, 10) || 20));
+          if (beforeLoadSel.value !== "(none)") {
+            lines.push("      before_load: " + beforeLoadSel.value + beforeLoadConfigGen());
+          }
+          computedList.getRows().forEach(function (r) {
+            if (!r.name || !r.name.trim()) return;
+            lines.push("      computed " + r.name.trim() + ": " + pgappMarkupStr(r.sql));
+          });
+          formatsList.getRows().forEach(function (r) {
+            if (!r.field || !r.field.trim()) return;
+            var maskText = r.kind === "number" ? "number(" + (parseInt(r.param, 10) || 0) + ")" : r.kind === "date" ? "date(" + pgappMarkupStr(r.param || "%Y-%m-%d") + ")" : r.kind;
+            lines.push("      format " + r.field.trim() + ": " + maskText);
+          });
+          lines.push("    }" + requiresGen() + attrsGen());
+          return lines.join("\n");
+        },
+      };
+    },
+
+    form: function (container, data, meta) {
+      var titleInput = pgappTextInput(data.title);
+      pgappFieldRow(container, "Title", titleInput);
+      var entitySel = pgappSelect(pgappEntityNames(meta), data.entity);
+      pgappFieldRow(container, "Of entity", entitySel);
+      var entityFields = data.entity_fields && data.entity_fields.length > 0 ? data.entity_fields : pgappEntityFields(meta, entitySel.value);
+
+      pgappSectionTitle(container, "Fields");
+      var fieldsList = pgappFieldPickerList(entityFields, data.fields);
+      container.appendChild(fieldsList.el);
+
+      var itemTypesGen = pgappItemTypesEditor(
+        container,
+        (data.fields || entityFields.map(function (f) { return f.name; })),
+        entityFields,
+        data.item_types,
+        data.field_html,
+        meta.item_types
+      );
+
+      var requiresGen = pgappRequiresEditor(container, data.requires, meta.auth_schemes);
+      var attrsGen = pgappAttrsEditor(container, data.html);
+
+      return {
+        generate: function () {
+          var lines = [];
+          lines.push("    form " + pgappMarkupStr(titleInput.value) + " of " + entitySel.value + " {");
+          lines.push("      fields: " + pgappFieldPickerText(fieldsList));
+          itemTypesGen().forEach(function (l) {
+            lines.push(l);
+          });
+          lines.push("    }" + requiresGen() + attrsGen());
+          return lines.join("\n");
+        },
+      };
+    },
+
+    editable_table: function (container, data, meta) {
+      var titleInput = pgappTextInput(data.title);
+      pgappFieldRow(container, "Title", titleInput);
+      var entitySel = pgappSelect(pgappEntityNames(meta), data.entity);
+      pgappFieldRow(container, "Of entity", entitySel);
+      var entityFields = data.entity_fields && data.entity_fields.length > 0 ? data.entity_fields : pgappEntityFields(meta, entitySel.value);
+
+      pgappSectionTitle(container, "Columns");
+      var colsList = pgappFieldPickerList(entityFields, data.columns);
+      container.appendChild(colsList.el);
+
+      var itemTypesGen = pgappItemTypesEditor(
+        container,
+        (data.columns || entityFields.map(function (f) { return f.name; })),
+        entityFields,
+        data.item_types,
+        data.field_html,
+        meta.item_types
+      );
+
+      var requiresGen = pgappRequiresEditor(container, data.requires, meta.auth_schemes);
+      var attrsGen = pgappAttrsEditor(container, data.html);
+
+      return {
+        generate: function () {
+          var lines = [];
+          lines.push("    editable_table " + pgappMarkupStr(titleInput.value) + " of " + entitySel.value + " {");
+          lines.push("      columns: " + pgappFieldPickerText(colsList));
+          itemTypesGen().forEach(function (l) {
+            lines.push(l);
+          });
+          lines.push("    }" + requiresGen() + attrsGen());
+          return lines.join("\n");
+        },
+      };
+    },
+
+    dynamic_action: function (container, data, meta) {
+      var eventSel = pgappSelect(["click", "change"], data.event || "change");
+      pgappFieldRow(container, "On event", eventSel);
+      var itemInput = pgappTextInput(data.item);
+      pgappFieldRow(container, "Of item", itemInput);
+
+      pgappSectionTitle(container, "Operations");
+      var opsWrap = document.createElement("div");
+      container.appendChild(opsWrap);
+      var opRows = [];
+
+      function addOpRow(initial) {
+        initial = initial || { op: "show", item: "" };
+        var row = document.createElement("div");
+        row.className = "pgapp-builder-two-col";
+        var opSel = pgappSelect(["show", "hide", "toggle", "set", "refresh"], initial.op);
+        var targetInput = pgappTextInput(initial.item || initial.query);
+        var extraInput = pgappTextInput(initial.when || initial.expr);
+        extraInput.placeholder = "when (toggle) / to (set)";
+        var delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
+        delBtn.textContent = "✕";
+        delBtn.addEventListener("click", function () {
+          row.remove();
+          opRows = opRows.filter(function (r) {
+            return r.row !== row;
+          });
+        });
+
+        function syncExtraVisibility() {
+          extraInput.style.display = opSel.value === "toggle" || opSel.value === "set" ? "" : "none";
+        }
+        opSel.addEventListener("change", syncExtraVisibility);
+        syncExtraVisibility();
+
+        var col1 = document.createElement("div");
+        col1.appendChild(opSel);
+        col1.appendChild(targetInput);
+        var col2 = document.createElement("div");
+        col2.appendChild(extraInput);
+        col2.appendChild(delBtn);
+        row.appendChild(col1);
+        row.appendChild(col2);
+        opsWrap.appendChild(row);
+        opRows.push({ row: row, opSel: opSel, targetInput: targetInput, extraInput: extraInput });
+      }
+
+      (data.ops || []).forEach(function (op) {
+        addOpRow(op);
+      });
+
+      var addOpBtn = document.createElement("button");
+      addOpBtn.type = "button";
+      addOpBtn.className = "pgapp-btn pgapp-btn-secondary";
+      addOpBtn.textContent = "+ Add operation";
+      addOpBtn.addEventListener("click", function () {
+        addOpRow(null);
+      });
+      container.appendChild(addOpBtn);
+
+      return {
+        generate: function () {
+          var lines = [];
+          lines.push("    on " + eventSel.value + " of " + itemInput.value.trim() + " {");
+          opRows.forEach(function (r) {
+            var target = r.targetInput.value.trim();
+            if (!target) return;
+            if (r.opSel.value === "show") lines.push("      show " + target);
+            else if (r.opSel.value === "hide") lines.push("      hide " + target);
+            else if (r.opSel.value === "refresh") lines.push("      refresh " + target);
+            else if (r.opSel.value === "toggle") lines.push("      toggle " + target + " when " + pgappMarkupStr(r.extraInput.value));
+            else if (r.opSel.value === "set") lines.push("      set " + target + " to " + pgappMarkupStr(r.extraInput.value));
+          });
+          lines.push("    }");
+          return lines.join("\n");
+        },
+      };
+    },
+  };
+
+  // A Report's `link:` column can also target one of its own computed
+  // columns, not just an entity field — this pulls their current names
+  // back out of the (already-rendered) computed-columns row list, live,
+  // so the "Column" dropdown above always reflects whatever's currently
+  // typed into that section rather than only what the component had at
+  // load time. Best-effort: computed column names typed *after* the
+  // dropdown was built won't retroactively appear in it (a full re-
+  // render on every keystroke would be needlessly complex for this
+  // dialog); picking the plain field-name text is always still possible
+  // since the dropdown falls back to a text input when its options list
+  // doesn't already contain the desired value... actually a `<select>`
+  // can't hold an arbitrary typed value, so this is a known, minor
+  // limitation — see the doc on `pgappSelect`.
+  function computedNamesPlaceholder(computedList) {
+    return computedList
+      .getRows()
+      .map(function (r) {
+        return r.name;
+      })
+      .filter(function (n) {
+        return n && n.trim() !== "";
+      });
+  }
+
+  // Opens the structured editor for `kind`, prefilled from `data`
+  // (already-fetched JSON) using `meta` (already-fetched app-meta JSON)
+  // for its dropdowns. Resolves to the generated markup text on Save,
+  // or null on Cancel/Escape — same contract as `pgappSourceEditor`, so
+  // callers barely change: only which editor function they call, and
+  // what they submit is still just `source=<text>` to the same routes.
+  function pgappStructuredEditor(dialogTitle, kind, data, meta) {
+    return new Promise(function (resolve) {
+      pgappEnsureBuilderStyle();
+      var overlay = document.createElement("div");
+      overlay.className = "pgapp-dialog-overlay";
+      var box = document.createElement("div");
+      box.className = "pgapp-dialog-box pgapp-builder-form-box";
+      box.setAttribute("role", "alertdialog");
+      box.setAttribute("aria-modal", "true");
+      var p = document.createElement("p");
+      p.className = "pgapp-dialog-message";
+      p.textContent = dialogTitle;
+      box.appendChild(p);
+
+      var body = document.createElement("div");
+      body.className = "pgapp-builder-form-body";
+      box.appendChild(body);
+
+      var spec = PGAPP_KIND_RENDERERS[kind];
+      var rendered = null;
+      if (spec) {
+        rendered = spec(body, data || {}, meta || {});
+      } else {
+        var err = document.createElement("p");
+        err.textContent = "No structured editor for kind '" + kind + "' yet.";
+        body.appendChild(err);
+      }
+
+      var actions = document.createElement("div");
+      actions.className = "pgapp-dialog-actions";
+      var cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "pgapp-btn pgapp-btn-secondary";
+      cancelBtn.textContent = "Cancel";
+      var saveBtn = document.createElement("button");
+      saveBtn.type = "button";
+      saveBtn.className = "pgapp-btn pgapp-btn-primary";
+      saveBtn.textContent = "Save";
+
+      function cleanup() {
+        document.removeEventListener("keydown", onKey);
+        overlay.remove();
+      }
+      function onKey(ev) {
+        if (ev.key === "Escape") {
+          cleanup();
+          resolve(null);
+        }
+      }
+      cancelBtn.addEventListener("click", function () {
+        cleanup();
+        resolve(null);
+      });
+      saveBtn.addEventListener("click", function () {
+        if (!rendered) {
+          cleanup();
+          resolve(null);
+          return;
+        }
+        var text;
+        try {
+          text = rendered.generate();
+        } catch (e) {
+          pgappAlert("Couldn't build markup from the form: " + e);
+          return;
+        }
+        cleanup();
+        resolve(text);
+      });
+      actions.appendChild(cancelBtn);
+      actions.appendChild(saveBtn);
+      box.appendChild(actions);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      document.addEventListener("keydown", onKey);
+    });
+  }
+
+  // Fetches `admin_app_meta` for `target.page` — resolves to `{}`
+  // (never rejects) on failure, mirroring `fetchPagesList`.
+  function fetchAppMeta(target) {
+    return fetch(pgappAdminPagesUrl(target, "/app-meta"))
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        return data.ok ? data.meta : {};
+      })
+      .catch(function () {
+        return {};
+      });
+  }
 
   // Restyles the App Builder's plain id/kind/ordinal table row (from
   // `columns: id, kind, ordinal` in examples/app_builder.pgapp) into a
@@ -670,6 +1753,34 @@ window.pgapp = (function () {
           editBtn.setAttribute("aria-label", "Edit component");
           editBtn.textContent = "✎";
           editBtn.addEventListener("click", function () {
+            var structuredFetch = fetch(pgappAdminPagesUrl(target, "/components/" + encodeURIComponent(idx) + "/structured")).then(function (r) {
+              return r.json();
+            });
+            Promise.all([structuredFetch, fetchAppMeta(target)])
+              .then(function (results) {
+                var structured = results[0];
+                var meta = results[1];
+                if (!structured.ok) {
+                  pgappAlert("Couldn't load component: " + structured.error);
+                  return;
+                }
+                pgappStructuredEditor("Edit component (" + kind + ")", structured.kind, structured.data, meta).then(function (generated) {
+                  if (generated === null) return;
+                  postComponentEdit(target, idx, "source=" + encodeURIComponent(generated));
+                });
+              })
+              .catch(function (e) {
+                pgappAlert("pgapp: " + e);
+              });
+          });
+
+          var rawEditBtn = document.createElement("button");
+          rawEditBtn.type = "button";
+          rawEditBtn.className = "pgapp-icon-btn";
+          rawEditBtn.title = "Edit as raw markup";
+          rawEditBtn.setAttribute("aria-label", "Edit component as raw markup");
+          rawEditBtn.textContent = "{ }";
+          rawEditBtn.addEventListener("click", function () {
             var sourceFetch = fetch(pgappAdminPagesUrl(target, "/components/" + encodeURIComponent(idx) + "/source")).then(function (r) {
               return r.json();
             });
@@ -681,7 +1792,7 @@ window.pgapp = (function () {
                   pgappAlert("Couldn't load component source: " + data.error);
                   return;
                 }
-                pgappSourceEditor("Edit component (" + kind + ")", data.source, pagesList).then(function (edited) {
+                pgappSourceEditor("Edit component (" + kind + ") — raw markup", data.source, pagesList).then(function (edited) {
                   if (edited === null) return;
                   postComponentEdit(target, idx, "source=" + encodeURIComponent(edited));
                 });
@@ -691,6 +1802,7 @@ window.pgapp = (function () {
               });
           });
           actionsTd.appendChild(editBtn);
+          actionsTd.appendChild(rawEditBtn);
 
           var deleteBtn = document.createElement("button");
           deleteBtn.type = "button";
@@ -1124,15 +2236,16 @@ window.pgapp = (function () {
     });
   }
 
-  // Full-property editing, APEX-Page-Designer-style but as a raw text
-  // box instead of a property sheet: same shell as pgappPrompt, but a
-  // multi-line, monospace `<textarea>` instead of a single-line
-  // `<input>` — used by the App Builder's component "Edit" button
-  // (prefilled with that component's exact current markup) and its
-  // "Advanced: edit full app source" link's inline variant. Resolves
-  // the textarea's value on Save, or null on Cancel/Escape (Enter does
-  // *not* submit, unlike pgappPrompt, since newlines are meaningful
-  // here).
+  // Raw-markup editing: same shell as pgappPrompt, but a multi-line,
+  // monospace `<textarea>` instead of a single-line `<input>` — the
+  // App Builder's original component editor, still reachable today via
+  // the "{ }" button next to a component's structured-editor pencil
+  // (see `pgappStructuredEditor`, the primary editor since it renders a
+  // real per-attribute property form instead of this raw text box) and
+  // via its "Advanced: edit full app source" link's inline variant.
+  // Resolves the textarea's value on Save, or null on Cancel/Escape
+  // (Enter does *not* submit, unlike pgappPrompt, since newlines are
+  // meaningful here).
   function pgappSourceEditor(title, initialText, pagesList) {
     return new Promise(function (resolve) {
       var overlay = document.createElement("div");

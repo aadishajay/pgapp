@@ -3,13 +3,17 @@
 # pgapp_builder schema rather than a user workspace, at the fixed
 # workspace/app slugs "pgapp"/"builder". Lists every OTHER app
 # registered across every workspace in this instance and lets you:
-# reorder/add/edit(full markup, any attribute, any of the 8 component
-# kinds)/delete a page's components, add/rename/delete whole pages, jump
-# to a live preview, scaffold brand-new apps with zero restart, and (via
-# the "Advanced" link) reach the full-file raw editor for anything
+# reorder/add/edit/delete a page's components (through a real per-
+# attribute property form for every one of the 9 component kinds —
+# title/entity/columns/computed columns/format masks/item types/
+# dynamic-action ops/requires/attrs, as typed fields and add/remove/
+# reorder row lists, not a raw markup blob — see runtime.js's
+# `pgappStructuredEditor`), add/rename/delete whole pages, jump to a
+# live preview, scaffold brand-new apps with zero restart, and (via the
+# "Advanced" link) reach the full-file raw editor for anything
 # structural this picker doesn't have a dedicated control for yet
 # (entities, queries, nav, header/footer, app-level settings) — an
-# Oracle-APEX-App-Builder-flavored editor, without hand-editing markup
+# Oracle-APEX-Page-Designer-flavored editor, without hand-editing markup
 # over SSH. Every entity here reading pgapp_control.*/pgapp_meta.* is
 # query-backed — no core framework changes were needed for that read
 # side: a named query can reference any schema this connection can see,
@@ -19,18 +23,24 @@
 # schemas rather than a workspace holding real app data.
 #
 # The actual file-editing mechanics for an existing app's pages/
-# components — reorder/add/edit/delete a component (as raw markup text,
-# so any kind/attribute is reachable, not a fixed structured-fields
-# subset), add/rename/delete a whole page — live in src/page_reorder.rs
-# and the `/:workspace/:app/admin/pages/...` routes in server.rs, not
-# here; this app is only the picker + the draggable list + a few small
-# forms. Every one of those routes also refuses outright if the target
-# is the App Builder itself — belt and suspenders alongside the
-# self-exclusion below, since a URL can always be hand-crafted past
-# whatever a picker itself declines to link to. The "Advanced" link
-# instead points at `/admin/reload` — a full-file raw editor already
-# built into every app (not something the App Builder adds), for
-# whatever this picker doesn't cover.
+# components — reorder/add/edit/delete a component, add/rename/delete a
+# whole page — live in src/page_reorder.rs and the
+# `/:workspace/:app/admin/pages/...` routes in server.rs, not here; this
+# app is only the picker + the draggable list + a few small forms.
+# Every add/edit still ultimately submits raw markup text to those same
+# routes exactly as before — the structured property form
+# (`pgappStructuredEditor`) only changes what *generates* that text
+# (typed fields client-side, via `RuntimeComponent::to_json` for the
+# prefill and one `pgappGenerate`-style function per kind for the
+# regenerate) and what a user *sees* while editing; page_reorder.rs
+# itself never changed. Every one of those routes also refuses outright
+# if the target is the App Builder itself — belt and suspenders
+# alongside the self-exclusion below, since a URL can always be hand-
+# crafted past whatever a picker itself declines to link to. The
+# "Advanced" link instead points at `/admin/reload` — a full-file raw
+# editor already built into every app (not something the App Builder
+# adds), for whatever neither the structured nor per-component raw-
+# markup ("Edit as raw markup"/"{ }" button) editors cover.
 
 app "App Builder" {
   theme: shadcn
@@ -140,7 +150,7 @@ app "App Builder" {
   page "EditPage" {
     text "Editing:" attrs (id: "pgapp-context-slot")
     text "Preview" attrs (id: "pgapp-preview-slot")
-    text "Drag a row to reorder. The pencil opens the component's full markup for editing (any attribute, any kind); the ✕ deletes it. Every change saves immediately, in the database and in the app's own .pgapp file."
+    text "Drag a row to reorder. The pencil opens a property form for that component's kind (any attribute, any kind) — the { } button next to it opens the same edit as raw markup instead; the ✕ deletes it. Every change saves immediately, in the database and in the app's own .pgapp file."
     region "Components" from query components_list {
       columns: id, kind, ordinal
     } attrs (class: "pgapp-draggable-rows")

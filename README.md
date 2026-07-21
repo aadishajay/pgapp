@@ -832,14 +832,19 @@ still Rust code — those need `cargo build` + restart. Markup changes
 `examples/app_builder.pgapp` is a pgapp app, like any other, that lists
 every app registered across every workspace in the instance and lets
 you drag-and-drop reorder a page's components, add a component of any
-of the 8 kinds, edit any of its attributes (not just a label or column
-list), delete it, add/rename/delete whole pages, jump straight to a
-live preview, and scaffold brand-new apps — an Oracle-APEX-App-Builder-
-flavored way to build without hand-editing markup over SSH. Anything
-structural this picker doesn't have a dedicated control for yet
-(entities, queries, nav, header/footer, app-level settings) is still
-one click away via its "Advanced" link into the full-file raw editor
-every app already has.
+of the 9 kinds through a real per-attribute property form (title/
+entity/columns/computed columns/format masks/item types/dynamic-action
+ops/requires/attrs — whatever that kind supports, as typed fields and
+add/remove/reorder row lists, not a raw markup blob), delete it, add/
+rename/delete whole pages, jump straight to a live preview, and
+scaffold brand-new apps — an Oracle-APEX-Page-Designer-flavored way to
+build without hand-editing markup over SSH. Anything structural this
+picker doesn't have a dedicated control for yet (entities, queries,
+nav, header/footer, app-level settings) is still one click away via
+its "Advanced" link into the full-file raw editor every app already
+has; each component's raw markup text is also still reachable one
+click deeper, via its own "Edit as raw markup" fallback next to the
+structured editor.
 
 **Available by default, no setup needed.** Every instance auto-provisions
 it — at `pgapp instance init` for a new instance, and again (idempotently)
@@ -880,33 +885,48 @@ in place — no restart:
   components — see `page_reorder::rename_page`), so nothing dangles.
 - **Delete page**: per-card ✕ button (with a confirm dialog) on the
   Pages screen — POSTs to `.../pages/:page/delete`.
-- **Add component**: pick a kind (all 8: `text`/`report`/`form`/
-  `editable_table`/`chart`/`region`/`action`/`link`) to seed a raw
-  markup textarea with a starter template, edit it freely, submit —
-  POSTs the raw text to `.../pages/:page/components/add`. Since the
-  textarea's own content is what's submitted, any attribute the
-  grammar supports for that kind is reachable, not a fixed structured-
-  fields subset. The new component always lands at the bottom of the
-  page; drag it into place from there.
-- **Edit**: per-row pencil button opens the same kind of raw-markup
-  textarea, prefilled with that component's *exact* current source
-  (`GET .../components/:idx/source`) — change anything (columns,
-  page_size, item overrides, a form's fields, a chart's type/x/y,
-  whatever the kind has), submit — POSTs to
+- **Add component**: pick a kind (all 9: `text`/`report`/`form`/
+  `editable_table`/`chart`/`region`/`action`/`button`/`link` —
+  `dynamic_action` too, via the structured picker only) to open a blank
+  structured form for it (`pgappStructuredEditor` in `runtime.js`) —
+  every attribute that kind supports as a real field: scalar text/
+  number/select inputs for things like title/entity/query/chart type,
+  and add/remove/reorder row lists (`pgappRowList`) for anything the
+  grammar itself repeats — a Report's columns/computed columns/format
+  masks, a Form's fields/per-field item types, a dynamic action's ops,
+  the shared `attrs (...)` extra-attribute list every kind carries.
+  Fill it in, Save — the dialog *generates* fresh markup text for that
+  one component client-side and POSTs it to
+  `.../pages/:page/components/add`, same endpoint the original raw
+  editor used. A "Add as raw markup" link next to the kind picker
+  reveals the original raw-textarea-plus-starter-template flow, for
+  anything the structured form doesn't cover well. The new component
+  always lands at the bottom of the page; drag it into place from
+  there.
+- **Edit**: per-row pencil button opens the same structured editor,
+  prefilled from that component's already-resolved, already-typed
+  attributes (`GET .../components/:idx/structured`, backed by
+  `RuntimeComponent::to_json`) rather than its raw text — a Form's
+  `trip_type as popup from query trip_types_lov` shows up as a real
+  "popup" dropdown with a "from query" config field already filled in,
+  not a string to retype. Save regenerates the whole component's markup
+  from the form's current state and POSTs it to
   `.../pages/:page/components/:idx/edit`, replacing the whole block
-  (`page_reorder::replace_component`). Full-property, APEX-Page-
-  Designer-style editing, just as a raw text box instead of a property
-  sheet — except for one property, which gets an actual structured
-  control: if the textarea's text targets another page (a `link`
-  component, or a report's `link:` property), `renderLinkControls`
-  (`runtime.js`) inserts a real "Target page" `<select>` (populated
-  from `GET .../admin/pages-list`) above it, plus — for a report's
-  `link:` — an add/remove list of parameter rows (page param name +
-  row column), so that specific, otherwise-easy-to-typo property is
-  genuinely GUI-editable rather than hand-typed syntax. Changing either
-  rewrites just that one line in the textarea; everything else in the
-  component still goes through the raw text as before. Shown in the
-  "Add Component" panel too, re-rendered whenever the kind changes.
+  (`page_reorder::replace_component`) — genuine APEX-Page-Designer-
+  style editing: pick a component, get a property sheet, not a raw text
+  box. A `{ }` button next to the pencil opens the original raw-markup
+  textarea instead (prefilled via `GET .../components/:idx/source`),
+  for anything the structured form doesn't have a dedicated control for
+  yet, or to hand-tweak formatting/inline comments the structured
+  editor can't preserve (regenerating from typed fields necessarily
+  drops any comment that lived *inside* the component's own block,
+  since a comment isn't part of its attribute data — a comment
+  immediately above the component's own declaration line is untouched
+  either way, since that's `page_reorder`'s doing, not the structured
+  editor's). Every dropdown (entity, query, page, action, item-type
+  kind, chart type, auth scheme) is populated from
+  `GET .../pages/:page/app-meta` rather than hand-typed, so a target
+  that doesn't exist yet can't be typo'd in.
 - **Delete component**: per-row ✕ button (with a confirm dialog) —
   POSTs to `.../pages/:page/components/:idx/delete`.
 - **Run this page ↗**: opens the page's real, live URL in a new tab —
@@ -945,11 +965,25 @@ more than one file, and splicing across files isn't implemented yet.
 The drag itself, the panels, and the per-row/per-card action buttons
 are all `runtime.js` (`bindDraggableRows`/`bindAddComponentForm`/
 `bindComponentRowActions`/`bindAddPageForm`/`bindPageCardActions`/
-`bindAdvancedSourceLink`) — plain HTML5 drag-and-drop, a themed raw-
-source editor modal (`pgappSourceEditor`) built the same way as the
-existing `pgappPrompt`/`pgappAlert`/`pgappConfirm` dialogs, and small
-DOM-built forms injected into `text` component placeholders (`attrs
-(id: "...")`), no framework changes needed to host them. Since these
+`bindAdvancedSourceLink`) — plain HTML5 drag-and-drop, a themed
+structured property-sheet modal (`pgappStructuredEditor`, one render
+function per kind in `PGAPP_KIND_RENDERERS` plus shared widgets —
+`pgappRowList` for repeatable rows, `pgappAttrsEditor`/
+`pgappRequiresEditor`/`pgappConfigEditor`/`pgappItemTypesEditor` for
+the bits every kind or every field shares) alongside the original raw-
+source editor modal (`pgappSourceEditor`, still the "Advanced"/"{ }"
+fallback), both built the same way as the existing `pgappPrompt`/
+`pgappAlert`/`pgappConfirm` dialogs, and small DOM-built forms injected
+into `text` component placeholders (`attrs (id: "...")`), no framework
+changes needed to host any of it. Saving in the structured editor never
+sends structured data to the server at all — it *generates* markup
+text client-side (mirroring the grammar `markup.rs` parses) and submits
+that through the exact same raw-text `/components/.../add`|`edit`
+routes the original editor already used, so no new write-side route
+was needed; only reading a component's current, already-typed
+attributes needed one (`GET .../components/:idx/structured`, backed by
+`RuntimeComponent::to_json` in `src/meta/types.rs`), plus one more for
+its dropdowns' contents (`GET .../pages/:page/app-meta`). Since these
 all describe some *other* app's page, every one of them builds that
 app's own URL from `?target_workspace=`/`?target_app=`/`?target_page=`
 on the **current** (App Builder) page's own URL, not from anything

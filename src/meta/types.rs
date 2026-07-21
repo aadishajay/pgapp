@@ -64,6 +64,19 @@ impl RuntimeEntity {
     }
 }
 
+/// `{id, class, attrs: [[key, value], ...]}` — the App Builder's
+/// structured component editor's wire format for [`HtmlAttrs`] (see
+/// `RuntimeComponent::to_json`). An array of pairs rather than an
+/// object for `attrs` since it's edited as an ordered, repeatable list
+/// of rows client-side, same reasoning as `formats`/`item_types` below.
+fn html_attrs_json(html: &HtmlAttrs) -> serde_json::Value {
+    serde_json::json!({
+        "id": html.id,
+        "class": html.class,
+        "attrs": html.attrs,
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct LinkColumn {
     pub field: String,
@@ -178,6 +191,215 @@ pub enum RuntimeComponent {
     DynamicAction {
         config: serde_json::Value,
     },
+}
+
+impl RuntimeComponent {
+    /// This component's kind name, exactly as the markup grammar spells
+    /// it (`report`, `form`, `editable_table`, `chart`, `text`, `link`,
+    /// `region`, `action`, `button`, `dynamic_action`) — the App
+    /// Builder structured editor's discriminant, both for picking which
+    /// client-side form-spec to render and (echoed back on submit) for
+    /// server.rs to know which kind's markup generator ran.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            RuntimeComponent::Report { .. } => "report",
+            RuntimeComponent::Form { .. } => "form",
+            RuntimeComponent::EditableTable { .. } => "editable_table",
+            RuntimeComponent::Chart { .. } => "chart",
+            RuntimeComponent::Text { .. } => "text",
+            RuntimeComponent::Link { .. } => "link",
+            RuntimeComponent::Region { .. } => "region",
+            RuntimeComponent::Action { .. } => "action",
+            RuntimeComponent::Button { .. } => "button",
+            RuntimeComponent::DynamicAction { .. } => "dynamic_action",
+        }
+    }
+
+    /// Serializes this component's full, already-resolved attribute set
+    /// to JSON — the App Builder's structured editor fetches this to
+    /// prefill a real per-kind edit form (see the new
+    /// `/:workspace/:app/admin/pages/:page/components/:idx/structured`
+    /// route in `server.rs`), instead of the raw markup text
+    /// `page_reorder::component_source` returns. A `HashMap` field
+    /// (`formats`, `item_types`, `field_html`) becomes a name-sorted
+    /// array of rows — deterministic across calls, and the natural
+    /// shape for a client-side repeatable-row editor. The client-side
+    /// JS never needs to *parse* this back into markup text for a
+    /// round trip — it only ever *generates* fresh markup text from
+    /// whatever the form currently holds (see runtime.js's per-kind
+    /// `pgappGenerate*` functions) and submits that verbatim through
+    /// the same raw-text `/components/.../add`|`edit` routes the
+    /// existing raw editor already uses; this method only has to feed
+    /// the initial prefill, never round-trip losslessly on its own.
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            RuntimeComponent::Report {
+                title,
+                entity,
+                columns,
+                source_query,
+                link_column,
+                page_size,
+                before_load,
+                computed,
+                formats,
+                requires,
+                html,
+            } => serde_json::json!({
+                "title": title,
+                "entity": entity.name,
+                "entity_fields": entity_fields_json(entity),
+                "columns": columns,
+                "source_query": source_query,
+                "link_column": link_column.as_ref().map(|l| serde_json::json!({
+                    "field": l.field,
+                    "target_page": l.target_page,
+                    "extra_params": l.extra_params,
+                })),
+                "page_size": page_size,
+                "before_load": before_load.as_ref().map(|a| serde_json::json!({"name": a.name, "config": a.config})),
+                "computed": computed.iter().map(|c| serde_json::json!({"name": c.name, "sql": c.sql})).collect::<Vec<_>>(),
+                "formats": formats_json(formats),
+                "requires": requires,
+                "html": html_attrs_json(html),
+            }),
+            RuntimeComponent::Form { title, entity, fields, item_types, field_html, requires, html } => serde_json::json!({
+                "title": title,
+                "entity": entity.name,
+                "entity_fields": entity_fields_json(entity),
+                "fields": fields,
+                "item_types": item_types_json(item_types),
+                "field_html": field_html_json(field_html),
+                "requires": requires,
+                "html": html_attrs_json(html),
+            }),
+            RuntimeComponent::EditableTable { title, entity, columns, item_types, field_html, requires, html } => serde_json::json!({
+                "title": title,
+                "entity": entity.name,
+                "entity_fields": entity_fields_json(entity),
+                "columns": columns,
+                "item_types": item_types_json(item_types),
+                "field_html": field_html_json(field_html),
+                "requires": requires,
+                "html": html_attrs_json(html),
+            }),
+            RuntimeComponent::Chart { title, query, chart_type, x, y, requires, html } => serde_json::json!({
+                "title": title,
+                "query": query,
+                "chart_type": chart_type,
+                "x": x,
+                "y": y,
+                "requires": requires,
+                "html": html_attrs_json(html),
+            }),
+            RuntimeComponent::Text { text, requires, html } => serde_json::json!({
+                "text": text,
+                "requires": requires,
+                "html": html_attrs_json(html),
+            }),
+            RuntimeComponent::Link { label, target_page, requires, html } => serde_json::json!({
+                "label": label,
+                "target_page": target_page,
+                "requires": requires,
+                "html": html_attrs_json(html),
+            }),
+            RuntimeComponent::Region { label, query, columns, requires, html } => serde_json::json!({
+                "label": label,
+                "query": query,
+                "columns": columns,
+                "requires": requires,
+                "html": html_attrs_json(html),
+            }),
+            RuntimeComponent::Action { label, name, config, requires, html } => serde_json::json!({
+                "label": label,
+                "name": name,
+                "config": config,
+                "requires": requires,
+                "html": html_attrs_json(html),
+            }),
+            RuntimeComponent::Button { label, behavior, requires, html } => serde_json::json!({
+                "label": label,
+                "behavior": match behavior {
+                    ButtonBehavior::Redirect { target_page, extra_params } => serde_json::json!({
+                        "type": "redirect",
+                        "target_page": target_page,
+                        "extra_params": extra_params,
+                    }),
+                    ButtonBehavior::RunAction { name, config } => serde_json::json!({
+                        "type": "run_action",
+                        "name": name,
+                        "config": config,
+                    }),
+                },
+                "requires": requires,
+                "html": html_attrs_json(html),
+            }),
+            RuntimeComponent::DynamicAction { config } => config.clone(),
+        }
+    }
+}
+
+/// An entity's fields as `[{name, type}, ...]` — `type` is
+/// `FieldType::as_str()` (`"id"`, `"text"`, `"boolean"`, `"integer"`,
+/// `"timestamp"`), which the App Builder's structured editor needs to
+/// compute each field's default item-type kind client-side (mirroring
+/// `item_types::default_kind_for`'s tiny fixed mapping) — that's how it
+/// knows whether an `item_types` row it's about to regenerate as
+/// markup is actually redundant (kind == that field's own default, and
+/// empty config) and can be omitted rather than emitting a needless
+/// explicit `item <field> as <kind>` line for every single field.
+fn entity_fields_json(entity: &RuntimeEntity) -> serde_json::Value {
+    serde_json::Value::Array(
+        entity
+            .fields
+            .iter()
+            .map(|f| serde_json::json!({"name": f.name, "type": f.data_type.as_str()}))
+            .collect(),
+    )
+}
+
+/// `formats`'s wire format: a field-name-sorted array of `{field,
+/// mask}` rows (see `to_json`'s doc for why a map becomes a sorted
+/// array).
+fn formats_json(formats: &HashMap<String, FormatMask>) -> serde_json::Value {
+    let mut names: Vec<&String> = formats.keys().collect();
+    names.sort();
+    serde_json::Value::Array(
+        names
+            .into_iter()
+            .map(|name| serde_json::json!({"field": name, "mask": formats[name].to_json()}))
+            .collect(),
+    )
+}
+
+/// `item_types`'s wire format: a field-name-sorted array of `{field,
+/// kind, config}` rows (see `to_json`'s doc for why a map becomes a
+/// sorted array).
+fn item_types_json(item_types: &HashMap<String, FieldItem>) -> serde_json::Value {
+    let mut names: Vec<&String> = item_types.keys().collect();
+    names.sort();
+    serde_json::Value::Array(
+        names
+            .into_iter()
+            .map(|name| {
+                let item = &item_types[name];
+                serde_json::json!({"field": name, "kind": item.kind, "config": item.config})
+            })
+            .collect(),
+    )
+}
+
+/// `field_html`'s wire format: a field-name-sorted array of `{field,
+/// html}` rows.
+fn field_html_json(field_html: &HashMap<String, HtmlAttrs>) -> serde_json::Value {
+    let mut names: Vec<&String> = field_html.keys().collect();
+    names.sort();
+    serde_json::Value::Array(
+        names
+            .into_iter()
+            .map(|name| serde_json::json!({"field": name, "html": html_attrs_json(&field_html[name])}))
+            .collect(),
+    )
 }
 
 #[derive(Debug, Clone)]

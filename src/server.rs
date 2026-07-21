@@ -47,7 +47,7 @@ use crate::icons::Icons;
 use crate::instance;
 use crate::item_types;
 use crate::meta::{self, Chrome, NavNode, RegionRows, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimePage};
-use crate::model::{ComputedColumn, FieldItem, HtmlAttrs, PreAction};
+use crate::model::{ComputedColumn, FieldItem, HtmlAttrs, PreAction, CHART_TYPES};
 use crate::markup;
 use crate::page_reorder;
 use crate::render;
@@ -241,6 +241,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/:workspace/:app/admin/pages/:page/components/:idx/source",
             get(admin_component_source),
         )
+        .route(
+            "/:workspace/:app/admin/pages/:page/components/:idx/structured",
+            get(admin_component_structured),
+        )
+        .route("/:workspace/:app/admin/pages/:page/app-meta", get(admin_app_meta))
         .route("/:workspace/:app/admin/pages/:page/components/:idx/edit", post(admin_edit_component_source))
         .route("/:workspace/:app/admin/pages/:page/components/:idx/delete", post(admin_delete_component))
         .route("/pgapp/builder/admin/apps/create-pending", post(admin_create_pending_app))
@@ -1795,6 +1800,101 @@ async fn admin_component_source(
 
     match result {
         Ok(source) => Ok(axum::Json(json!({"ok": true, "source": source})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// GET /:workspace/:app/admin/pages/:page/components/:idx/structured —
+/// the App Builder's structured editor's prefill data: component
+/// `idx`'s kind plus its full attribute set as JSON (see
+/// `RuntimeComponent::to_json`), read straight from the already-synced
+/// `RuntimeApp` in memory (no file re-read/re-parse needed) — safe
+/// because `meta::sync_app` always re-derives a component's ordinal
+/// from file order on every sync, so this index always lines up with
+/// `page_reorder`'s (file-based) idx. Client-side JS renders a real
+/// per-kind form from this instead of the raw-text textarea
+/// `admin_component_source` feeds `pgappSourceEditor`.
+async fn admin_component_structured(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, page, idx)): Path<(String, String, String, usize)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let data = entry.data();
+    let found = data.app.pages.iter().find(|p| p.name == page).and_then(|p| p.components.get(idx));
+    match found {
+        Some(component) => {
+            Ok(axum::Json(json!({"ok": true, "kind": component.kind(), "data": component.to_json()})).into_response())
+        }
+        None => Ok(axum::Json(json!({"ok": false, "error": format!("no component at index {idx} on page '{page}'")})).into_response()),
+    }
+}
+
+/// GET /:workspace/:app/admin/pages/:page/app-meta — everything the App
+/// Builder's structured component editor needs to populate its
+/// dropdowns/checkboxes for a component on `page`: every entity's name
+/// and field list, every query visible from this page (app-scoped plus
+/// this page's own), every registered item-type/action module name,
+/// the fixed chart-type list, every page name (for a `-> page <Name>`
+/// target picker), and every named auth scheme. One combined endpoint
+/// rather than several, since a single component's editor may need any
+/// subset of these depending on its kind. Re-parses the markup file
+/// fresh (like `admin_pages_list`) rather than reading `entry.data()`'s
+/// already-synced `RuntimeApp`, since an *unused* entity/query (one no
+/// existing component references yet) still needs to show up here for
+/// a brand new component to bind to.
+async fn admin_app_meta(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, page)): Path<(String, String, String)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let result: anyhow::Result<serde_json::Value> = async {
+        if std::path::Path::new(&entry.markup_path).is_dir() {
+            anyhow::bail!("this app's markup is a directory of files — the App Builder only supports single-file apps right now");
+        }
+        let app_def = crate::source::load(&entry.markup_path)?;
+        let entities: Vec<serde_json::Value> = app_def
+            .entities
+            .iter()
+            .map(|e| {
+                json!({
+                    "name": e.name,
+                    "fields": e.fields.iter().map(|f| json!({"name": f.name, "type": f.ty.as_str()})).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+
+        let mut query_names: Vec<&str> = app_def.queries.iter().map(|q| q.name.as_str()).collect();
+        if let Some(page_def) = app_def.pages.iter().find(|p| p.name == page) {
+            for q in &page_def.queries {
+                if !query_names.contains(&q.name.as_str()) {
+                    query_names.push(&q.name);
+                }
+            }
+        }
+
+        let mut item_type_names: Vec<&str> = state.item_types.keys().copied().collect();
+        item_type_names.sort();
+        let mut action_names: Vec<&str> = state.actions.keys().copied().collect();
+        action_names.sort();
+        let page_names: Vec<&str> = app_def.pages.iter().map(|p| p.name.as_str()).collect();
+        let auth_scheme_names: Vec<&str> = app_def.auth_schemes.iter().map(|s| s.name.as_str()).collect();
+
+        Ok(json!({
+            "entities": entities,
+            "queries": query_names,
+            "item_types": item_type_names,
+            "actions": action_names,
+            "chart_types": CHART_TYPES,
+            "pages": page_names,
+            "auth_schemes": auth_scheme_names,
+        }))
+    }
+    .await;
+
+    match result {
+        Ok(v) => Ok(axum::Json(json!({"ok": true, "meta": v})).into_response()),
         Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
     }
 }
