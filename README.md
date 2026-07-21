@@ -329,7 +329,14 @@ fixed "page kind." Eleven kinds:
   direction and shows a ▲/▼ indicator; sorting an entity-backed report
   switches it from keyset to offset pagination for the duration (a
   custom order breaks the keyset cursor's `id`-order assumption), and a
-  saved view remembers its sort along with its filters.
+  saved view remembers its sort along with its filters. `aggregate
+  <col>: sum | avg | count | min | max` (repeatable, one per column)
+  adds Interactive Report's footer aggregates row — computed over the
+  report's whole *filtered* result set (every page, not just the one on
+  screen), independent of pagination and sort; a `format:` mask on the
+  same column also formats its aggregate value. Works for entity- and
+  query-backed reports; not yet for collection-backed ones (an internal
+  pgapp extension, not something a real APEX migration needs).
 - **`form "Title" of <entity> { ... }`** — create/edit form. `fields`
   lists writable columns; `item <field> [as <kind> [(...)]] [attrs
   (...)]` picks a widget and/or sets `id`/`class`/attributes on that

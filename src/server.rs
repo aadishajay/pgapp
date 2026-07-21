@@ -46,8 +46,8 @@ use crate::html::url_encode;
 use crate::icons::Icons;
 use crate::instance;
 use crate::item_types;
-use crate::meta::{self, Chrome, NavNode, RegionRows, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimePage};
-use crate::model::{ComputedColumn, FieldItem, HtmlAttrs, PreAction, CHART_TYPES};
+use crate::meta::{self, Chrome, NavNode, RegionRows, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimePage, RuntimeQuery};
+use crate::model::{AggregateFn, ComputedColumn, FieldItem, HtmlAttrs, PreAction, CHART_TYPES};
 use crate::markup;
 use crate::page_reorder;
 use crate::render;
@@ -783,6 +783,98 @@ async fn fetch_report_rows_sorted(
     Ok((rows, has_next))
 }
 
+/// One `<col> -> agg(col)::text` SQL expression per configured
+/// aggregate — shared by the entity- and query-backed aggregate
+/// fetchers below. `count` accepts any column type; `sum`/`avg`/`min`/
+/// `max` cast through `numeric` first, since the underlying column's
+/// real Postgres type isn't known at this layer (same "cast to text,
+/// let Postgres do the real work" approach as `select_columns`).
+fn aggregate_select_exprs(aggregates: &HashMap<String, AggregateFn>, computed: &[ComputedColumn]) -> Vec<String> {
+    aggregates
+        .iter()
+        .map(|(col, agg)| {
+            let inner = match computed.iter().find(|c| c.name == *col) {
+                Some(c) => format!("({})", c.sql),
+                None => format!("t.{col}"),
+            };
+            match agg {
+                AggregateFn::Count => format!(r#"(count({inner}))::text as "{col}""#),
+                other => format!(r#"({}(({inner})::numeric))::text as "{col}""#, other.as_str()),
+            }
+        })
+        .collect()
+}
+
+/// Interactive Report's footer aggregates, computed over the report's
+/// whole *filtered* result set (every page, not just the one on
+/// screen) — an entity-backed report's counterpart to
+/// `fetch_report_rows`/`fetch_report_rows_sorted`.
+async fn fetch_report_aggregates_entity(
+    pool: &PgPool,
+    data_schema: &str,
+    entity: &RuntimeEntity,
+    computed: &[ComputedColumn],
+    filters: &ReportFilters,
+    filter_columns: &[String],
+    aggregates: &HashMap<String, AggregateFn>,
+) -> anyhow::Result<HashMap<String, Option<String>>> {
+    if aggregates.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let exprs = aggregate_select_exprs(aggregates, computed);
+    let (conditions, binds) = filters.to_sql("t.", filter_columns, computed, 1);
+    let where_clause = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!("where {}", conditions.join(" and "))
+    };
+    let sql = format!("select {} from {data_schema}.{} t {where_clause}", exprs.join(", "), entity.table_name);
+    let mut query = sqlx::query(&sql);
+    for b in &binds {
+        query = query.bind(b.as_str());
+    }
+    let row = query.fetch_one(pool).await?;
+    let mut out = HashMap::new();
+    for col in aggregates.keys() {
+        out.insert(col.clone(), row.try_get::<Option<String>, _>(col.as_str())?);
+    }
+    Ok(out)
+}
+
+/// The query-backed counterpart of `fetch_report_aggregates_entity`:
+/// wraps the named query's own SQL the same way `run_named_query_page`
+/// does, aggregating over its filtered rows instead of the entity's
+/// table directly.
+async fn fetch_report_aggregates_query(
+    pool: &PgPool,
+    data_schema: &str,
+    rq: &RuntimeQuery,
+    ctx: &HashMap<String, String>,
+    where_clause: &str,
+    extra_binds: &[String],
+    aggregates: &HashMap<String, AggregateFn>,
+) -> anyhow::Result<HashMap<String, Option<String>>> {
+    if aggregates.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let exprs = aggregate_select_exprs(aggregates, &[]);
+    let sql = format!("select {} from ({}) as t {}", exprs.join(", "), rq.sql, where_clause);
+    let mut query = sqlx::query(&sql);
+    for name in &rq.bind_names {
+        query = query.bind(ctx.get(name).map(|s| s.as_str()));
+    }
+    for bind in extra_binds {
+        query = query.bind(bind.as_str());
+    }
+    let mut conn = crate::meta::scoped_conn(pool, data_schema).await?;
+    let row = query.fetch_one(&mut *conn).await?;
+    let mut out = HashMap::new();
+    for col in aggregates.keys() {
+        out.insert(col.clone(), row.try_get::<Option<String>, _>(col.as_str())?);
+    }
+    Ok(out)
+}
+
 /// Parses a `?cal<idx>=YYYY-MM` query param into `(year, month)`;
 /// `None` on anything malformed, so the caller falls back to today's
 /// month rather than erroring the whole page over a hand-edited URL.
@@ -1189,6 +1281,7 @@ async fn render_component(
             before_load,
             computed,
             formats,
+            aggregates,
             display,
             html,
             ..
@@ -1308,6 +1401,32 @@ async fn render_component(
                 (rp.rows, prev_href, next_href)
             };
 
+            // Aggregates run over the report's whole *filtered* result
+            // set, independent of pagination/sort — a separate query
+            // from the row fetch above, not a byproduct of it. Not yet
+            // supported for collection-backed reports (an internal
+            // pgapp extension, not something a real APEX migration
+            // needs) — those just render without a footer row.
+            let agg_values = if aggregates.is_empty() {
+                HashMap::new()
+            } else if let Some(qname) = effective_query {
+                let rq = page
+                    .resolve_query(&data.app, qname)
+                    .ok_or_else(|| anyhow::anyhow!("report '{title}' sources from unknown query '{qname}'"))?;
+                let ctx = bind_context(query, None);
+                let (conditions, binds) = filters.to_sql("t.", columns, &[], rq.bind_names.len() + 1);
+                let where_clause = if conditions.is_empty() {
+                    String::new()
+                } else {
+                    format!("where {}", conditions.join(" and "))
+                };
+                fetch_report_aggregates_query(&state.pool, &data.app.data_schema, rq, &ctx, &where_clause, &binds, aggregates).await?
+            } else if entity.source_collection.is_some() {
+                HashMap::new()
+            } else {
+                fetch_report_aggregates_entity(&state.pool, &data.app.data_schema, entity, computed, &filters, columns, aggregates).await?
+            };
+
             let mut extras = report_extras(app, state, data, page_name, idx, &filters, auth_ctx).await?;
             extras.warning = before_load_warning;
 
@@ -1326,6 +1445,8 @@ async fn render_component(
                 &data.icons,
                 &extras,
                 formats,
+                aggregates,
+                &agg_values,
                 display,
                 sort_arg,
                 html,

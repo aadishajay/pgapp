@@ -92,6 +92,10 @@
 //!             own row, e.g. `computed total: "(select sum(x) from y
 //!             where y.bill_key = t.bill_key)"`)
 //!             | "format" Ident ":" formatmask
+//!             | "aggregate" Ident ":" ("sum" | "avg" | "count" | "min" | "max")
+//!             (Interactive Report's per-column footer aggregate,
+//!             computed over the whole filtered result set — see
+//!             model::AggregateFn; the column must be one of `columns`)
 //!             | "display" ":" ("table" | "cards" | "list")
 //!             (default "table"; Oracle APEX's "Cards" region folded in
 //!             as a display mode — see model::REPORT_DISPLAY_MODES)
@@ -869,6 +873,7 @@ impl Parser {
         let mut before_load = None;
         let mut computed = Vec::new();
         let mut formats = std::collections::HashMap::new();
+        let mut aggregates = std::collections::HashMap::new();
         let mut display = "table".to_string();
         while !self.at_symbol('}') {
             if self.at_keyword("computed") {
@@ -885,6 +890,16 @@ impl Parser {
                 self.expect_symbol(':')?;
                 let mask = self.parse_format_mask()?;
                 formats.insert(name, mask);
+                continue;
+            }
+            if self.at_keyword("aggregate") {
+                self.advance()?;
+                let name = self.expect_ident()?;
+                self.expect_symbol(':')?;
+                let kind = self.expect_ident()?;
+                let agg = crate::model::AggregateFn::parse(&kind)
+                    .ok_or_else(|| anyhow::anyhow!("unknown aggregate '{kind}' on report '{title}' (line {})", self.cur_line()))?;
+                aggregates.insert(name, agg);
                 continue;
             }
             let prop = self.expect_ident()?;
@@ -947,6 +962,7 @@ impl Parser {
             before_load,
             computed,
             formats,
+            aggregates,
             display,
             requires: None,
             html: HtmlAttrs::default(),

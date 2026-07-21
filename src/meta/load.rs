@@ -10,7 +10,7 @@ use super::types::{
     wrap_to_jsonb, ButtonBehavior, LinkColumn, NavNode, RuntimeApp, RuntimeComponent, RuntimeEntity,
     RuntimeField, RuntimePage, RuntimeQuery,
 };
-use crate::model::{ComputedColumn, FieldItem, FieldType, FormatMask, HtmlAttrs, PreAction};
+use crate::model::{AggregateFn, ComputedColumn, FieldItem, FieldType, FormatMask, HtmlAttrs, PreAction};
 
 /// One piece of a named query's SQL text, as split by `tokenize_binds`:
 /// either literal SQL or a `:name` bind marker.
@@ -462,6 +462,16 @@ fn decode_formats(config: &serde_json::Value) -> HashMap<String, FormatMask> {
         .collect()
 }
 
+fn decode_aggregates(config: &serde_json::Value) -> HashMap<String, AggregateFn> {
+    config
+        .get("aggregates")
+        .and_then(|v| v.as_object())
+        .into_iter()
+        .flatten()
+        .filter_map(|(col, kind)| AggregateFn::parse(kind.as_str()?).map(|a| (col.clone(), a)))
+        .collect()
+}
+
 fn decode_item_types(v: &serde_json::Value) -> HashMap<String, FieldItem> {
     v.as_object()
         .into_iter()
@@ -514,6 +524,7 @@ fn decode_component(
                 before_load: decode_before_load(&config),
                 computed: decode_computed(&config),
                 formats: decode_formats(&config),
+                aggregates: decode_aggregates(&config),
                 display: config.get("display").and_then(|v| v.as_str()).unwrap_or("table").to_string(),
                 requires,
                 html,

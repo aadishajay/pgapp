@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::model::{ComputedColumn, FieldItem, FormatMask, HtmlAttrs, PreAction};
+use crate::model::{AggregateFn, ComputedColumn, FieldItem, FormatMask, HtmlAttrs, PreAction};
 
 /// A named query, compiled at load time: `sql` already uses positional
 /// `$N::TYPE` parameters, and `bind_names[i]` is the bind context key
@@ -96,6 +96,7 @@ pub enum ButtonBehavior {
 /// [`crate::model::ComponentDef`], with entity names already resolved
 /// to the full [`RuntimeEntity`] they describe.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum RuntimeComponent {
     Report {
         title: String,
@@ -115,6 +116,9 @@ pub enum RuntimeComponent {
         /// Display formatting applied to a column's raw text value at
         /// render time — see `model::FormatMask`.
         formats: HashMap<String, FormatMask>,
+        /// Interactive Report's per-column footer aggregates — see
+        /// `model::AggregateFn`.
+        aggregates: HashMap<String, AggregateFn>,
         /// One of `model::REPORT_DISPLAY_MODES` — `"table"` (default),
         /// `"cards"`, or `"list"`.
         display: String,
@@ -279,6 +283,7 @@ impl RuntimeComponent {
                 before_load,
                 computed,
                 formats,
+                aggregates,
                 display,
                 requires,
                 html,
@@ -297,6 +302,7 @@ impl RuntimeComponent {
                 "before_load": before_load.as_ref().map(|a| serde_json::json!({"name": a.name, "config": a.config})),
                 "computed": computed.iter().map(|c| serde_json::json!({"name": c.name, "sql": c.sql})).collect::<Vec<_>>(),
                 "formats": formats_json(formats),
+                "aggregates": aggregates_json(aggregates),
                 "display": display,
                 "requires": requires,
                 "html": html_attrs_json(html),
@@ -451,6 +457,17 @@ fn formats_json(formats: &HashMap<String, FormatMask>) -> serde_json::Value {
         names
             .into_iter()
             .map(|name| serde_json::json!({"field": name, "mask": formats[name].to_json()}))
+            .collect(),
+    )
+}
+
+fn aggregates_json(aggregates: &HashMap<String, AggregateFn>) -> serde_json::Value {
+    let mut names: Vec<&String> = aggregates.keys().collect();
+    names.sort();
+    serde_json::Value::Array(
+        names
+            .into_iter()
+            .map(|name| serde_json::json!({"field": name, "fn": aggregates[name].as_str()}))
             .collect(),
     )
 }

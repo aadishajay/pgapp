@@ -623,6 +623,7 @@ fn build_component_config(
             before_load,
             computed,
             formats,
+            aggregates,
             display,
             ..
         } => {
@@ -657,6 +658,11 @@ fn build_component_config(
                     anyhow::bail!("{owner_label} report '{title}' formats column '{col}', which isn't in its 'columns:' list");
                 }
             }
+            for col in aggregates.keys() {
+                if !columns.contains(col) {
+                    anyhow::bail!("{owner_label} report '{title}' aggregates column '{col}', which isn't in its 'columns:' list");
+                }
+            }
             if let Some(q) = source_query {
                 if !known_query(q) {
                     anyhow::bail!("{owner_label} report '{title}' sources from unknown query '{q}'");
@@ -686,6 +692,10 @@ fn build_component_config(
                 .collect();
             let formats_json: serde_json::Map<String, serde_json::Value> =
                 formats.iter().map(|(col, mask)| (col.clone(), mask.to_json())).collect();
+            let aggregates_json: serde_json::Map<String, serde_json::Value> = aggregates
+                .iter()
+                .map(|(col, agg)| (col.clone(), serde_json::Value::String(agg.as_str().to_string())))
+                .collect();
             Ok((
                 "report",
                 serde_json::json!({
@@ -698,6 +708,7 @@ fn build_component_config(
                     "before_load": before_load_json_val,
                     "computed": computed_json,
                     "formats": formats_json,
+                    "aggregates": aggregates_json,
                     "display": display,
                 }),
             ))

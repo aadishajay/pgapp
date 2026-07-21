@@ -290,6 +290,56 @@ impl FormatMask {
     }
 }
 
+/// Oracle APEX Interactive Report's per-column aggregate, shown in a
+/// footer row under the report table — computed over the report's
+/// whole *filtered* result set (every page, not just the one on
+/// screen), unlike a `ComputedColumn`, which is a per-row value spliced
+/// into the main `SELECT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AggregateFn {
+    Sum,
+    Avg,
+    Count,
+    Min,
+    Max,
+}
+
+impl AggregateFn {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "sum" => Some(Self::Sum),
+            "avg" => Some(Self::Avg),
+            "count" => Some(Self::Count),
+            "min" => Some(Self::Min),
+            "max" => Some(Self::Max),
+            _ => None,
+        }
+    }
+
+    /// Both the markup keyword and the Postgres aggregate function
+    /// name — they happen to be spelled identically.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Sum => "sum",
+            Self::Avg => "avg",
+            Self::Count => "count",
+            Self::Min => "min",
+            Self::Max => "max",
+        }
+    }
+
+    /// The footer-row label shown next to the computed value.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Sum => "Sum",
+            Self::Avg => "Avg",
+            Self::Count => "Count",
+            Self::Min => "Min",
+            Self::Max => "Max",
+        }
+    }
+}
+
 /// Groups digits in `n` (rounded to `decimals` places) with `,` every
 /// three places left of the point — the shared core of `Currency`,
 /// `Number`, and `Percent`.
@@ -369,6 +419,7 @@ fn format_date(raw: &str, pattern: &str) -> Option<String> {
 /// side (the classic list+edit CRUD pattern), an `EditableTable` on its
 /// own, a dashboard of `Chart`s, or any other combination.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum ComponentDef {
     /// A read-only, paginated table. Rows come from the entity's data
     /// table by default, or from `source_query` when set. `link_column`
@@ -391,6 +442,11 @@ pub enum ComponentDef {
         before_load: Option<PreAction>,
         computed: Vec<ComputedColumn>,
         formats: HashMap<String, FormatMask>,
+        /// Interactive Report's per-column footer aggregates (sum,
+        /// avg, count, min, max) — see `AggregateFn`. Applies to any
+        /// report source (entity, query, or collection-backed),
+        /// computed over the whole filtered result set.
+        aggregates: HashMap<String, AggregateFn>,
         /// One of `REPORT_DISPLAY_MODES` — `"table"` (default),
         /// `"cards"`, or `"list"`.
         display: String,

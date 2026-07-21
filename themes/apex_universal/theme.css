@@ -270,6 +270,10 @@ body {
 .pgapp-sort-link { color: inherit; text-decoration: none; white-space: nowrap; }
 .pgapp-sort-link:hover { text-decoration: underline; }
 
+/* Interactive Report's per-column footer aggregates. */
+.pgapp-report-agg-row td { font-weight: 700; background: var(--au-header-bg); border-top: 2px solid var(--au-border); }
+.pgapp-agg-label { font-weight: 400; color: var(--au-muted); font-size: 0.75rem; text-transform: uppercase; margin-right: 0.3rem; }
+
 /* Calendar region: a month grid, one entry per day (see model::ComponentDef::Calendar). */
 .pgapp-calendar-header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.6rem; }
 .pgapp-calendar-header .pgapp-subtitle { margin: 0; border-bottom: none; padding-bottom: 0; }

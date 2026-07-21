@@ -21,7 +21,7 @@ use crate::html::{escape, url_encode};
 use crate::icons::Icons;
 use crate::item_types::{self, RenderArgs};
 use crate::meta::{Chrome, LinkColumn, NavNode, RegionRows, RuntimeComponent, RuntimeEntity};
-use crate::model::{FieldItem, FormatMask, HtmlAttrs};
+use crate::model::{AggregateFn, FieldItem, FormatMask, HtmlAttrs};
 use std::collections::{BTreeMap, HashMap};
 
 /// Extra `<link>`/`<script>` tags for user-supplied assets, if present —
@@ -1087,6 +1087,8 @@ pub fn report_html(
     icons: &Icons,
     extras: &ReportExtras,
     formats: &HashMap<String, FormatMask>,
+    aggregates: &HashMap<String, AggregateFn>,
+    agg_values: &HashMap<String, Option<String>>,
     display: &str,
     sort: Option<(&str, bool)>,
     html: &HtmlAttrs,
@@ -1289,7 +1291,38 @@ pub fn report_html(
                 }
                 body.push_str("</tr>");
             }
-            body.push_str("</tbody></table></div>");
+            body.push_str("</tbody>");
+
+            // Interactive Report's footer aggregates: one `<tfoot>` row,
+            // each cell either the configured aggregate's value (with
+            // its function name as a label) or blank for a column with
+            // none configured. Skipped entirely when no column has one.
+            if !aggregates.is_empty() {
+                body.push_str(r#"<tfoot><tr class="pgapp-report-agg-row">"#);
+                for col in columns {
+                    match aggregates.get(col) {
+                        Some(agg) => {
+                            let raw = agg_values.get(col).and_then(|v| v.as_deref()).unwrap_or("");
+                            let value = match formats.get(col) {
+                                Some(mask) => mask.apply(raw),
+                                None => raw.to_string(),
+                            };
+                            body.push_str(&format!(
+                                r#"<td><span class="pgapp-agg-label">{}</span> {}</td>"#,
+                                agg.label(),
+                                escape(&value)
+                            ));
+                        }
+                        None => body.push_str("<td></td>"),
+                    }
+                }
+                if sibling_form_idx.is_some() {
+                    body.push_str("<td></td>");
+                }
+                body.push_str("</tr></tfoot>");
+            }
+
+            body.push_str("</table></div>");
         }
     }
 
