@@ -29,6 +29,7 @@ pub mod create_app;
 mod http_request;
 mod log_values;
 mod run_query;
+mod send_email;
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -87,6 +88,7 @@ pub fn registry() -> Registry {
         Box::new(call_function::CallFunction),
         Box::new(log_values::LogValues),
         Box::new(http_request::HttpRequest),
+        Box::new(send_email::SendEmail),
     ];
     modules.into_iter().map(|m| (m.name(), m)).collect()
 }

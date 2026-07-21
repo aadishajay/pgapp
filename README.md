@@ -524,7 +524,7 @@ The PL/SQL analog: named Rust modules under `src/actions/`
 invoked via `action "Label" calls <module> (config...)` — a button
 posting to `/:page/c/:idx/run`, gated by the page's `requires:` role.
 `ActionContext` carries the pool, app, page, config, and request params.
-Ships four modules:
+Ships five modules:
 
 - **`run_query`** — executes a named query raw (may be a plain
   `UPDATE`/`DELETE`/`INSERT`); binds are still `:name` markers, never
@@ -570,6 +570,29 @@ Ships four modules:
   A fixed credential (an API key, a service token) that isn't
   user-typed belongs in `{{secret.<name>}}` instead of a literal in the
   markup — see [Secrets](#secrets).
+- **`send_email`** — Oracle APEX's "Send Email" process type, sent over
+  SMTP (via `lettre`, STARTTLS on `smtp_port` — default 587). `to` may
+  be a comma-separated list; `{{item}}` interpolates in `to`/`from`/
+  `subject`/`body`, same convention as `http_request`, and
+  `{{secret.<name>}}` works in any field — typically `smtp_username`/
+  `smtp_password`, so credentials never sit in plaintext in the markup:
+
+  ```text
+  action "Notify customer" calls send_email (
+    to: "{{customer_email}}",
+    from: "support@example.com",
+    subject: "Ticket #{{id}} updated",
+    body: "Your ticket status is now {{status}}.",
+    smtp_host: "smtp.example.com",
+    smtp_port: "587",
+    smtp_username: "{{secret.smtp_username}}",
+    smtp_password: "{{secret.smtp_password}}"
+  )
+  ```
+
+  `content_type: "html"` sends the body as `text/html` instead of the
+  default `text/plain`. Implicit-TLS-only providers (port 465) aren't
+  covered — only STARTTLS.
 
 Rust and PL/pgSQL aren't a migration path away from each other: HTTP
 calls belong in Rust (`http_request`) since Postgres has no native
