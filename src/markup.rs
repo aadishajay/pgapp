@@ -1298,13 +1298,18 @@ pub struct Fragment {
     pub entities: Vec<EntityDef>,
     pub pages: Vec<PageDef>,
     pub queries: Vec<QueryDef>,
+    pub auth_schemes: Vec<AuthScheme>,
 }
 
 /// Parses a fragment file: any number of top-level `entity`, `page`,
-/// and `query` blocks, *without* an `app "..." { }` wrapper. Everything
-/// app-wide — settings, `auth`, `nav`, `header`, `footer` — belongs in
-/// the one file that declares the `app` block, so a fragment declaring
-/// them is an error here rather than a silent merge surprise.
+/// `query`, and `auth_scheme` blocks, *without* an `app "..." { }`
+/// wrapper. Everything app-*wide* — settings, the `auth` block itself,
+/// `nav`, `header`, `footer` — belongs in the one file that declares
+/// the `app` block, so a fragment declaring one of those is still an
+/// error here rather than a silent merge surprise. `auth_scheme` is
+/// different: like `entity`/`page`/`query`, it's a named, pluralizable
+/// declaration rather than an app-wide singleton, so it merges by name
+/// the same way (see `source.rs`'s `load_dir`).
 pub fn parse_fragment(src: &str) -> Result<Fragment> {
     let mut parser = Parser::new(src)?;
     let mut fragment = Fragment::default();
@@ -1315,11 +1320,13 @@ pub fn parse_fragment(src: &str) -> Result<Fragment> {
             fragment.pages.push(parser.parse_page()?);
         } else if parser.at_keyword("query") {
             fragment.queries.push(parser.parse_query()?);
+        } else if parser.at_keyword("auth_scheme") {
+            fragment.auth_schemes.push(parser.parse_auth_scheme()?);
         } else {
             bail!(
-                "expected a top-level 'entity', 'page', or 'query' block (app settings, 'auth', \
-                 'auth_scheme', 'nav', 'header', and 'footer' belong in the file with the `app` block), \
-                 found {:?} (line {})",
+                "expected a top-level 'entity', 'page', 'query', or 'auth_scheme' block (app \
+                 settings, 'auth', 'nav', 'header', and 'footer' belong in the file with the \
+                 `app` block), found {:?} (line {})",
                 parser.peek(),
                 parser.cur_line()
             );
@@ -2190,9 +2197,17 @@ app "Demo" {
     }
 
     #[test]
-    fn fragments_reject_a_top_level_auth_scheme() {
-        let err = parse_fragment(r#"auth_scheme "x" { roles: admin }"#).unwrap_err().to_string();
-        assert!(err.contains("auth_scheme"), "unexpected error: {err}");
+    fn fragments_accept_and_merge_a_top_level_auth_scheme() {
+        let fragment = parse_fragment(r#"auth_scheme "can_approve" { roles: finance, manager }"#).unwrap();
+        assert_eq!(fragment.auth_schemes.len(), 1);
+        assert_eq!(fragment.auth_schemes[0].name, "can_approve");
+        assert_eq!(fragment.auth_schemes[0].roles, vec!["finance".to_string(), "manager".to_string()]);
+    }
+
+    #[test]
+    fn fragments_reject_a_top_level_auth_block() {
+        let err = parse_fragment(r#"auth { }"#).unwrap_err().to_string();
+        assert!(err.contains("'auth'"), "unexpected error: {err}");
     }
 
     #[test]

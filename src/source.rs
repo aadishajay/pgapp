@@ -3,14 +3,15 @@
 //!
 //! Directory semantics are deliberately Terraform-shaped: every
 //! `.pgapp` file under the directory (recursively) merges into one app.
-//! Exactly one file declares the `app "..." { }` block — settings,
-//! `auth`, `nav`, and `header`/`footer` chrome live there; every other
-//! file is a *fragment* holding top-level `entity`/`page`/`query`
-//! blocks (see [`markup::parse_fragment`]). There is no `include`
-//! statement, no import graph, and no ordering: files are read in
-//! sorted path order purely so error output is deterministic, and all
-//! cross-references are by name exactly as within a single file (the
-//! metadata sync already resolves forward references).
+//! Exactly one file declares the `app "..." { }` block — settings, the
+//! `auth` block itself, `nav`, and `header`/`footer` chrome live there;
+//! every other file is a *fragment* holding top-level
+//! `entity`/`page`/`query`/`auth_scheme` blocks (see
+//! [`markup::parse_fragment`]). There is no `include` statement, no
+//! import graph, and no ordering: files are read in sorted path order
+//! purely so error output is deterministic, and all cross-references
+//! are by name exactly as within a single file (the metadata sync
+//! already resolves forward references).
 //!
 //! The same name declared in two files is a hard error naming both
 //! files — without this, the metadata upsert would silently collapse
@@ -156,6 +157,8 @@ fn load_dir(dir: &Path) -> Result<AppDef> {
         app.pages.iter().map(|p| (p.name.clone(), app_file.clone())).collect();
     let mut query_files: HashMap<String, PathBuf> =
         app.queries.iter().map(|q| (q.name.clone(), app_file.clone())).collect();
+    let mut auth_scheme_files: HashMap<String, PathBuf> =
+        app.auth_schemes.iter().map(|s| (s.name.clone(), app_file.clone())).collect();
 
     for (file, fragment) in fragments {
         for entity in fragment.entities {
@@ -190,6 +193,17 @@ fn load_dir(dir: &Path) -> Result<AppDef> {
                 );
             }
             app.queries.push(query);
+        }
+        for scheme in fragment.auth_schemes {
+            if let Some(first) = auth_scheme_files.insert(scheme.name.clone(), file.clone()) {
+                bail!(
+                    "auth_scheme '{}' is defined in both '{}' and '{}'",
+                    scheme.name,
+                    first.display(),
+                    file.display()
+                );
+            }
+            app.auth_schemes.push(scheme);
         }
     }
 
@@ -269,6 +283,46 @@ mod tests {
         let dir = write_dir("noapp", &[("a.pgapp", r#"page "P" { text "hi" }"#)]);
         let err = load(dir.to_str().unwrap()).unwrap_err().to_string();
         assert!(err.contains("no file under"), "got: {err}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn merges_auth_schemes_from_a_fragment_file() {
+        let dir = write_dir(
+            "authscheme",
+            &[
+                ("app.pgapp", r#"
+                    app "Demo" {
+                        theme: plain
+                        auth { }
+                        nav { item "Home" -> page Home }
+                    }
+                "#),
+                ("schemes.pgapp", r#"
+                    auth_scheme "can_approve" { roles: finance, manager }
+                "#),
+                ("pages/home.pgapp", r#"page "Home" { text "hi" }"#),
+            ],
+        );
+        let app = load(dir.to_str().unwrap()).unwrap();
+        assert_eq!(app.auth_schemes.len(), 1);
+        assert_eq!(app.auth_schemes[0].name, "can_approve");
+        assert_eq!(app.auth_schemes[0].roles, vec!["finance".to_string(), "manager".to_string()]);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rejects_duplicate_auth_scheme_names_across_files() {
+        let dir = write_dir(
+            "authscheme-dup",
+            &[
+                ("app.pgapp", APP),
+                ("a.pgapp", r#"auth_scheme "can_approve" { roles: finance }"#),
+                ("b.pgapp", r#"auth_scheme "can_approve" { roles: manager }"#),
+            ],
+        );
+        let err = load(dir.to_str().unwrap()).unwrap_err().to_string();
+        assert!(err.contains("auth_scheme 'can_approve' is defined in both"), "got: {err}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
