@@ -194,6 +194,162 @@ impl HtmlAttrs {
     }
 }
 
+/// A read-only column a `Report` adds to its own entity-backed row
+/// output — `sql` is a scalar SQL expression evaluated in the same
+/// `SELECT` as the entity's own columns, aliased to `name` and cast to
+/// text like every other column (see `server::select_columns`). It may
+/// reference the current row via `t.<field>` (`t` is the entity table's
+/// alias), including in a correlated subquery. Only meaningful on an
+/// entity-backed report — a query-backed or collection-backed report
+/// already runs arbitrary SQL/JSON, so add the expression to that query
+/// directly instead.
+#[derive(Debug, Clone)]
+pub struct ComputedColumn {
+    pub name: String,
+    pub sql: String,
+}
+
+/// Display-only formatting for one report column, applied to the raw
+/// text value at render time (`render::report_html`) — never touches
+/// what's stored or what a Form submits. A value that doesn't parse the
+/// way the mask expects (non-numeric text under `Currency`, say) is
+/// rendered unchanged rather than erroring, since a report has no way to
+/// refuse to display one bad row.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FormatMask {
+    /// `$1,234.56` — two decimals, thousands separator, `$` prefix.
+    Currency,
+    /// A fixed-point number with thousands separators and `decimals`
+    /// digits after the point (`decimals: 0` renders a plain integer).
+    Number { decimals: u32 },
+    /// The raw number rounded to an integer with a trailing `%`.
+    Percent,
+    /// Reformats an ISO-ish `YYYY-MM-DD[ T]HH:MM:SS` text value using a
+    /// strftime-like `pattern` (`%Y`, `%y`, `%m`, `%d`, `%B`, `%d` — see
+    /// `format_date`). Defaults to `%Y-%m-%d` (a no-op) when unset.
+    Date { pattern: String },
+}
+
+impl FormatMask {
+    pub fn apply(&self, raw: &str) -> String {
+        if raw.is_empty() {
+            return String::new();
+        }
+        match self {
+            FormatMask::Currency => match raw.parse::<f64>() {
+                Ok(n) => {
+                    let sign = if n < 0.0 { "-" } else { "" };
+                    format!("{sign}${}", format_thousands(n.abs(), 2))
+                }
+                Err(_) => raw.to_string(),
+            },
+            FormatMask::Number { decimals } => match raw.parse::<f64>() {
+                Ok(n) => format_thousands(n, *decimals),
+                Err(_) => raw.to_string(),
+            },
+            FormatMask::Percent => match raw.parse::<f64>() {
+                Ok(n) => format!("{}%", format_thousands(n, 0)),
+                Err(_) => raw.to_string(),
+            },
+            FormatMask::Date { pattern } => format_date(raw, pattern).unwrap_or_else(|| raw.to_string()),
+        }
+    }
+
+    /// The metadata-storage encoding of a mask — the inverse of
+    /// `FormatMask::from_json`.
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            FormatMask::Currency => serde_json::json!({"kind": "currency"}),
+            FormatMask::Number { decimals } => serde_json::json!({"kind": "number", "decimals": decimals}),
+            FormatMask::Percent => serde_json::json!({"kind": "percent"}),
+            FormatMask::Date { pattern } => serde_json::json!({"kind": "date", "pattern": pattern}),
+        }
+    }
+
+    pub fn from_json(v: &serde_json::Value) -> Option<Self> {
+        match v.get("kind").and_then(|k| k.as_str())? {
+            "currency" => Some(FormatMask::Currency),
+            "number" => Some(FormatMask::Number {
+                decimals: v.get("decimals").and_then(|d| d.as_u64()).unwrap_or(0) as u32,
+            }),
+            "percent" => Some(FormatMask::Percent),
+            "date" => Some(FormatMask::Date {
+                pattern: v.get("pattern").and_then(|p| p.as_str()).unwrap_or("%Y-%m-%d").to_string(),
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// Groups digits in `n` (rounded to `decimals` places) with `,` every
+/// three places left of the point — the shared core of `Currency`,
+/// `Number`, and `Percent`.
+fn format_thousands(n: f64, decimals: u32) -> String {
+    let neg = n < 0.0;
+    let scale = 10i64.pow(decimals);
+    let scaled = (n.abs() * scale as f64).round() as i64;
+    let int_part = scaled / scale;
+    let frac_part = scaled % scale;
+
+    let digits: Vec<char> = int_part.to_string().chars().collect();
+    let mut grouped = String::new();
+    for (i, c) in digits.iter().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            grouped.push(',');
+        }
+        grouped.push(*c);
+    }
+    let int_str: String = grouped.chars().rev().collect();
+
+    let sign = if neg { "-" } else { "" };
+    if decimals == 0 {
+        format!("{sign}{int_str}")
+    } else {
+        format!("{sign}{int_str}.{frac_part:0width$}", width = decimals as usize)
+    }
+}
+
+/// Reformats the `YYYY-MM-DD` prefix of an ISO-ish date/timestamp string
+/// using a small strftime-like subset — no `chrono` dependency, since
+/// pgapp's date fields are plain `text` already (see `FieldType`) with
+/// no native date type to format from. Returns `None` on anything that
+/// doesn't parse as `YYYY-MM-DD`, so the caller can fall back to the raw
+/// value unchanged.
+fn format_date(raw: &str, pattern: &str) -> Option<String> {
+    let date_part = raw.split(['T', ' ']).next()?;
+    let mut parts = date_part.splitn(3, '-');
+    let y: u32 = parts.next()?.parse().ok()?;
+    let m: u32 = parts.next()?.parse().ok()?;
+    let d: u32 = parts.next()?.parse().ok()?;
+    const MONTHS: [&str; 12] = [
+        "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December",
+    ];
+    let month_name = MONTHS.get(m.checked_sub(1)? as usize)?;
+
+    let mut out = String::new();
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('Y') => out.push_str(&format!("{y:04}")),
+            Some('y') => out.push_str(&format!("{:02}", y % 100)),
+            Some('m') => out.push_str(&format!("{m:02}")),
+            Some('d') => out.push_str(&format!("{d:02}")),
+            Some('B') => out.push_str(month_name),
+            Some('b') => out.push_str(&month_name[..3]),
+            Some(other) => {
+                out.push('%');
+                out.push(other);
+            }
+            None => out.push('%'),
+        }
+    }
+    Some(out)
+}
+
 /// One independently-rendered piece of a page, or of the app-wide
 /// header/footer chrome (which reuses the same component kinds, though
 /// in practice only `Text`/`Link`/`Region` make sense there — enforced
@@ -213,7 +369,9 @@ pub enum ComponentDef {
     /// the same entity (see `server.rs`'s `sibling_form`). `before_load`,
     /// when set, runs that action every time this report is about to
     /// fetch its rows — typically an `http_request` refreshing the
-    /// collection a collection-backed entity reads from.
+    /// collection a collection-backed entity reads from. `computed`
+    /// columns and `formats` masks only apply to the entity-backed case
+    /// (no `source_query`) — see `ComputedColumn`/`FormatMask`.
     Report {
         title: String,
         entity: String,
@@ -222,6 +380,8 @@ pub enum ComponentDef {
         link_column: Option<LinkColumn>,
         page_size: i64,
         before_load: Option<PreAction>,
+        computed: Vec<ComputedColumn>,
+        formats: HashMap<String, FormatMask>,
         html: HtmlAttrs,
     },
     /// A create/edit form for one entity. Renders blank (create mode) by
@@ -419,5 +579,68 @@ pub struct AppDef {
 impl AppDef {
     pub fn entity(&self, name: &str) -> Option<&EntityDef> {
         self.entities.iter().find(|e| e.name == name)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn currency_formats_with_thousands_and_two_decimals() {
+        assert_eq!(FormatMask::Currency.apply("1234.5"), "$1,234.50");
+        assert_eq!(FormatMask::Currency.apply("0"), "$0.00");
+        assert_eq!(FormatMask::Currency.apply("-42.1"), "-$42.10");
+    }
+
+    #[test]
+    fn currency_falls_back_to_raw_on_unparseable_input() {
+        assert_eq!(FormatMask::Currency.apply("N/A"), "N/A");
+    }
+
+    #[test]
+    fn number_mask_respects_decimals_and_groups_thousands() {
+        assert_eq!(FormatMask::Number { decimals: 0 }.apply("1234567"), "1,234,567");
+        assert_eq!(FormatMask::Number { decimals: 2 }.apply("3.14159"), "3.14");
+    }
+
+    #[test]
+    fn percent_mask_rounds_to_an_integer_with_a_percent_sign() {
+        assert_eq!(FormatMask::Percent.apply("87.6"), "88%");
+        assert_eq!(FormatMask::Percent.apply("100"), "100%");
+    }
+
+    #[test]
+    fn date_mask_reformats_iso_dates_and_ignores_a_time_suffix() {
+        let mask = FormatMask::Date { pattern: "%m/%d/%Y".to_string() };
+        assert_eq!(mask.apply("2026-07-21"), "07/21/2026");
+        assert_eq!(mask.apply("2026-07-21T10:30:00"), "07/21/2026");
+    }
+
+    #[test]
+    fn date_mask_supports_month_names_and_falls_back_on_bad_input() {
+        let mask = FormatMask::Date { pattern: "%B %d, %Y".to_string() };
+        assert_eq!(mask.apply("2026-01-05"), "January 05, 2026");
+        assert_eq!(mask.apply("not-a-date"), "not-a-date");
+    }
+
+    #[test]
+    fn empty_value_stays_empty_under_every_mask() {
+        assert_eq!(FormatMask::Currency.apply(""), "");
+        assert_eq!(FormatMask::Percent.apply(""), "");
+        assert_eq!(FormatMask::Date { pattern: "%Y".to_string() }.apply(""), "");
+    }
+
+    #[test]
+    fn format_mask_json_roundtrips() {
+        for mask in [
+            FormatMask::Currency,
+            FormatMask::Number { decimals: 3 },
+            FormatMask::Percent,
+            FormatMask::Date { pattern: "%m/%d/%Y".to_string() },
+        ] {
+            let json = mask.to_json();
+            assert_eq!(FormatMask::from_json(&json), Some(mask));
+        }
     }
 }

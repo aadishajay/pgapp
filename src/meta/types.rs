@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::model::{FieldItem, HtmlAttrs, PreAction};
+use crate::model::{ComputedColumn, FieldItem, FormatMask, HtmlAttrs, PreAction};
 
 /// A named query, compiled at load time: `sql` already uses positional
 /// `$N::TYPE` parameters, and `bind_names[i]` is the bind context key
@@ -95,6 +95,13 @@ pub enum RuntimeComponent {
         /// report fetches its rows on every request — see
         /// `model::PreAction`.
         before_load: Option<PreAction>,
+        /// Extra read-only columns spliced into the entity-backed
+        /// `SELECT` — see `model::ComputedColumn`. Empty when
+        /// `source_query` is set.
+        computed: Vec<ComputedColumn>,
+        /// Display formatting applied to a column's raw text value at
+        /// render time — see `model::FormatMask`.
+        formats: HashMap<String, FormatMask>,
         html: HtmlAttrs,
     },
     Form {

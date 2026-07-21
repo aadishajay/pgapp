@@ -361,6 +361,47 @@ default or public via checkbox, rendered as chips, deletable by their
 owner or an admin. All filter values are bind parameters; filters
 compose with both pagination modes.
 
+## Computed columns & format masks
+
+A `report` over an entity-backed table (no `source:`) can add its own
+extra, read-only columns and reformat the display of any column —
+APEX's "computed/derived column" and "format mask" concepts:
+
+```text
+report "Vendor Bills" of vendor_bills {
+  columns: bill_key, amount, tax, due_date
+  computed tax: "(t.amount * 0.08)"
+  format amount: currency
+  format tax: number(2)
+  format due_date: date("%m/%d/%Y")
+}
+```
+
+- **`computed <name>: "<sql>"`** — a scalar SQL expression evaluated in
+  the same `SELECT` as the entity's own columns, aliased to `<name>`
+  and cast to text like every other column. It may reference the
+  current row via `t.<field>` (`t` is the entity table's alias),
+  including inside a correlated subquery — e.g. summing a child table
+  filtered on the parent's own key. `<name>` must not collide with a
+  real field name, and `computed` only applies to entity-backed reports
+  (a `source: query` report already runs arbitrary SQL — add the
+  expression to that query instead). Once declared, a computed column
+  is a first-class report column: it can appear in `columns:`, gets
+  its own header, and participates in both the free-text search and the
+  single-column filter (filtering resolves it back to its own SQL
+  expression rather than a real column, since it isn't one).
+- **`format <column>: <mask>`** — reformats that column's raw text
+  value at render time only; never touches what's stored or what a
+  `form` submits, and a value that doesn't parse the way the mask
+  expects (non-numeric text under `currency`, say) renders unchanged
+  rather than erroring. `<column>` must already be in the report's
+  `columns:` list. Four masks: `currency` (`$1,234.56`), `number` or
+  `number(<decimals>)` (thousands-grouped, `number` alone means 0
+  decimals), `percent` (rounds to an integer, trailing `%`), and `date`
+  or `date("<pattern>")` (reformats an ISO-ish `YYYY-MM-DD` value using
+  a small strftime-like subset — `%Y`/`%y`/`%m`/`%d`/`%B`/`%b` — default
+  pattern `%Y-%m-%d`, a no-op).
+
 ## Query-backed entities
 
 `entity "name" from query <name> { field ... }` — a **read-only**
@@ -900,7 +941,8 @@ piece goes:
 | `page N (name, title, ...)`                                   | `page "Title" { ... }` (see "Markup")                                        |
 | `region ... (type: interactiveReport, source { tableName })`  | `report "Title" of <entity> { columns: ... }`                                |
 | `region ... (type: staticContent)` / a plain query region     | `region "Label" from query <name> { columns: ... }`                          |
-| a region's `column NAME (heading, layout, appearance, ...)`   | one name in `columns:` — no per-column heading/format override yet (see "App Builder" for what's GUI-editable today) |
+| a region's `column NAME (heading, layout, appearance, ...)`   | one name in `columns:`, plus `format <column>: <mask>` for display formatting (see "Computed columns & format masks") — no per-column heading override yet (see "App Builder" for what's GUI-editable today) |
+| a column's "Derived Column"/computation                       | `computed <name>: "<sql>"` on the report (see "Computed columns & format masks") |
 | `region`'s `link { target: { page, items } }`                 | a report's `link: <field> -> page <Name> (extra: param, ...)`               |
 | `button ... (behavior { action: redirectThisApp, target })`  | `button "Label" -> page <Name> (extra: param, ...)`                          |
 | `button ... (behavior { action: submit }, serverSideCondition { whenButtonPressed })` + a `process` | `button "Label" calls <action_name> (config...)` — write the process's logic as a registered action module (see "Server-side actions") instead of PL/SQL |

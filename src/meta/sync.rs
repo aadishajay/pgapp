@@ -560,15 +560,39 @@ fn build_component_config(
             link_column,
             page_size,
             before_load,
+            computed,
+            formats,
             ..
         } => {
             if !entity_ids.contains_key(entity) {
                 anyhow::bail!("{owner_label} report '{title}' references unknown entity '{entity}'");
             }
             let entity_def = app.entity(entity).expect("checked above");
+            if !computed.is_empty() && source_query.is_some() {
+                anyhow::bail!(
+                    "{owner_label} report '{title}' declares 'computed' columns but also 'source: query \
+                     ...' — computed columns only apply to entity-backed reports; add the expression to \
+                     the query's SQL instead"
+                );
+            }
+            for c in computed {
+                if entity_def.fields.iter().any(|f| f.name == c.name) {
+                    anyhow::bail!(
+                        "{owner_label} report '{title}' computed column '{}' has the same name as a field of '{entity}'",
+                        c.name
+                    );
+                }
+            }
             for c in columns {
-                if entity_def.fields.iter().all(|f| &f.name != c) {
-                    anyhow::bail!("{owner_label} report '{title}' column '{c}' is not a field of '{entity}'");
+                let is_field = entity_def.fields.iter().any(|f| &f.name == c);
+                let is_computed = computed.iter().any(|cc| &cc.name == c);
+                if !is_field && !is_computed {
+                    anyhow::bail!("{owner_label} report '{title}' column '{c}' is not a field of '{entity}' or a computed column");
+                }
+            }
+            for col in formats.keys() {
+                if !columns.contains(col) {
+                    anyhow::bail!("{owner_label} report '{title}' formats column '{col}', which isn't in its 'columns:' list");
                 }
             }
             if let Some(q) = source_query {
@@ -594,6 +618,12 @@ fn build_component_config(
             };
             let before_load_json_val =
                 before_load_json(before_load, action_registry, &format!("{owner_label} report '{title}'"))?;
+            let computed_json: Vec<serde_json::Value> = computed
+                .iter()
+                .map(|c| serde_json::json!({"name": c.name, "sql": c.sql}))
+                .collect();
+            let formats_json: serde_json::Map<String, serde_json::Value> =
+                formats.iter().map(|(col, mask)| (col.clone(), mask.to_json())).collect();
             Ok((
                 "report",
                 serde_json::json!({
@@ -604,6 +634,8 @@ fn build_component_config(
                     "link": link_json,
                     "page_size": page_size,
                     "before_load": before_load_json_val,
+                    "computed": computed_json,
+                    "formats": formats_json,
                 }),
             ))
         }

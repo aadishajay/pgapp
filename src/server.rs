@@ -47,7 +47,7 @@ use crate::icons::Icons;
 use crate::instance;
 use crate::item_types;
 use crate::meta::{self, Chrome, NavNode, RegionRows, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimePage};
-use crate::model::{FieldItem, HtmlAttrs, PreAction};
+use crate::model::{ComputedColumn, FieldItem, HtmlAttrs, PreAction};
 use crate::markup;
 use crate::page_reorder;
 use crate::render;
@@ -361,8 +361,10 @@ fn redirect_anchor(page: &RuntimePage, idx: usize) -> usize {
 }
 
 /// All entity columns, cast to text, so the generic layer only ever deals
-/// with strings regardless of the underlying Postgres type.
-fn select_columns(entity: &RuntimeEntity) -> String {
+/// with strings regardless of the underlying Postgres type. `computed`
+/// appends a Report's own extra columns (see `model::ComputedColumn`) —
+/// empty for every caller except the entity-backed `fetch_report_rows`.
+fn select_columns(entity: &RuntimeEntity, computed: &[ComputedColumn]) -> String {
     let mut cols = vec!["id::text as id".to_string()];
     for f in &entity.fields {
         if f.name == "id" {
@@ -370,10 +372,17 @@ fn select_columns(entity: &RuntimeEntity) -> String {
         }
         cols.push(format!("{name}::text as {name}", name = f.name));
     }
+    for c in computed {
+        cols.push(format!("({sql})::text as {name}", sql = c.sql, name = c.name));
+    }
     cols.join(", ")
 }
 
-fn row_from_sqlx(row: &sqlx::postgres::PgRow, entity: &RuntimeEntity) -> anyhow::Result<BTreeMap<String, Option<String>>> {
+fn row_from_sqlx(
+    row: &sqlx::postgres::PgRow,
+    entity: &RuntimeEntity,
+    computed: &[ComputedColumn],
+) -> anyhow::Result<BTreeMap<String, Option<String>>> {
     let mut map = BTreeMap::new();
     map.insert("id".to_string(), row.try_get::<Option<String>, _>("id")?);
     for f in &entity.fields {
@@ -382,6 +391,9 @@ fn row_from_sqlx(row: &sqlx::postgres::PgRow, entity: &RuntimeEntity) -> anyhow:
         }
         map.insert(f.name.clone(), row.try_get::<Option<String>, _>(f.name.as_str())?);
     }
+    for c in computed {
+        map.insert(c.name.clone(), row.try_get::<Option<String>, _>(c.name.as_str())?);
+    }
     Ok(map)
 }
 
@@ -389,9 +401,9 @@ async fn fetch_rows(pool: &PgPool, data_schema: &str, entity: &RuntimeEntity) ->
     // `order by t.id`, qualified: the select list aliases `id::text as
     // id`, and an unqualified ORDER BY id would bind to that *text*
     // output column, sorting "10" before "2".
-    let sql = format!("select {} from {data_schema}.{} t order by t.id", select_columns(entity), entity.table_name);
+    let sql = format!("select {} from {data_schema}.{} t order by t.id", select_columns(entity, &[]), entity.table_name);
     let rows = sqlx::query(&sql).fetch_all(pool).await?;
-    rows.iter().map(|r| row_from_sqlx(r, entity)).collect()
+    rows.iter().map(|r| row_from_sqlx(r, entity, &[])).collect()
 }
 
 async fn fetch_row(
@@ -402,11 +414,11 @@ async fn fetch_row(
 ) -> anyhow::Result<Option<BTreeMap<String, Option<String>>>> {
     let sql = format!(
         "select {} from {data_schema}.{} where id = $1::integer",
-        select_columns(entity),
+        select_columns(entity, &[]),
         entity.table_name
     );
     let row = sqlx::query(&sql).bind(id).fetch_optional(pool).await?;
-    row.as_ref().map(|r| row_from_sqlx(r, entity)).transpose()
+    row.as_ref().map(|r| row_from_sqlx(r, entity, &[])).transpose()
 }
 
 /// One page of a `Report`'s rows plus whether there's a previous/next
@@ -454,27 +466,31 @@ impl ReportFilters {
         Ok(ReportFilters { q: get("q"), col })
     }
 
-    /// Builds the SQL conditions for these filters. `prefix` qualifies
-    /// column references (e.g. `"t."`); `first_param` is the number the
-    /// first added `$N` placeholder should use. Column names come from
-    /// the report's markup-validated column list only.
-    fn to_sql(&self, prefix: &str, columns: &[String], first_param: usize) -> (Vec<String>, Vec<String>) {
+    /// Builds the SQL conditions for these filters. `prefix` qualifies a
+    /// plain field reference (e.g. `"t."`); a name in `computed` filters
+    /// on its own SQL expression instead, since it isn't a real column
+    /// on the underlying table — only its alias in the `SELECT` list is.
+    /// `first_param` is the number the first added `$N` placeholder
+    /// should use. Column names come from the report's markup-validated
+    /// column list only.
+    fn to_sql(&self, prefix: &str, columns: &[String], computed: &[ComputedColumn], first_param: usize) -> (Vec<String>, Vec<String>) {
+        let expr_for = |col: &str| match computed.iter().find(|c| c.name == col) {
+            Some(c) => format!("({})", c.sql),
+            None => format!("{prefix}{col}"),
+        };
         let mut conditions = Vec::new();
         let mut binds = Vec::new();
         if let Some(q) = &self.q {
             if !columns.is_empty() {
                 let n = first_param + binds.len();
-                let ors: Vec<String> = columns
-                    .iter()
-                    .map(|c| format!("({prefix}{c})::text ilike ${n}"))
-                    .collect();
+                let ors: Vec<String> = columns.iter().map(|c| format!("({})::text ilike ${n}", expr_for(c))).collect();
                 conditions.push(format!("({})", ors.join(" or ")));
                 binds.push(format!("%{q}%"));
             }
         }
         if let Some((col, val)) = &self.col {
             let n = first_param + binds.len();
-            conditions.push(format!("({prefix}{col})::text ilike ${n}"));
+            conditions.push(format!("({})::text ilike ${n}", expr_for(col)));
             binds.push(format!("%{val}%"));
         }
         (conditions, binds)
@@ -548,17 +564,18 @@ async fn fetch_report_rows(
     pool: &PgPool,
     data_schema: &str,
     entity: &RuntimeEntity,
+    computed: &[ComputedColumn],
     filters: &ReportFilters,
     filter_columns: &[String],
     page_size: i64,
     after: Option<&str>,
     before: Option<&str>,
 ) -> anyhow::Result<ReportPage> {
-    let cols = select_columns(entity);
+    let cols = select_columns(entity, computed);
     let lim = page_size + 1;
 
     // Filter conditions first ($1..), then the keyset cursor.
-    let (mut conditions, binds) = filters.to_sql("t.", filter_columns, 1);
+    let (mut conditions, binds) = filters.to_sql("t.", filter_columns, computed, 1);
     let cursor_param = binds.len() + 1;
 
     // ORDER BY is qualified (`t.id`) for the same reason as in
@@ -593,7 +610,8 @@ async fn fetch_report_rows(
         query = query.bind(b);
     }
     let db_rows = query.fetch_all(pool).await?;
-    let mut rows: Vec<BTreeMap<String, Option<String>>> = db_rows.iter().map(|r| row_from_sqlx(r, entity)).collect::<anyhow::Result<_>>()?;
+    let mut rows: Vec<BTreeMap<String, Option<String>>> =
+        db_rows.iter().map(|r| row_from_sqlx(r, entity, computed)).collect::<anyhow::Result<_>>()?;
 
     let has_extra = rows.len() as i64 > page_size;
     if has_extra {
@@ -850,7 +868,18 @@ async fn render_component(
             Ok(render::chart_html(title, chart_type, x, y, &rows, &data.chart_lib, html))
         }
 
-        RuntimeComponent::Report { title, entity, columns, source_query, link_column, page_size, before_load, html } => {
+        RuntimeComponent::Report {
+            title,
+            entity,
+            columns,
+            source_query,
+            link_column,
+            page_size,
+            before_load,
+            computed,
+            formats,
+            html,
+        } => {
             let before_load_warning = match before_load {
                 Some(pre) => run_before_load(state, data, page, query, caller_key, pre).await,
                 None => None,
@@ -885,7 +914,7 @@ async fn render_component(
                     .ok_or_else(|| anyhow::anyhow!("report '{title}' sources from unknown query '{qname}'"))?;
                 let ctx = bind_context(query, None);
                 let page_num: i64 = query.get(&p_page).and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
-                let (conditions, binds) = filters.to_sql("t.", columns, rq.bind_names.len() + 1);
+                let (conditions, binds) = filters.to_sql("t.", columns, &[], rq.bind_names.len() + 1);
                 let where_clause = if conditions.is_empty() {
                     String::new()
                 } else {
@@ -907,7 +936,9 @@ async fn render_component(
             } else {
                 let after = query.get(&p_after).map(|s| s.as_str());
                 let before = query.get(&p_before).map(|s| s.as_str());
-                let rp = fetch_report_rows(&state.pool, &data.app.data_schema, entity, &filters, columns, *page_size, after, before).await?;
+                let rp =
+                    fetch_report_rows(&state.pool, &data.app.data_schema, entity, computed, &filters, columns, *page_size, after, before)
+                        .await?;
                 let prev_href = rp.has_prev.then(|| {
                     let id = rp.rows.first().and_then(|r| r.get("id")).and_then(|v| v.clone()).unwrap_or_default();
                     format!("/{app}/{page_name}?{p_before}={}{filter_qs}", url_encode(&id))
@@ -935,6 +966,7 @@ async fn render_component(
                 form_idx,
                 &data.icons,
                 &extras,
+                formats,
                 html,
             ))
         }

@@ -21,7 +21,7 @@ use crate::html::{escape, url_encode};
 use crate::icons::Icons;
 use crate::item_types::{self, RenderArgs};
 use crate::meta::{Chrome, LinkColumn, NavNode, RegionRows, RuntimeComponent, RuntimeEntity};
-use crate::model::{FieldItem, HtmlAttrs};
+use crate::model::{FieldItem, FormatMask, HtmlAttrs};
 use std::collections::{BTreeMap, HashMap};
 
 /// Extra `<link>`/`<script>` tags for user-supplied assets, if present —
@@ -881,6 +881,7 @@ pub fn report_html(
     sibling_form_idx: Option<usize>,
     icons: &Icons,
     extras: &ReportExtras,
+    formats: &HashMap<String, FormatMask>,
     html: &HtmlAttrs,
 ) -> String {
     let mut body = format!(
@@ -988,7 +989,11 @@ pub fn report_html(
         body.push_str("<tr>");
         let id = row.get("id").and_then(|v| v.as_deref()).unwrap_or("");
         for col in columns {
-            let val = row.get(col).and_then(|v| v.as_deref()).unwrap_or("");
+            let raw = row.get(col).and_then(|v| v.as_deref()).unwrap_or("");
+            let display = match formats.get(col) {
+                Some(mask) => mask.apply(raw),
+                None => raw.to_string(),
+            };
             let cell = match link_column {
                 Some(lc) if lc.field == *col => {
                     let mut href = format!("/{}/{}?id={}", escape(app), escape(&lc.target_page), url_encode(id));
@@ -996,9 +1001,9 @@ pub fn report_html(
                         let pval = row.get(field).and_then(|v| v.as_deref()).unwrap_or("");
                         href.push_str(&format!("&{}={}", escape(param), url_encode(pval)));
                     }
-                    format!(r#"<a class="pgapp-link" href="{href}">{val}</a>"#, val = escape(val))
+                    format!(r#"<a class="pgapp-link" href="{href}">{val}</a>"#, val = escape(&display))
                 }
-                _ => escape(val),
+                _ => escape(&display),
             };
             body.push_str(&format!("<td>{cell}</td>"));
         }

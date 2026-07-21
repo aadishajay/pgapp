@@ -52,6 +52,15 @@
 //!             | "link" ":" Ident "->" "page" Ident ( "(" paramlist ")" )?
 //!             | "page_size" ":" Number
 //!             | "before_load" ":" Ident itemconfig?
+//!             | "computed" Ident ":" String
+//!             (a scalar SQL expression, entity-backed reports only —
+//!             see `model::ComputedColumn`; `t.` refers to the entity's
+//!             own row, e.g. `computed total: "(select sum(x) from y
+//!             where y.bill_key = t.bill_key)"`)
+//!             | "format" Ident ":" formatmask
+//! formatmask := "currency" | "percent"
+//!             | "number" ( "(" Number ")" )?
+//!             | "date" ( "(" String ")" )?
 //!
 //! form      := "form" String "of" Ident "{" formprop* "}"
 //! formprop  := "fields" ":" identlist
@@ -124,8 +133,8 @@
 use anyhow::{bail, Context, Result};
 
 use crate::model::{
-    AppDef, ButtonBehavior, ComponentDef, DaOp, EntityDef, FieldDef, FieldItem, FieldType, HtmlAttrs,
-    LinkColumn, NavItem, PageDef, PreAction, QueryDef, CHART_TYPES,
+    AppDef, ButtonBehavior, ComponentDef, ComputedColumn, DaOp, EntityDef, FieldDef, FieldItem, FieldType,
+    FormatMask, HtmlAttrs, LinkColumn, NavItem, PageDef, PreAction, QueryDef, CHART_TYPES,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -755,7 +764,25 @@ impl Parser {
         let mut link_column = None;
         let mut page_size: i64 = 20;
         let mut before_load = None;
+        let mut computed = Vec::new();
+        let mut formats = std::collections::HashMap::new();
         while !self.at_symbol('}') {
+            if self.at_keyword("computed") {
+                self.advance()?;
+                let name = self.expect_ident()?;
+                self.expect_symbol(':')?;
+                let sql = self.expect_string()?;
+                computed.push(ComputedColumn { name, sql });
+                continue;
+            }
+            if self.at_keyword("format") {
+                self.advance()?;
+                let name = self.expect_ident()?;
+                self.expect_symbol(':')?;
+                let mask = self.parse_format_mask()?;
+                formats.insert(name, mask);
+                continue;
+            }
             let prop = self.expect_ident()?;
             self.expect_symbol(':')?;
             match prop.as_str() {
@@ -806,8 +833,44 @@ impl Parser {
             link_column,
             page_size,
             before_load,
+            computed,
+            formats,
             html: HtmlAttrs::default(),
         })
+    }
+
+    /// `"currency" | "percent" | "number" ("(" Number ")")? | "date" ("(" String ")")?`
+    /// — a report `format:` mask.
+    fn parse_format_mask(&mut self) -> Result<FormatMask> {
+        let line = self.cur_line();
+        let kind = self.expect_ident()?;
+        match kind.as_str() {
+            "currency" => Ok(FormatMask::Currency),
+            "percent" => Ok(FormatMask::Percent),
+            "number" => {
+                let decimals = if self.at_symbol('(') {
+                    self.advance()?;
+                    let n = self.expect_ident()?;
+                    self.expect_symbol(')')?;
+                    n.parse().with_context(|| format!("invalid decimal count '{n}' (line {line})"))?
+                } else {
+                    0
+                };
+                Ok(FormatMask::Number { decimals })
+            }
+            "date" => {
+                let pattern = if self.at_symbol('(') {
+                    self.advance()?;
+                    let p = self.expect_string()?;
+                    self.expect_symbol(')')?;
+                    p
+                } else {
+                    "%Y-%m-%d".to_string()
+                };
+                Ok(FormatMask::Date { pattern })
+            }
+            other => bail!("unknown format mask '{other}' (line {line})"),
+        }
     }
 
     fn parse_form(&mut self) -> Result<ComponentDef> {
@@ -1953,5 +2016,65 @@ app "Demo" {
         "#;
         let err = parse_app(src).unwrap_err().to_string();
         assert!(err.contains("needs 'as <kind>' and/or 'attrs (...)'"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn parses_computed_columns_and_format_masks() {
+        let src = r#"
+            app "Demo" {
+                entity "bills" { field id: id field bill_key: text required field amount: integer }
+                page "P" {
+                    report "Bills" of bills {
+                        columns: bill_key, amount, tax
+                        computed tax: "(t.amount * 0.1)"
+                        format amount: currency
+                        format tax: number(2)
+                    }
+                }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+        let (columns, computed, formats) = app.pages[0]
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Report { columns, computed, formats, .. } => Some((columns, computed, formats)),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(*columns, vec!["bill_key", "amount", "tax"]);
+        assert_eq!(computed.len(), 1);
+        assert_eq!(computed[0].name, "tax");
+        assert_eq!(computed[0].sql, "(t.amount * 0.1)");
+        assert_eq!(formats.get("amount"), Some(&FormatMask::Currency));
+        assert_eq!(formats.get("tax"), Some(&FormatMask::Number { decimals: 2 }));
+    }
+
+    #[test]
+    fn parses_date_format_mask_with_custom_pattern() {
+        let src = r#"
+            app "Demo" {
+                entity "trips" { field id: id field trip_start_date: text }
+                page "P" {
+                    report "Trips" of trips {
+                        columns: trip_start_date
+                        format trip_start_date: date("%m/%d/%Y")
+                    }
+                }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+        let formats = app.pages[0]
+            .components
+            .iter()
+            .find_map(|c| match c {
+                ComponentDef::Report { formats, .. } => Some(formats),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            formats.get("trip_start_date"),
+            Some(&FormatMask::Date { pattern: "%m/%d/%Y".to_string() })
+        );
     }
 }

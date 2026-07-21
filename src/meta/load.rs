@@ -10,7 +10,7 @@ use super::types::{
     wrap_to_jsonb, ButtonBehavior, LinkColumn, NavNode, RuntimeApp, RuntimeComponent, RuntimeEntity,
     RuntimeField, RuntimePage, RuntimeQuery,
 };
-use crate::model::{FieldItem, FieldType, HtmlAttrs, PreAction};
+use crate::model::{ComputedColumn, FieldItem, FieldType, FormatMask, HtmlAttrs, PreAction};
 
 /// One piece of a named query's SQL text, as split by `tokenize_binds`:
 /// either literal SQL or a `:name` bind marker.
@@ -417,6 +417,38 @@ fn decode_before_load(config: &serde_json::Value) -> Option<PreAction> {
     })
 }
 
+/// Decodes a report's `"computed"` array — the inverse of the
+/// `computed_json` built in `meta::sync::build_component_config`.
+/// Missing/empty decodes to an empty `Vec`.
+fn decode_computed(config: &serde_json::Value) -> Vec<ComputedColumn> {
+    config
+        .get("computed")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            Some(ComputedColumn {
+                name: c.get("name")?.as_str()?.to_string(),
+                sql: c.get("sql")?.as_str()?.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// Decodes a report's `"formats"` object — the inverse of
+/// `FormatMask::to_json`. Missing/empty decodes to an empty map; an
+/// entry that doesn't decode (shouldn't happen for anything sync itself
+/// wrote) is silently skipped rather than failing the whole app load.
+fn decode_formats(config: &serde_json::Value) -> HashMap<String, FormatMask> {
+    config
+        .get("formats")
+        .and_then(|v| v.as_object())
+        .into_iter()
+        .flatten()
+        .filter_map(|(col, mask)| FormatMask::from_json(mask).map(|m| (col.clone(), m)))
+        .collect()
+}
+
 fn decode_item_types(v: &serde_json::Value) -> HashMap<String, FieldItem> {
     v.as_object()
         .into_iter()
@@ -466,6 +498,8 @@ fn decode_component(
                 link_column,
                 page_size: config.get("page_size").and_then(|v| v.as_i64()).unwrap_or(20),
                 before_load: decode_before_load(&config),
+                computed: decode_computed(&config),
+                formats: decode_formats(&config),
                 html,
             })
         }
