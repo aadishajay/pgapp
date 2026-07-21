@@ -1048,9 +1048,13 @@ pub fn report_html(
 /// A `Form` component: blank (create mode) when `edit_id` is `None`,
 /// pre-filled with `row` and carrying a Delete button when `Some`. When
 /// `floating` is true (a Report's edit/create companion), it renders as
-/// a fixed-position popup rather than a block sitting in page flow — see
-/// `.pgapp-form-floating` in the theme CSS — with a close control going
-/// back to `close_href` instead of a plain page-top navigation.
+/// a centered modal dialog — dimmed backdrop, 60% viewport width — over
+/// the report rather than a block sitting in page flow; see
+/// `.pgapp-modal-overlay`/`.pgapp-form-floating` in the theme CSS. Both
+/// this and the backdrop are rendered server-side, present in the
+/// response only when `floating` is true (driven by `?edit_<n>=`/
+/// `?new_<n>=1`), so no JS is needed to open it — closing goes back to
+/// `close_href` instead of a plain page-top navigation.
 #[allow(clippy::too_many_arguments)]
 pub fn form_html(
     app: &str,
@@ -1074,11 +1078,21 @@ pub fn form_html(
     } else {
         "pgapp-form-panel"
     };
-    let mut body = format!(
+    // The overlay is the fixed, dimmed, full-viewport backdrop; the form
+    // panel itself is the centered modal box on top of it — a separate
+    // wrapper, not styled onto the panel directly, since the backdrop
+    // has to cover the whole page independent of the panel's own (much
+    // smaller) box.
+    let mut body = if floating {
+        r#"<div class="pgapp-modal-overlay">"#.to_string()
+    } else {
+        String::new()
+    };
+    body.push_str(&format!(
         r#"<div class="{class}"{extra}>"#,
         class = merged_class(panel_class, html),
         extra = extra_attrs(html),
-    );
+    ));
     if floating {
         body.push_str(&format!(
             r#"<a class="pgapp-form-floating-close" href="{href}" title="Close" aria-label="Close">&times;</a>"#,
@@ -1115,7 +1129,7 @@ pub fn form_html(
         body.push_str(&format!(r#"<a class="pgapp-link" href="{}">Cancel</a>"#, escape(close_href)));
     }
 
-    body.push_str("</div>");
+    body.push_str(if floating { "</div></div>" } else { "</div>" });
     body
 }
 

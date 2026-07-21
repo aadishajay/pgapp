@@ -413,16 +413,26 @@ a.pgapp-link:hover .pgapp-icon { color: var(--v-fuchsia); }
 .pgapp-report-header .pgapp-subtitle { margin: 0; }
 .pgapp-table-wrap { overflow-x: auto; }
 
-/* A Report's edit/create Form renders as a floating, non-modal popup:
-   no dimming backdrop, the report stays visible and usable behind it. */
-.pgapp-form-floating {
+/* A Report's edit/create Form renders as a centered modal over the
+   report: a dimmed, full-viewport backdrop (.pgapp-modal-overlay) with
+   the form panel (.pgapp-form-floating) centered on top of it at 60% of
+   the viewport width. */
+.pgapp-modal-overlay {
   position: fixed;
-  top: 6rem;
-  right: 1.5rem;
-  width: min(24rem, calc(100vw - 2rem));
-  max-height: calc(100vh - 8rem);
-  overflow-y: auto;
+  inset: 0;
   z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 0.5);
+  padding: 1rem;
+}
+.pgapp-form-floating {
+  position: relative;
+  width: 60vw;
+  max-width: 40rem;
+  max-height: calc(100vh - 4rem);
+  overflow-y: auto;
 }
 .pgapp-form-floating-close {
   position: absolute;
@@ -436,8 +446,9 @@ a.pgapp-link:hover .pgapp-icon { color: var(--v-fuchsia); }
 .pgapp-form-floating-close:hover { color: var(--v-fuchsia); }
 
 /* Mobile: no per-app work required to get a usable narrow-viewport
-   layout — nav wraps, the report toolbar stacks, and the floating form
-   becomes a near-full-width sheet instead of a fixed-width corner card. */
+   layout — nav wraps, the report toolbar stacks, and the form modal
+   widens toward a near-full-width sheet instead of the fixed 60vw box
+   (still centered by .pgapp-modal-overlay's flex layout, just wider). */
 @media (max-width: 640px) {
   body { padding: 0 0.85rem; margin: 1.25rem auto; }
   .pgapp-nav { flex-wrap: wrap; row-gap: 0.5rem; }
@@ -455,10 +466,8 @@ a.pgapp-link:hover .pgapp-icon { color: var(--v-fuchsia); }
   .pgapp-nav-collapse .pgapp-nav-user { margin-left: 0; }
   .pgapp-report-toolbar .pgapp-input[type="search"] { min-width: 0; flex: 1 1 100%; }
   .pgapp-form-floating {
-    top: 1rem;
-    right: 0.75rem;
-    left: 0.75rem;
-    width: auto;
+    width: 100%;
+    max-width: none;
     max-height: calc(100vh - 2rem);
   }
 }
