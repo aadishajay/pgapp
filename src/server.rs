@@ -346,7 +346,8 @@ fn component_requires(component: &RuntimeComponent) -> Option<&str> {
         | RuntimeComponent::DynamicContent { requires, .. }
         | RuntimeComponent::Action { requires, .. }
         | RuntimeComponent::Button { requires, .. }
-        | RuntimeComponent::Calendar { requires, .. } => requires.as_deref(),
+        | RuntimeComponent::Calendar { requires, .. }
+        | RuntimeComponent::Map { requires, .. } => requires.as_deref(),
         RuntimeComponent::DynamicAction { .. } => None,
     }
 }
@@ -719,6 +720,42 @@ async fn fetch_calendar_entries(
     Ok(out)
 }
 
+/// Every row of `entity` with non-null `lat_field`/`lng_field`, as
+/// `(lat, lng, id, title_field's value)` — `Map`'s whole-entity fetch,
+/// deliberately unpaginated (a marker scatter has no natural "page"
+/// concept) and, like `Calendar`, restricted to a real data table (see
+/// the entity checks in `meta::sync::build_component_config`'s `Map`
+/// arm).
+async fn fetch_map_points(
+    pool: &PgPool,
+    data_schema: &str,
+    entity: &RuntimeEntity,
+    lat_field: &str,
+    lng_field: &str,
+    title_field: &str,
+) -> anyhow::Result<Vec<(f64, f64, String, String)>> {
+    let sql = format!(
+        "select id::text as id, ({lat_field})::double precision as lat, ({lng_field})::double precision as lng, \
+         ({title_field})::text as title \
+         from {data_schema}.{table} \
+         where {lat_field} is not null and {lng_field} is not null \
+         order by id asc",
+        table = entity.table_name
+    );
+    let db_rows = sqlx::query(&sql).fetch_all(pool).await?;
+    let mut out = Vec::with_capacity(db_rows.len());
+    for row in &db_rows {
+        let id: Option<String> = row.try_get("id")?;
+        let lat: Option<f64> = row.try_get("lat")?;
+        let lng: Option<f64> = row.try_get("lng")?;
+        let title: Option<String> = row.try_get("title")?;
+        if let (Some(lat), Some(lng)) = (lat, lng) {
+            out.push((lat, lng, id.unwrap_or_default(), title.unwrap_or_default()));
+        }
+    }
+    Ok(out)
+}
+
 /// Builds (column names, value expressions, bind values) for a Form's
 /// or EditableTable's writable fields. Empty, non-required values
 /// become SQL `NULL` literals directly (an empty string can't be cast
@@ -1013,6 +1050,20 @@ async fn render_component(
                 fetch_calendar_entries(&state.pool, &data.app.data_schema, entity, date_field, title_field, year, month)
                     .await?;
             Ok(render::calendar_html(app, page_name, idx, title, year, month, &entries, link_page.as_deref(), html))
+        }
+
+        RuntimeComponent::Map {
+            title,
+            entity,
+            lat_field,
+            lng_field,
+            title_field,
+            link_page,
+            html,
+            ..
+        } => {
+            let points = fetch_map_points(&state.pool, &data.app.data_schema, entity, lat_field, lng_field, title_field).await?;
+            Ok(render::map_html(app, title, &points, link_page.as_deref(), html))
         }
 
         RuntimeComponent::Report {

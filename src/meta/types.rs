@@ -213,6 +213,17 @@ pub enum RuntimeComponent {
         requires: Option<String>,
         html: HtmlAttrs,
     },
+    /// Oracle APEX's Map region — see `model::ComponentDef::Map`.
+    Map {
+        title: String,
+        entity: RuntimeEntity,
+        lat_field: String,
+        lng_field: String,
+        title_field: String,
+        link_page: Option<String>,
+        requires: Option<String>,
+        html: HtmlAttrs,
+    },
 }
 
 impl RuntimeComponent {
@@ -236,6 +247,7 @@ impl RuntimeComponent {
             RuntimeComponent::Button { .. } => "button",
             RuntimeComponent::DynamicAction { .. } => "dynamic_action",
             RuntimeComponent::Calendar { .. } => "calendar",
+            RuntimeComponent::Map { .. } => "map",
         }
     }
 
@@ -381,6 +393,26 @@ impl RuntimeComponent {
                 "entity": entity.name,
                 "entity_fields": entity_fields_json(entity),
                 "date_field": date_field,
+                "title_field": title_field,
+                "link_page": link_page,
+                "requires": requires,
+                "html": html_attrs_json(html),
+            }),
+            RuntimeComponent::Map {
+                title,
+                entity,
+                lat_field,
+                lng_field,
+                title_field,
+                link_page,
+                requires,
+                html,
+            } => serde_json::json!({
+                "title": title,
+                "entity": entity.name,
+                "entity_fields": entity_fields_json(entity),
+                "lat_field": lat_field,
+                "lng_field": lng_field,
                 "title_field": title_field,
                 "link_page": link_page,
                 "requires": requires,

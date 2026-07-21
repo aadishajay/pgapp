@@ -455,6 +455,10 @@ a.pgapp-link:hover .pgapp-icon { color: var(--m3-primary); }
    see examples/helpdesk.pgapp's "Tickets by status (share)" chart. */
 .pgapp-chart-tall .pgapp-chart-svg { max-height: 340px; }
 
+/* Map region: inline-SVG lat/lng scatter, no tile server (see model::ComponentDef::Map). */
+.pgapp-map { margin: 0 0 1.5rem; padding: 1.15rem 1.3rem; background: var(--m3-surface-container); border-radius: var(--m3-radius-lg); }
+.pgapp-map-svg { width: 100%; height: auto; color: var(--m3-error); }
+
 .pgapp-alert { border-radius: var(--m3-radius-md); padding: 0.85rem 1.15rem; margin-bottom: 1rem; font-size: 0.9rem; }
 .pgapp-alert-error { background: var(--m3-error-container); color: var(--m3-on-error-container); }
 .pgapp-alert-success { background: var(--m3-success-container); color: var(--m3-on-success-container); }

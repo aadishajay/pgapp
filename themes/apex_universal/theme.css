@@ -231,6 +231,10 @@ body {
    apart. */
 .pgapp-chart-donut-hole { fill: #fff; }
 
+/* Map region: inline-SVG lat/lng scatter, no tile server (see model::ComponentDef::Map). */
+.pgapp-map { margin: 0 0 1.25rem; padding: 1rem 1.1rem; background: var(--au-bg); border: 1px solid var(--au-border); border-radius: var(--au-radius); }
+.pgapp-map-svg { width: 100%; height: auto; color: var(--au-red); }
+
 /* Report toolbar, saved views, actions, notices */
 .pgapp-report-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-bottom: 0.7rem; padding: 0.5rem 0.6rem; background: var(--au-header-bg); border-radius: var(--au-radius); }
 .pgapp-report-views { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.85rem; }

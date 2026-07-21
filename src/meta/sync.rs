@@ -429,6 +429,7 @@ fn component_kind_name(c: &ComponentDef) -> &'static str {
         ComponentDef::Button { .. } => "button",
         ComponentDef::DynamicAction { .. } => "dynamic_action",
         ComponentDef::Calendar { .. } => "calendar",
+        ComponentDef::Map { .. } => "map",
     }
 }
 
@@ -451,7 +452,8 @@ fn component_html(c: &ComponentDef) -> &HtmlAttrs {
         | ComponentDef::DynamicContent { html, .. }
         | ComponentDef::Action { html, .. }
         | ComponentDef::Button { html, .. }
-        | ComponentDef::Calendar { html, .. } => html,
+        | ComponentDef::Calendar { html, .. }
+        | ComponentDef::Map { html, .. } => html,
         ComponentDef::DynamicAction { .. } => &EMPTY,
     }
 }
@@ -472,7 +474,8 @@ fn component_requires(c: &ComponentDef) -> Option<&str> {
         | ComponentDef::DynamicContent { requires, .. }
         | ComponentDef::Action { requires, .. }
         | ComponentDef::Button { requires, .. }
-        | ComponentDef::Calendar { requires, .. } => requires.as_deref(),
+        | ComponentDef::Calendar { requires, .. }
+        | ComponentDef::Map { requires, .. } => requires.as_deref(),
         ComponentDef::DynamicAction { .. } => None,
     }
 }
@@ -917,6 +920,53 @@ fn build_component_config(
                     "title": title,
                     "entity": entity,
                     "date_field": date_field,
+                    "title_field": title_field,
+                    "link_page": link_page,
+                }),
+            ))
+        }
+        ComponentDef::Map {
+            title,
+            entity,
+            lat_field,
+            lng_field,
+            title_field,
+            link_page,
+            ..
+        } => {
+            if !entity_ids.contains_key(entity) {
+                anyhow::bail!("{owner_label} map '{title}' references unknown entity '{entity}'");
+            }
+            let entity_def = app.entity(entity).expect("checked above");
+            if entity_def.source_query.is_some() {
+                anyhow::bail!(
+                    "{owner_label} map '{title}' binds to entity '{entity}', which is \
+                     query-backed and read-only — maps need a real table"
+                );
+            }
+            if entity_def.source_collection.is_some() {
+                anyhow::bail!(
+                    "{owner_label} map '{title}' binds to entity '{entity}', which is \
+                     collection-backed and read-only — maps need a real table"
+                );
+            }
+            for (label, field) in [("lat", lat_field), ("lng", lng_field), ("title", title_field)] {
+                if !entity_def.fields.iter().any(|f| &f.name == field) {
+                    anyhow::bail!("{owner_label} map '{title}' {label} field '{field}' is not a field of '{entity}'");
+                }
+            }
+            if let Some(p) = link_page {
+                if !page_ids.contains_key(p) {
+                    anyhow::bail!("{owner_label} map '{title}' links to unknown page '{p}'");
+                }
+            }
+            Ok((
+                "map",
+                serde_json::json!({
+                    "title": title,
+                    "entity": entity,
+                    "lat_field": lat_field,
+                    "lng_field": lng_field,
                     "title_field": title_field,
                     "link_page": link_page,
                 }),

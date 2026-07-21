@@ -356,6 +356,16 @@ fixed "page kind." Eleven kinds:
   collection-backed entities, same restriction as `Form`/`EditableTable`.
   Prev/Next controls step a `?cal<n>=YYYY-MM` query parameter one month
   at a time, defaulting to the current month when absent.
+- **`map "Title" of <entity> { lat: <field> lng: <field> title: <field> [link: page <Name>] }`**
+  — Oracle APEX's Map region: a dependency-free inline-SVG scatter of
+  one entity's rows, each plotted by (`lat`, `lng`) under a simple
+  equirectangular projection — no external mapping library or tile
+  server, the same "no CDN" precedent as `chart_lib`'s inline SVG
+  charts. `title` labels each marker (a hover tooltip); `link:`, if
+  given, makes each marker a link to that page forwarding the row's id.
+  Read-only, unpaginated, always sourced from the entity's own data
+  table (same restriction as `Calendar`), and skips any row whose `lat`
+  or `lng` is null.
 - **`action "Label" calls <module> (config...)`** — a button running a
   server-side action module; see "Server-side actions".
 - **`button "Label" -> page <Name> (extra: param, ...)`** or **`button
@@ -1143,6 +1153,7 @@ piece goes:
 | `region ... (type: staticContent)` / a plain query region     | `region "Label" from query <name> { columns: ... }`                          |
 | `region ... (type: cards)` / `region ... (type: list)`        | `report "Title" of <entity> { display: cards }` / `{ display: list }` — a display mode on the same `report`, not a separate region kind |
 | `region ... (type: calendar)`                                  | `calendar "Title" of <entity> { date: <field> title: <field> }` |
+| `region ... (type: map)`                                        | `map "Title" of <entity> { lat: <field> lng: <field> title: <field> }` — an inline-SVG scatter, no external mapping library/tile server |
 | a region's `column NAME (heading, layout, appearance, ...)`   | one name in `columns:`, plus `format <column>: <mask>` for display formatting (see "Computed columns & format masks") — no per-column heading override yet (see "App Builder" for what's GUI-editable today) |
 | a column's "Derived Column"/computation                       | `computed <name>: "<sql>"` on the report (see "Computed columns & format masks") |
 | `region`'s `link { target: { page, items } }`                 | a report's `link: <field> -> page <Name> (extra: param, ...)`               |

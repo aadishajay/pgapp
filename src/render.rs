@@ -268,6 +268,68 @@ pub fn calendar_html(
     body
 }
 
+/// Oracle APEX's Map region: a dependency-free inline-SVG scatter of
+/// `points` (`(lat, lng, id, title)`) under a simple equirectangular
+/// projection over the whole -180..180 / -90..90 range — no external
+/// mapping library or tile server, matching `chart_lib`'s existing
+/// "no CDN" precedent for charts. `link_page`, when set, wraps each
+/// marker in a link to that page forwarding the row's id.
+pub fn map_html(app: &str, title: &str, points: &[(f64, f64, String, String)], link_page: Option<&str>, html: &HtmlAttrs) -> String {
+    let (width, height, pad) = (480.0_f64, 240.0_f64, 8.0_f64);
+    let project = |lat: f64, lng: f64| {
+        let x = pad + (lng.clamp(-180.0, 180.0) + 180.0) / 360.0 * (width - pad * 2.0);
+        let y = pad + (90.0 - lat.clamp(-90.0, 90.0)) / 180.0 * (height - pad * 2.0);
+        (x, y)
+    };
+
+    let mut svg = format!(
+        r#"<svg class="pgapp-map-svg" viewBox="0 0 {width} {height}" role="img" aria-label="{}">"#,
+        escape(title)
+    );
+    // The world bounding box plus an equator/prime-meridian graticule —
+    // just enough visual reference to read marker positions by, with no
+    // real coastline data to ship or fetch.
+    svg.push_str(&format!(
+        r#"<rect x="{pad}" y="{pad}" width="{}" height="{}" fill="none" stroke="currentColor" stroke-opacity="0.3"/>"#,
+        width - pad * 2.0,
+        height - pad * 2.0
+    ));
+    let (eq_x1, eq_y) = project(0.0, -180.0);
+    let (eq_x2, _) = project(0.0, 180.0);
+    svg.push_str(&format!(
+        r#"<line x1="{eq_x1:.1}" y1="{eq_y:.1}" x2="{eq_x2:.1}" y2="{eq_y:.1}" stroke="currentColor" stroke-opacity="0.15"/>"#
+    ));
+    let (pm_x, pm_y1) = project(90.0, 0.0);
+    let (_, pm_y2) = project(-90.0, 0.0);
+    svg.push_str(&format!(
+        r#"<line x1="{pm_x:.1}" y1="{pm_y1:.1}" x2="{pm_x:.1}" y2="{pm_y2:.1}" stroke="currentColor" stroke-opacity="0.15"/>"#
+    ));
+
+    for (lat, lng, id, entry_title) in points {
+        let (x, y) = project(*lat, *lng);
+        let marker = format!(
+            r#"<circle cx="{x:.1}" cy="{y:.1}" r="5" fill="currentColor" stroke="white" stroke-width="1.5"><title>{}</title></circle>"#,
+            escape(entry_title)
+        );
+        match link_page {
+            Some(target) => svg.push_str(&format!(
+                r#"<a href="/{app}/{target}?id={id_enc}">{marker}</a>"#,
+                target = escape(target),
+                id_enc = url_encode(id),
+            )),
+            None => svg.push_str(&marker),
+        }
+    }
+    svg.push_str("</svg>");
+
+    format!(
+        r#"<div class="{class}"{extra}><h3 class="pgapp-region-title">{title}</h3>{svg}</div>"#,
+        class = merged_class("pgapp-map", html),
+        extra = extra_attrs(html),
+        title = escape(title),
+    )
+}
+
 /// Renders a header/footer chrome list — restricted at sync time to
 /// Text/Link/Region, so those are the only variants handled here.
 /// Chrome shows on every page regardless of that page's own `requires:`

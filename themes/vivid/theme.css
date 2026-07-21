@@ -398,6 +398,10 @@ a.pgapp-link:hover .pgapp-icon { color: var(--v-fuchsia); }
    see examples/helpdesk.pgapp's "Tickets by status (share)" chart. */
 .pgapp-chart-tall .pgapp-chart-svg { max-height: 340px; }
 
+/* Map region: inline-SVG lat/lng scatter, no tile server (see model::ComponentDef::Map). */
+.pgapp-map { margin: 0 0 1.5rem; padding: 1.1rem 1.25rem; background: var(--v-surface); border: 1px solid var(--v-border); border-radius: var(--v-radius); box-shadow: var(--v-shadow); border-left: 5px solid var(--v-rose); }
+.pgapp-map-svg { width: 100%; height: auto; color: var(--v-rose); }
+
 .pgapp-alert { border-radius: var(--v-radius); padding: 0.8rem 1.1rem; margin-bottom: 1rem; font-size: 0.9rem; }
 .pgapp-alert-error { background: rgb(225 29 72 / 0.08); color: var(--v-rose); border: 1.5px solid rgb(225 29 72 / 0.3); }
 

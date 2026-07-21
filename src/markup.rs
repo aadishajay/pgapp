@@ -64,6 +64,13 @@
 //!            entity's rows bucketed by "date" — see
 //!            model::ComponentDef::Calendar)
 //!
+//! map       := "map" String "of" Ident "{" mapprop* "}"
+//! mapprop   := "lat" ":" Ident | "lng" ":" Ident | "title" ":" Ident
+//!            | "link" ":" "page" Ident
+//!            (Oracle APEX's Map region: a dependency-free inline-SVG
+//!            scatter of one entity's rows by lat/lng — see
+//!            model::ComponentDef::Map)
+//!
 //! action    := "action" String "calls" Ident itemconfig?
 //!
 //! button    := "button" String ( "->" "page" Ident ( "(" paramlist ")" )?
@@ -733,6 +740,8 @@ impl Parser {
             })
         } else if self.at_keyword("calendar") {
             self.parse_calendar()
+        } else if self.at_keyword("map") {
+            self.parse_map()
         } else if self.at_keyword("button") {
             self.advance()?;
             let label = self.expect_string()?;
@@ -759,7 +768,7 @@ impl Parser {
         } else {
             bail!(
                 "expected a component ('report', 'form', 'editable_table', 'chart', 'text', \
-                 'link', 'region', 'dynamic_content', 'action', 'button', or 'calendar'), found {:?} (line {})",
+                 'link', 'region', 'dynamic_content', 'action', 'button', 'calendar', or 'map'), found {:?} (line {})",
                 self.peek(),
                 self.cur_line()
             );
@@ -981,6 +990,53 @@ impl Parser {
             title,
             entity,
             date_field,
+            title_field,
+            link_page,
+            requires: None,
+            html: HtmlAttrs::default(),
+        })
+    }
+
+    /// `"map" String "of" Ident "{" ("lat" ":" Ident | "lng" ":" Ident
+    /// | "title" ":" Ident | "link" ":" "page" Ident)* "}"` — Oracle
+    /// APEX's Map region (see `model::ComponentDef::Map`).
+    fn parse_map(&mut self) -> Result<ComponentDef> {
+        self.expect_keyword("map")?;
+        let title = self.expect_string()?;
+        self.expect_keyword("of")?;
+        let entity = self.expect_ident()?;
+        self.expect_symbol('{')?;
+
+        let mut lat_field = None;
+        let mut lng_field = None;
+        let mut title_field = None;
+        let mut link_page = None;
+        while !self.at_symbol('}') {
+            let prop = self.expect_ident()?;
+            self.expect_symbol(':')?;
+            match prop.as_str() {
+                "lat" => lat_field = Some(self.expect_ident()?),
+                "lng" => lng_field = Some(self.expect_ident()?),
+                "title" => title_field = Some(self.expect_ident()?),
+                "link" => {
+                    self.expect_keyword("page")?;
+                    link_page = Some(self.expect_ident()?);
+                }
+                other => bail!("unknown map property '{other}' (line {})", self.cur_line()),
+            }
+        }
+        self.expect_symbol('}')?;
+
+        let lat_field = lat_field.ok_or_else(|| anyhow::anyhow!("map '{title}' is missing required 'lat:' property"))?;
+        let lng_field = lng_field.ok_or_else(|| anyhow::anyhow!("map '{title}' is missing required 'lng:' property"))?;
+        let title_field =
+            title_field.ok_or_else(|| anyhow::anyhow!("map '{title}' is missing required 'title:' property"))?;
+
+        Ok(ComponentDef::Map {
+            title,
+            entity,
+            lat_field,
+            lng_field,
             title_field,
             link_page,
             requires: None,

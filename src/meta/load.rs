@@ -597,6 +597,16 @@ fn decode_component(
             requires,
             html,
         }),
+        "map" => Ok(RuntimeComponent::Map {
+            title: json_str(&config, "title"),
+            entity: resolve_entity(entities, &json_str(&config, "entity"))?,
+            lat_field: json_str(&config, "lat_field"),
+            lng_field: json_str(&config, "lng_field"),
+            title_field: json_str(&config, "title_field"),
+            link_page: config.get("link_page").and_then(|v| v.as_str()).map(String::from),
+            requires,
+            html,
+        }),
         other => anyhow::bail!("unknown component kind '{other}' in pgapp_meta.components"),
     }
 }

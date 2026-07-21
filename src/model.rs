@@ -536,6 +536,26 @@ pub enum ComponentDef {
         requires: Option<String>,
         html: HtmlAttrs,
     },
+    /// Oracle APEX's "Map" region: a dependency-free inline-SVG scatter
+    /// of one entity's rows, each plotted by (`lat_field`, `lng_field`)
+    /// under a simple equirectangular projection — no external mapping
+    /// library or tile server, the same "no CDN" precedent as
+    /// `chart_lib`'s inline SVG charts. `title_field` labels each
+    /// marker (a native SVG `<title>` hover tooltip); `link_page`, when
+    /// set, makes each marker a link to that page forwarding the row's
+    /// id (mirrors `Calendar::link_page`). Read-only and, like
+    /// `Calendar`, always sourced from the entity's own data table —
+    /// no `source: query` or collection-backed entities.
+    Map {
+        title: String,
+        entity: String,
+        lat_field: String,
+        lng_field: String,
+        title_field: String,
+        link_page: Option<String>,
+        requires: Option<String>,
+        html: HtmlAttrs,
+    },
 }
 
 impl ComponentDef {
@@ -554,7 +574,8 @@ impl ComponentDef {
             | ComponentDef::DynamicContent { html, .. }
             | ComponentDef::Action { html, .. }
             | ComponentDef::Button { html, .. }
-            | ComponentDef::Calendar { html, .. } => *html = new_html,
+            | ComponentDef::Calendar { html, .. }
+            | ComponentDef::Map { html, .. } => *html = new_html,
             ComponentDef::DynamicAction { .. } => {}
         }
     }
@@ -576,7 +597,8 @@ impl ComponentDef {
             | ComponentDef::DynamicContent { requires, .. }
             | ComponentDef::Action { requires, .. }
             | ComponentDef::Button { requires, .. }
-            | ComponentDef::Calendar { requires, .. } => *requires = new_requires,
+            | ComponentDef::Calendar { requires, .. }
+            | ComponentDef::Map { requires, .. } => *requires = new_requires,
             ComponentDef::DynamicAction { .. } => {}
         }
     }

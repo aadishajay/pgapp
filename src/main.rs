@@ -144,6 +144,7 @@ async fn print_banner(bind_addr: &str, apps: &HashMap<String, Arc<server::AppEnt
                     meta::RuntimeComponent::Button { .. } => "button",
                     meta::RuntimeComponent::DynamicAction { .. } => "dynamic_action",
                     meta::RuntimeComponent::Calendar { .. } => "calendar",
+                    meta::RuntimeComponent::Map { .. } => "map",
                 })
                 .collect();
             println!("  http://{bind_addr}/{slug}/{}  [{}]", page.name, kinds.join(", "));
