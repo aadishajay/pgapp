@@ -4151,7 +4151,12 @@ async fn admin_tables_list(
 /// `data_schema`, via the exact same `meta::compile_named_query` path
 /// that a normal sync runs (bind-tokenizing + `.describe()`) — catches
 /// syntax errors and unknown-column/table references before the author
-/// saves, without inventing a second SQL-checking path.
+/// saves, without inventing a second SQL-checking path. Also returns
+/// the query's own real output columns (name + Postgres type), so the
+/// App Builder can offer them as suggestions the moment a query is
+/// written — the same "suggest, don't force" datalist treatment as
+/// `/admin/schema-metadata`'s entity-field columns, just for a query
+/// instead of a table.
 async fn admin_test_query(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
@@ -4160,18 +4165,21 @@ async fn admin_test_query(
 ) -> Result<Response, AppError> {
     let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
     let sql = values.get("sql").map(|s| s.as_str()).unwrap_or("").to_string();
-    let result: anyhow::Result<Vec<String>> = async {
+    let result: anyhow::Result<(Vec<String>, Vec<(String, String)>)> = async {
         if sql.trim().is_empty() {
             anyhow::bail!("a query needs some SQL");
         }
         let data_schema = entry.data().app.data_schema.clone();
-        let (_, binds) = meta::compile_named_query(&state.pool, &data_schema, &sql).await?;
-        Ok(binds)
+        let (_, binds, columns) = meta::compile_named_query(&state.pool, &data_schema, &sql).await?;
+        Ok((binds, columns))
     }
     .await;
 
     match result {
-        Ok(binds) => Ok(axum::Json(json!({"ok": true, "binds": binds})).into_response()),
+        Ok((binds, columns)) => {
+            let columns: Vec<serde_json::Value> = columns.into_iter().map(|(name, ty)| json!({"name": name, "type": ty})).collect();
+            Ok(axum::Json(json!({"ok": true, "binds": binds, "columns": columns})).into_response())
+        }
         Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
     }
 }

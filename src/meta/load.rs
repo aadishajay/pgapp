@@ -130,7 +130,16 @@ fn render_segments(segments: &[Segment], names: &[String], casts: Option<&[Strin
 /// most common query shape (`select ... from <table>`, no filter
 /// parameter) with no syntax check at all, at either load time or in
 /// the App Builder's own "Test Query".
-pub async fn compile_named_query(pool: &PgPool, data_schema: &str, sql: &str) -> Result<(String, Vec<String>)> {
+/// Returns `(compiled sql, bind names, output columns)` — the last is
+/// every column the bare query itself returns (name + Postgres type
+/// name), straight from the same `Describe` call already made to infer
+/// bind types, at no extra round trip. A non-SELECT-shaped query (a
+/// bare UPDATE/DELETE/INSERT with no RETURNING) simply describes zero
+/// columns; callers that don't care (the sync-time compile in
+/// `load_queries`) just ignore this. `admin_test_query` in server.rs is
+/// the one that uses it, to power the App Builder's "available
+/// columns" reference for a query an author is actively writing.
+pub async fn compile_named_query(pool: &PgPool, data_schema: &str, sql: &str) -> Result<(String, Vec<String>, Vec<(String, String)>)> {
     let (segments, names) = tokenize_binds(sql);
     let bare = render_segments(&segments, &names, None);
     // search_path-scoped (see meta::scoped_conn): an unqualified table
@@ -155,8 +164,14 @@ pub async fn compile_named_query(pool: &PgPool, data_schema: &str, sql: &str) ->
             }
         })?;
 
+    let columns: Vec<(String, String)> = described
+        .columns()
+        .iter()
+        .map(|c| (sqlx::Column::name(c).to_string(), sqlx::Column::type_info(c).name().to_string()))
+        .collect();
+
     if names.is_empty() {
-        return Ok((sql.to_string(), names));
+        return Ok((sql.to_string(), names, columns));
     }
 
     let casts: Vec<String> = match described.parameters() {
@@ -169,7 +184,7 @@ pub async fn compile_named_query(pool: &PgPool, data_schema: &str, sql: &str) ->
         _ => names.iter().map(|_| "text".to_string()).collect(),
     };
 
-    Ok((render_segments(&segments, &names, Some(&casts)), names))
+    Ok((render_segments(&segments, &names, Some(&casts)), names, columns))
 }
 
 /// Loads the current `runtime.js` content for `app_name` — whatever's in
@@ -316,7 +331,7 @@ async fn load_queries(
     let mut app_queries = HashMap::new();
     let mut page_queries: HashMap<i32, HashMap<String, RuntimeQuery>> = HashMap::new();
     for (page_id, name, sql_text) in rows {
-        let (sql, bind_names) = compile_named_query(pool, data_schema, &sql_text)
+        let (sql, bind_names, _columns) = compile_named_query(pool, data_schema, &sql_text)
             .await
             .with_context(|| format!("named query '{name}'"))?;
         let rq = RuntimeQuery { sql, bind_names };

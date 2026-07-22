@@ -1418,7 +1418,13 @@ Application Properties, all in one place:
   detected or Postgres's own error message. Deleting a query still in
   use (an entity `from query`, a report/chart/region/LOV bound to it)
   is rejected at the next sync with the same "unknown query" error a
-  hand-edit would get.
+  hand-edit would get. `compile_named_query` also hands back the
+  query's own real output columns from that same `Describe` call, at
+  no extra round trip — a `region`/`chart` component's own "Columns"/
+  "X column"/"Y column" fields in the structured editor use them as
+  live suggestions (a datalist, refetched whenever "From query"
+  changes), the same "suggest, don't force" treatment as an entity
+  field's column datalist above.
 - **Navigation**: add/edit/delete/reorder the nav menu's *top-level*
   items (label + target page) with plain ▲▼ buttons, same convention
   every other repeatable-row editor here uses. A nested submenu item

@@ -1998,6 +1998,69 @@ window.pgapp = (function () {
     return el;
   }
 
+  // Attaches (or replaces) an already-in-the-DOM input's `<datalist>`
+  // suggestions in place — unlike `pgappDatalistInput`, which only ever
+  // builds one at input-creation time, this is for a column list that
+  // arrives *after* the input already exists (a query's real output
+  // columns, fetched once the "From query" picker settles — see
+  // `pgappBindQueryColumnSuggestions`). Safe to call repeatedly on the
+  // same input; it reuses the one datalist it created the first time.
+  function pgappSetDatalistOptions(inputEl, options) {
+    var dl = inputEl.__pgappDatalistEl;
+    if (!dl) {
+      dl = document.createElement("datalist");
+      dl.id = "pgapp-datalist-" + pgappDatalistCounter++;
+      inputEl.parentNode.insertBefore(dl, inputEl.nextSibling);
+      inputEl.setAttribute("list", dl.id);
+      inputEl.__pgappDatalistEl = dl;
+    }
+    while (dl.firstChild) dl.removeChild(dl.firstChild);
+    (options || []).forEach(function (opt) {
+      var o = document.createElement("option");
+      o.value = opt;
+      dl.appendChild(o);
+    });
+  }
+
+  // Shared by the region/chart structured editors' "From query"
+  // pickers: fetches every app-scoped query's SQL once (`/admin/
+  // queries-list`), then re-tests whichever query is currently selected
+  // — the same `/admin/queries/test` round trip the Queries panel's own
+  // "Test Query" button uses — and hands the real output column names
+  // to `onColumns`, both right away and again every time `querySel`
+  // changes. A page-scoped query (declared inside just one `page {
+  // }`, not visible to `/admin/queries-list`'s app-scoped listing) or
+  // one that fails to parse simply gets `onColumns([])` — the caller's
+  // job is to leave whatever's already there alone in that case, not
+  // to clobber it with an empty list.
+  function pgappBindQueryColumnSuggestions(querySel, onColumns) {
+    var target = pgappEditTarget();
+    var sqlByName = {};
+    function refresh() {
+      var sql = sqlByName[querySel.value];
+      if (!sql) {
+        onColumns([]);
+        return;
+      }
+      fetch(pgappAdminAppUrl(target, "/queries/test"), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "sql=" + encodeURIComponent(sql),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { onColumns(d.ok ? d.columns.map(function (c) { return c.name; }) : []); })
+        .catch(function () { onColumns([]); });
+    }
+    fetch(pgappAdminAppUrl(target, "/queries-list"))
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.ok) (d.meta.queries || []).forEach(function (q) { sqlByName[q.name] = q.sql; });
+        refresh();
+      })
+      .catch(function () { onColumns([]); });
+    querySel.addEventListener("change", refresh);
+  }
+
   function pgappNumberInput(value) {
     var el = document.createElement("input");
     el.type = "number";
@@ -2469,10 +2532,26 @@ window.pgapp = (function () {
       var querySel = pgappSelect(meta.queries, data.query);
       pgappFieldRow(container, "From query", querySel);
       pgappSectionTitle(container, "Columns (blank = show every column the query returns)");
+      var colsWrap = document.createElement("div");
+      container.appendChild(colsWrap);
       var colsList = pgappRowList([{ key: "col", label: "Column", type: "text" }], (data.columns || []).map(function (c) {
         return { col: c };
       }));
-      container.appendChild(colsList.el);
+      colsWrap.appendChild(colsList.el);
+      // Rebuilt (not just re-optioned) once the selected query's real
+      // output columns come back, since pgappRowList's "datalist" column
+      // type bakes its options in at row-creation time — existing
+      // values carry over, an empty result (unknown/page-scoped/broken
+      // query) just leaves the plain text version in place.
+      pgappBindQueryColumnSuggestions(querySel, function (cols) {
+        if (!cols.length) return;
+        var current = colsList.getRows().map(function (r) { return r.col; }).filter(function (c) { return c && c.trim(); });
+        colsWrap.textContent = "";
+        colsList = pgappRowList([{ key: "col", label: "Column", type: "datalist", options: cols }], current.map(function (c) {
+          return { col: c };
+        }));
+        colsWrap.appendChild(colsList.el);
+      });
       var requiresGen = pgappRequiresEditor(container, data.requires, meta.auth_schemes);
       var attrsGen = pgappAttrsEditor(container, data.html);
       return {
@@ -2576,6 +2655,10 @@ window.pgapp = (function () {
       pgappFieldRow(container, "X column", xInput);
       var yInput = pgappTextInput(data.y);
       pgappFieldRow(container, "Y column", yInput);
+      pgappBindQueryColumnSuggestions(querySel, function (cols) {
+        pgappSetDatalistOptions(xInput, cols);
+        pgappSetDatalistOptions(yInput, cols);
+      });
       var requiresGen = pgappRequiresEditor(container, data.requires, meta.auth_schemes);
       var attrsGen = pgappAttrsEditor(container, data.html);
       return {
