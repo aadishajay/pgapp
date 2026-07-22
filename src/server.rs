@@ -3997,7 +3997,7 @@ async fn admin_settings_get(
         let markup_text = read_markup_text(&entry).await?;
         let app_def = markup::parse_app(&markup_text)?;
         Ok(json!({
-            "theme": app_def.theme.unwrap_or_else(|| "plain".to_string()),
+            "theme": app_def.theme.unwrap_or_else(|| "shadcn".to_string()),
             "icons": app_def.icons.unwrap_or_else(|| "builtin".to_string()),
             "chart_lib": app_def.chart_lib.unwrap_or_else(|| "inline".to_string()),
             "auth_enabled": app_def.auth,
@@ -4026,7 +4026,7 @@ async fn admin_settings_set(
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
-    let theme = values.get("theme").map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or("plain").to_string();
+    let theme = values.get("theme").map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or("shadcn").to_string();
     let icons = values.get("icons").map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or("builtin").to_string();
     let chart_lib = values.get("chart_lib").map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or("inline").to_string();
     let auth_enabled = values.get("auth_enabled").map(|s| s == "true" || s == "on").unwrap_or(false);
