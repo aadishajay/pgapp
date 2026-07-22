@@ -90,7 +90,10 @@ pub async fn sync_app(
     sync_auth_schemes(pool, app_id, &app.auth_schemes).await?;
 
     // Seed the runtime JS library on first sync only; once a row exists
-    // it's the database's to edit, not this binary's to overwrite.
+    // it's the database's to edit, not this binary's to overwrite (a
+    // user app's runtime.js may have been hand-customized — see
+    // `force_refresh_runtime_js` for the one component that isn't:
+    // the App Builder's own).
     sqlx::query(
         "insert into pgapp_meta.app_runtime_js (app_id, content) values ($1, $2)
          on conflict (app_id) do nothing",
@@ -279,6 +282,27 @@ pub async fn sync_app(
     sync_chrome(pool, app_id, "header", &app.header, &page_ids).await?;
     sync_chrome(pool, app_id, "footer", &app.footer, &page_ids).await?;
 
+    Ok(())
+}
+
+/// Force-overwrites `app_name`'s `pgapp_meta.app_runtime_js` row with
+/// the binary's current `DEFAULT_RUNTIME_JS`, unlike `sync_app`'s own
+/// seed-once `on conflict do nothing` (meant to protect a *user* app's
+/// hand-customized JS across re-syncs). The one app this is meant for
+/// is the App Builder's own — nobody is meant to hand-edit its runtime
+/// JS, so on a long-lived instance it would otherwise silently drift
+/// behind whatever features the currently-running binary's JS actually
+/// has, without any way to catch up short of `instance destroy`.
+/// No-ops if `app_name` isn't registered yet (`sync_app` runs first).
+pub async fn force_refresh_runtime_js(pool: &PgPool, app_name: &str) -> Result<()> {
+    sqlx::query(
+        "update pgapp_meta.app_runtime_js set content = $1
+          where app_id = (select id from pgapp_meta.apps where name = $2)",
+    )
+    .bind(DEFAULT_RUNTIME_JS)
+    .bind(app_name)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

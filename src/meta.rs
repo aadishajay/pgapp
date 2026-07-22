@@ -8,7 +8,7 @@ mod sync;
 mod types;
 
 pub use load::{compile_named_query, load_app, load_runtime_js};
-pub use sync::sync_app;
+pub use sync::{force_refresh_runtime_js, sync_app};
 pub use types::*;
 
 use anyhow::{Context, Result};

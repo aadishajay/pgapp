@@ -261,6 +261,14 @@ async fn provision_app_builder(pool: &PgPool) -> anyhow::Result<()> {
     meta::sync_app(pool, &app_def, &item_types, &action_registry, APP_BUILDER_SCHEMA)
         .await
         .context("failed to sync the App Builder into pgapp_meta")?;
+    // Unlike a user app's runtime.js (seed-once, left alone after —
+    // it's the database's to hand-edit), the App Builder's own JS is
+    // framework-owned: force it back to this binary's current
+    // src/runtime.js on every provision, so a long-lived instance never
+    // gets stuck serving stale App Builder JS.
+    meta::force_refresh_runtime_js(pool, &app_def.name)
+        .await
+        .context("failed to refresh the App Builder's runtime.js")?;
     control::register_in_workspace(pool, instance::APP_BUILDER_APP_SLUG, &markup_path, &app_def.name, ws_id, APP_BUILDER_SCHEMA)
         .await
         .context("failed to register the App Builder app")?;
