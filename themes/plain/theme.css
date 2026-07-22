@@ -170,6 +170,58 @@ body {
 .pgapp-editable-grid-row-alt { background: #f5f5f5; }
 .pgapp-editable-grid-new .pgapp-editable-grid-cell { border-bottom: none; }
 
+/* Lightweight code editor: line-number gutter + syntax-highlighted
+   <pre> overlaid under a transparent-text <textarea> (pgappUpgradeCodeEditor
+   in runtime.js) — no external JS, this project ships zero. */
+.pgapp-code-editor { display: flex; align-items: stretch; border: 1px solid #ccc; overflow: hidden; background: #fff; }
+.pgapp-code-gutter { position: relative; flex: none; min-width: 2.5em; color: #888; background: #f0f0f0; border-right: 1px solid #ddd; user-select: none; overflow: hidden; }
+.pgapp-code-gutter-inner { position: absolute; top: 0; left: 0; right: 0; padding: 0.5rem 0.6rem 0.5rem 0.75rem; text-align: right; }
+.pgapp-code-body { position: relative; flex: 1 1 auto; min-width: 0; overflow: hidden; }
+.pgapp-code-gutter-inner, .pgapp-code-highlight, .pgapp-code-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  white-space: pre;
+  tab-size: 2;
+  margin: 0;
+}
+.pgapp-code-highlight { position: absolute; top: 0; left: 0; right: 0; padding: 0.5rem 0.75rem; pointer-events: none; color: #222; }
+.pgapp-code-input {
+  position: relative; display: block; width: 100%; height: 100%; box-sizing: border-box;
+  padding: 0.5rem 0.75rem; border: none; outline: none; resize: vertical;
+  background: transparent; color: transparent; -webkit-text-fill-color: transparent; caret-color: #222;
+}
+.pgapp-tok-kw { color: #0645ad; font-weight: 600; }
+.pgapp-tok-str { color: #0a7a2a; }
+.pgapp-tok-com { color: #888; font-style: italic; }
+.pgapp-tok-num { color: #b45f06; }
+
+/* Grammar-based autosuggestions popup (pgappUpgradeCodeEditor's `ac*`
+   state in runtime.js) — position: fixed, set from JS. */
+.pgapp-autocomplete { position: fixed; z-index: 1000; min-width: 8rem; max-height: 12rem; overflow-y: auto; background: #fff; border: 1px solid #ccc; box-shadow: 0 4px 16px rgba(0,0,0,0.15); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82rem; }
+.pgapp-autocomplete-item { padding: 0.3rem 0.6rem; cursor: pointer; white-space: nowrap; }
+.pgapp-autocomplete-item-active { background: #d6e4ff; color: #0645ad; }
+
+/* VS-Code-style file tree + editor for a directory-based (multi-file)
+   app's /admin/reload page (bindFileTree in runtime.js). */
+.pgapp-file-editor { display: flex; align-items: stretch; border: 1px solid #ccc; overflow: hidden; margin-bottom: 1rem; min-height: 24rem; }
+.pgapp-file-tree { flex: 0 0 14rem; overflow: auto; background: #f5f5f5; border-right: 1px solid #ddd; padding: 0.5rem 0; font-size: 0.85rem; }
+.pgapp-file-tree-list { list-style: none; margin: 0; padding-left: 1rem; }
+.pgapp-file-tree > .pgapp-file-tree-list { padding-left: 0.25rem; }
+.pgapp-file-tree-list.pgapp-file-tree-collapsed { display: none; }
+.pgapp-file-tree-row { display: flex; align-items: center; gap: 0.3rem; padding: 0.25rem 0.5rem; cursor: pointer; white-space: nowrap; }
+.pgapp-file-tree-row:hover { background: #e8e8e8; }
+.pgapp-file-tree-dir { font-weight: 600; }
+.pgapp-file-tree-caret { display: inline-block; width: 0.9em; font-size: 0.7em; color: #888; }
+.pgapp-file-tree-file { padding-left: 1.4rem; }
+.pgapp-file-tree-file::before { content: "📄"; margin-right: 0.3rem; font-size: 0.8em; }
+.pgapp-file-tree-file.pgapp-file-tree-active { background: #eef; font-weight: 600; }
+.pgapp-file-editor-main { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
+.pgapp-file-editor-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid #ddd; background: #f8f8f8; }
+.pgapp-file-editor-path { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; color: #666; }
+.pgapp-file-editor-main .pgapp-code-editor { flex: 1 1 auto; border: none; }
+.pgapp-file-editor-main .pgapp-code-input, .pgapp-file-editor-main .pgapp-code-body, .pgapp-file-editor-main .pgapp-code-gutter { height: 100%; }
+
 .pgapp-chart { margin: 0 0 1rem; padding: 0.75rem; border: 1px solid #ddd; }
 .pgapp-chart-svg { width: 100%; height: auto; color: #06c; }
 .pgapp-chart canvas { max-width: 100%; }

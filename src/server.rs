@@ -251,6 +251,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/:workspace/:app/users", get(auth::users_page).post(auth::users_create))
         .route("/:workspace/:app/users/:id/delete", post(auth::users_delete))
         .route("/:workspace/:app/admin/reload", get(admin_reload_page).post(admin_reload))
+        .route("/:workspace/:app/admin/files-list", get(admin_files_list))
+        .route("/:workspace/:app/admin/files/*path", get(admin_get_file).post(admin_save_file))
         .route("/:workspace/:app/admin/pages-list", get(admin_pages_list))
         .route("/:workspace/:app/admin/pages/:page/reorder", post(admin_reorder_page))
         .route("/:workspace/:app/admin/pages/add", post(admin_add_page))
@@ -2806,6 +2808,117 @@ async fn admin_reload(
         ))
         .into_response()),
         Err(e) => Ok(Redirect::to(&format!("/{app}/admin/reload?error={}", url_encode(&e.to_string()))).into_response()),
+    }
+}
+
+/// Recursively collects every `.pgapp` file under `dir`, as
+/// slash-separated paths relative to `dir` (sorted) — the same file
+/// set `source::load`'s directory case merges into one app (see
+/// `source::collect_pgapp_files`), for the App Builder's file-tree
+/// editor at /admin/reload.
+fn list_app_files(dir: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    fn walk(base: &std::path::Path, dir: &std::path::Path, out: &mut Vec<String>) -> anyhow::Result<()> {
+        for entry in std::fs::read_dir(dir).with_context(|| format!("failed to read directory '{}'", dir.display()))? {
+            let path = entry?.path();
+            if path.is_dir() {
+                walk(base, &path, out)?;
+            } else if path.extension().is_some_and(|e| e == "pgapp") {
+                let rel = path.strip_prefix(base).unwrap_or(&path);
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out)?;
+    out.sort();
+    Ok(out)
+}
+
+/// Resolves `rel_path` (the file-tree route's wildcard segment, so
+/// arbitrary caller input) against a directory app's own directory,
+/// rejecting anything that would land outside it (`../..`, an absolute
+/// path, a symlink escaping it, ...) — both sides are canonicalized so
+/// there's no ambiguity to exploit. Only ever targets a file the tree
+/// itself listed (`list_app_files`), so it must already exist; there's
+/// no "create a new file" route yet.
+fn resolve_app_file(app_dir: &str, rel_path: &str) -> anyhow::Result<std::path::PathBuf> {
+    let base = std::fs::canonicalize(app_dir).with_context(|| format!("failed to resolve app directory '{app_dir}'"))?;
+    let resolved =
+        std::fs::canonicalize(base.join(rel_path)).with_context(|| format!("no such file '{rel_path}'"))?;
+    if !resolved.starts_with(&base) {
+        anyhow::bail!("'{rel_path}' is outside the app's own directory");
+    }
+    if resolved.extension().is_none_or(|e| e != "pgapp") {
+        anyhow::bail!("'{rel_path}' is not a .pgapp file");
+    }
+    Ok(resolved)
+}
+
+/// GET /:workspace/:app/admin/files-list — every `.pgapp` file under a
+/// directory-based app's own directory, for the App Builder's VS-Code-
+/// style file tree. `ok:false` with an explanatory message for a
+/// single-file app — the tree only makes sense for the directory case.
+async fn admin_files_list(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    if !std::path::Path::new(&entry.markup_path).is_dir() {
+        return Ok(axum::Json(json!({"ok": false, "error": "this app's markup is a single file, not a directory"})).into_response());
+    }
+    match list_app_files(std::path::Path::new(&entry.markup_path)) {
+        Ok(files) => Ok(axum::Json(json!({"ok": true, "files": files})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// GET /:workspace/:app/admin/files/*path — one file's raw content.
+async fn admin_get_file(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, path)): Path<(String, String, String)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let result: anyhow::Result<String> = async {
+        let resolved = resolve_app_file(&entry.markup_path, &path)?;
+        tokio::fs::read_to_string(&resolved).await.with_context(|| format!("failed to read '{path}'"))
+    }
+    .await;
+    match result {
+        Ok(content) => Ok(axum::Json(json!({"ok": true, "content": content})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/files/*path — overwrites one file with
+/// `content` (form-encoded), then re-syncs the whole app the same way
+/// `admin_reload`'s "save" does — a directory app's files can
+/// cross-reference each other by name, so only re-parsing/re-syncing
+/// the *whole* app after any one file changes actually catches a
+/// mistake (an unknown entity/page reference in a different file,
+/// same-name collisions, ...).
+async fn admin_save_file(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, path)): Path<(String, String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let content = values.get("content").cloned().unwrap_or_default();
+
+    let result: anyhow::Result<()> = async {
+        let resolved = resolve_app_file(&entry.markup_path, &path)?;
+        tokio::fs::write(&resolved, &content).await.with_context(|| format!("failed to write '{path}'"))?;
+        entry.reload(&state.pool, &state.item_types, &state.actions).await?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
     }
 }
 

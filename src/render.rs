@@ -966,7 +966,7 @@ pub fn reload_page(
         Some(text) => {
             body.push_str(&format!(
                 r#"<form class="pgapp-form" method="post" action="/{app}/admin/reload">
-<div class="pgapp-field"><textarea class="pgapp-input" name="markup" rows="20" spellcheck="false" style="font-family:monospace;white-space:pre;">{}</textarea></div>
+<div class="pgapp-field"><textarea class="pgapp-source-textarea" name="markup" rows="20" spellcheck="false">{}</textarea></div>
 <button class="pgapp-btn pgapp-btn-primary" type="submit" name="do" value="save">Save &amp; reload</button>
 <button class="pgapp-btn pgapp-btn-secondary" type="submit" name="do" value="reload">Reload from disk (discard edits above)</button>
 </form>"#,
@@ -976,9 +976,19 @@ pub fn reload_page(
         }
         None => {
             body.push_str(&format!(
-                r#"<p class="pgapp-text">This app's markup is a directory of files — edit them on disk, then reload.</p>
+                r#"<p class="pgapp-text">This app's markup is a directory of files — pick one from the tree to edit it.</p>
+<div class="pgapp-file-editor" id="pgapp-file-editor" data-app="{app}">
+<div class="pgapp-file-tree" id="pgapp-file-tree-slot"><p class="pgapp-designer-properties-empty">Loading files&hellip;</p></div>
+<div class="pgapp-file-editor-main">
+<div class="pgapp-file-editor-toolbar">
+<span class="pgapp-file-editor-path" id="pgapp-file-editor-path">No file selected</span>
+<button class="pgapp-btn pgapp-btn-primary" type="button" id="pgapp-file-save-btn" disabled>Save &amp; reload</button>
+</div>
+<textarea class="pgapp-source-textarea" id="pgapp-file-editor-textarea" spellcheck="false" rows="20" disabled></textarea>
+</div>
+</div>
 <form class="pgapp-form" method="post" action="/{app}/admin/reload">
-<button class="pgapp-btn pgapp-btn-primary" type="submit" name="do" value="reload">Reload from disk</button>
+<button class="pgapp-btn pgapp-btn-secondary" type="submit" name="do" value="reload">Reload from disk</button>
 </form>"#,
                 app = escape(app),
             ));

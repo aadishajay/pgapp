@@ -1811,6 +1811,7 @@ window.pgapp = (function () {
     rawKindSel.addEventListener("change", function () {
       sourceArea.value = COMPONENT_TEMPLATES[rawKindSel.value];
       renderLinkControls(rawForm, sourceArea, pagesListCache);
+      if (sourceArea.__pgappSync) sourceArea.__pgappSync();
     });
 
     var rawAddBtn = document.createElement("button");
@@ -1822,6 +1823,7 @@ window.pgapp = (function () {
       rawForm.appendChild(el);
     });
     slot.appendChild(rawForm);
+    pgappUpgradeCodeEditor(sourceArea);
 
     rawToggle.addEventListener("click", function (ev) {
       ev.preventDefault();
@@ -3763,6 +3765,485 @@ window.pgapp = (function () {
     });
   }
 
+  // ---- Lightweight code editor ----
+  // Line numbers + syntax highlighting for pgapp markup's own raw-text
+  // editing surfaces (the full-file "Advanced" editor and each
+  // component's raw-source dialog) — a hand-rolled tokenizer plus the
+  // classic transparent-textarea-over-highlighted-<pre> overlay
+  // technique, not a real editor library (this project ships zero
+  // external JS).
+  var PGAPP_MARKUP_KEYWORDS = [
+    "app", "entity", "page", "query", "field", "form", "report", "editable_table", "chart", "text", "link",
+    "region", "dynamic_content", "action", "calendar", "map", "faceted_search", "facet", "nav", "header",
+    "footer", "auth", "auth_scheme", "requires", "item", "columns", "page_size", "source", "from", "of", "as",
+    "required", "default", "calls", "sql", "theme", "icons", "chart_lib", "before_load", "after_save",
+    "break_on", "highlight", "aggregate", "display", "headings", "align", "type", "x", "y", "date", "title",
+    "link_column", "attrs", "config", "scheme", "when", "color", "collection",
+  ];
+  var PGAPP_MARKUP_KEYWORD_SET = (function () {
+    var set = {};
+    PGAPP_MARKUP_KEYWORDS.forEach(function (k) { set[k] = true; });
+    return set;
+  })();
+
+  // Narrower grammar-specific vocabularies, used by the autocomplete
+  // below instead of the full keyword list once the cursor is
+  // somewhere only these words are actually legal — see FieldType in
+  // model.rs and each src/item_types/*.rs's `kind()`.
+  var PGAPP_FIELD_TYPES = ["id", "text", "boolean", "integer", "timestamp"];
+  var PGAPP_ITEM_KINDS = [
+    "checkbox", "checkbox_group", "color", "date", "file_browse", "list_manager", "password",
+    "popup", "radio", "readonly", "rich_text", "select", "shuttle", "slider", "star_rating",
+    "switch", "text", "textarea", "timestamp",
+  ];
+
+  // Figures out what, if anything, should be suggested at the
+  // textarea's current caret position: a couple of narrow contexts are
+  // recognized precisely from the grammar (an item's `as <kind>` and an
+  // entity field's `field x: <type>`), and everything else falls back
+  // to the full keyword list. Returns null when there's nothing to
+  // suggest (no selection, no word being typed, or the typed word is
+  // already the one and only match).
+  function pgappAutocompleteContext(textarea) {
+    var pos = textarea.selectionStart;
+    if (pos !== textarea.selectionEnd) return null;
+    var value = textarea.value;
+    var lineStart = value.lastIndexOf("\n", pos - 1) + 1;
+    var lineUpToCursor = value.slice(lineStart, pos);
+    var wordMatch = /[A-Za-z_][A-Za-z0-9_]*$/.exec(lineUpToCursor);
+    var word = wordMatch ? wordMatch[0] : "";
+    var beforeWord = wordMatch ? lineUpToCursor.slice(0, lineUpToCursor.length - word.length) : lineUpToCursor;
+    var list = null;
+    if (/\bas\s+$/.test(beforeWord)) {
+      list = PGAPP_ITEM_KINDS;
+    } else if (/^\s*field\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*$/.test(beforeWord)) {
+      list = PGAPP_FIELD_TYPES;
+    } else if (word.length > 0) {
+      list = PGAPP_MARKUP_KEYWORDS;
+    }
+    if (!list) return null;
+    var lower = word.toLowerCase();
+    var matches = list.filter(function (k) { return k.toLowerCase().indexOf(lower) === 0; });
+    if (matches.length === 0) return null;
+    if (matches.length === 1 && matches[0] === word) return null;
+    return { start: pos - word.length, end: pos, matches: matches };
+  }
+
+  // Caret pixel position within a textarea, via the standard hidden-
+  // mirror-element trick (there's no direct DOM API for this): a
+  // same-styled off-screen div holds the same text up to the caret,
+  // and the position of a marker span appended at that point tells us
+  // where the real caret would land. Works regardless of font/theme
+  // since it reads the textarea's own computed style rather than
+  // assuming particular metrics.
+  var PGAPP_MIRROR_STYLE_PROPS = [
+    "boxSizing", "width", "borderTopWidth", "borderRightWidth", "borderBottomWidth", "borderLeftWidth",
+    "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "fontStyle", "fontVariant", "fontWeight",
+    "fontSize", "lineHeight", "fontFamily", "textAlign", "textTransform", "textIndent", "letterSpacing",
+    "wordSpacing", "tabSize", "whiteSpace", "wordWrap",
+  ];
+  var pgappCaretMirror = null;
+  function pgappCaretCoords(textarea, index) {
+    if (!pgappCaretMirror) {
+      pgappCaretMirror = document.createElement("div");
+      pgappCaretMirror.style.position = "absolute";
+      pgappCaretMirror.style.visibility = "hidden";
+      pgappCaretMirror.style.top = "0";
+      pgappCaretMirror.style.left = "-9999px";
+      document.body.appendChild(pgappCaretMirror);
+    }
+    var mirror = pgappCaretMirror;
+    var cs = window.getComputedStyle(textarea);
+    PGAPP_MIRROR_STYLE_PROPS.forEach(function (p) { mirror.style[p] = cs[p]; });
+    while (mirror.firstChild) mirror.removeChild(mirror.firstChild);
+    mirror.appendChild(document.createTextNode(textarea.value.slice(0, index)));
+    var marker = document.createElement("span");
+    marker.textContent = ".";
+    mirror.appendChild(marker);
+    mirror.appendChild(document.createTextNode(textarea.value.slice(index)));
+    var rect = textarea.getBoundingClientRect();
+    var lineHeight = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.2;
+    return {
+      top: rect.top + marker.offsetTop - textarea.scrollTop + lineHeight,
+      left: rect.left + marker.offsetLeft - textarea.scrollLeft,
+    };
+  }
+
+  // Splits `src` into `{cls, text}` tokens (`cls` is null for
+  // plain/punctuation text) — comments and strings are recognized
+  // first since they can contain characters that would otherwise look
+  // like keywords or open a nested string.
+  function pgappTokenizeMarkup(src) {
+    var tokens = [];
+    var i = 0;
+    var n = src.length;
+    while (i < n) {
+      var ch = src[i];
+      if (ch === "#") {
+        var j = src.indexOf("\n", i);
+        if (j === -1) j = n;
+        tokens.push({ cls: "com", text: src.slice(i, j) });
+        i = j;
+      } else if (ch === '"') {
+        var k = i + 1;
+        while (k < n && src[k] !== '"') {
+          if (src[k] === "\\") k++;
+          k++;
+        }
+        k = Math.min(k + 1, n);
+        tokens.push({ cls: "str", text: src.slice(i, k) });
+        i = k;
+      } else if (/[A-Za-z_]/.test(ch)) {
+        var m = i + 1;
+        while (m < n && /[A-Za-z0-9_]/.test(src[m])) m++;
+        var word = src.slice(i, m);
+        tokens.push({ cls: PGAPP_MARKUP_KEYWORD_SET[word] ? "kw" : null, text: word });
+        i = m;
+      } else if (/[0-9]/.test(ch)) {
+        var p = i + 1;
+        while (p < n && /[0-9.]/.test(src[p])) p++;
+        tokens.push({ cls: "num", text: src.slice(i, p) });
+        i = p;
+      } else {
+        tokens.push({ cls: null, text: ch });
+        i++;
+      }
+    }
+    return tokens;
+  }
+
+  // Populates `container` with the highlighted tokens as real DOM
+  // nodes (never innerHTML — same "build via createElement/textContent"
+  // convention as the rest of this file, so there's no escaping to get
+  // wrong).
+  function pgappRenderHighlightedMarkup(container, src) {
+    while (container.firstChild) container.removeChild(container.firstChild);
+    pgappTokenizeMarkup(src).forEach(function (t) {
+      if (t.cls) {
+        var span = document.createElement("span");
+        span.className = "pgapp-tok-" + t.cls;
+        span.textContent = t.text;
+        container.appendChild(span);
+      } else {
+        container.appendChild(document.createTextNode(t.text));
+      }
+    });
+    // A trailing blank line (src ending in "\n") needs a non-empty
+    // last line for the <pre> to actually render its height — mirrors
+    // the textarea's own extra line without changing what's saved.
+    if (src.length === 0 || src.slice(-1) === "\n") container.appendChild(document.createTextNode(" "));
+  }
+
+  // Upgrades a plain `<textarea>` into the line-numbered, highlighted
+  // editor in place — the element stays the real input (still readable
+  // via `.value`, still submitted with its enclosing `<form>` if any),
+  // just visually re-skinned: transparent text over the highlighted
+  // <pre>, so typing, selection, and the native caret all keep working
+  // exactly as before. Idempotent (skips an already-upgraded textarea).
+  // Code that later sets `.value` programmatically (a "kind" picker
+  // reseeding the starter template, etc.) should call the returned
+  // sync function — stashed on the element as `.__pgappSync` — since
+  // that doesn't fire the `input` event this listens for.
+  function pgappUpgradeCodeEditor(textarea) {
+    if (textarea.__pgappCodeEditor) return;
+    textarea.__pgappCodeEditor = true;
+
+    var wrap = document.createElement("div");
+    wrap.className = "pgapp-code-editor";
+    textarea.parentNode.insertBefore(wrap, textarea);
+
+    var gutter = document.createElement("div");
+    gutter.className = "pgapp-code-gutter";
+    wrap.appendChild(gutter);
+    var gutterInner = document.createElement("div");
+    gutterInner.className = "pgapp-code-gutter-inner";
+    gutter.appendChild(gutterInner);
+
+    var body = document.createElement("div");
+    body.className = "pgapp-code-body";
+    wrap.appendChild(body);
+
+    var highlight = document.createElement("pre");
+    highlight.className = "pgapp-code-highlight";
+    body.appendChild(highlight);
+
+    body.appendChild(textarea);
+    textarea.classList.add("pgapp-code-input");
+    textarea.spellcheck = false;
+    textarea.wrap = "off";
+
+    // `gutter`/`body` clip with `overflow: hidden` rather than
+    // scrolling themselves — a box smaller than its content (any of
+    // the fixed-`rows` dialogs; the full-file editor just grows
+    // instead) would otherwise leave `scrollTop` assignments below a
+    // no-op once an `overflow: hidden` element has nothing left to
+    // scroll, stranding the highlighted text/line numbers at the top
+    // while the real (invisible) textarea content scrolls past them.
+    // A CSS transform doesn't have that failure mode.
+    function sync() {
+      var src = textarea.value;
+      pgappRenderHighlightedMarkup(highlight, src);
+      var lineCount = src.split("\n").length;
+      var lines = [];
+      for (var i = 1; i <= lineCount; i++) lines.push(i);
+      gutterInner.textContent = lines.join("\n");
+      var tx = "translate(" + -textarea.scrollLeft + "px, " + -textarea.scrollTop + "px)";
+      highlight.style.transform = tx;
+      gutterInner.style.transform = "translateY(" + -textarea.scrollTop + "px)";
+    }
+
+    // Grammar-driven autosuggestions: a small popup, positioned at the
+    // caret via pgappCaretCoords, offering completions from
+    // pgappAutocompleteContext. Lives in document.body (not `wrap`) so
+    // the editor's own `overflow: hidden` boxes never clip it, and uses
+    // `position: fixed` so the viewport-relative rect from
+    // getBoundingClientRect can be used as-is.
+    var ac = { items: [], selected: 0, start: 0, end: 0, open: false };
+    var acPopup = document.createElement("div");
+    acPopup.className = "pgapp-autocomplete";
+    acPopup.style.display = "none";
+    document.body.appendChild(acPopup);
+
+    function acClear() { while (acPopup.firstChild) acPopup.removeChild(acPopup.firstChild); }
+    function acHide() { ac.open = false; acPopup.style.display = "none"; acClear(); }
+    function acRender() {
+      acClear();
+      ac.items.forEach(function (item, idx) {
+        var row = document.createElement("div");
+        row.className = "pgapp-autocomplete-item" + (idx === ac.selected ? " pgapp-autocomplete-item-active" : "");
+        row.textContent = item;
+        // mousedown (not click) + preventDefault so the textarea never
+        // loses focus/selection to the click in the first place.
+        row.addEventListener("mousedown", function (ev) {
+          ev.preventDefault();
+          acAccept(idx);
+        });
+        acPopup.appendChild(row);
+      });
+    }
+    function acAccept(idx) {
+      var item = ac.items[idx];
+      acHide();
+      if (!item) return;
+      var val = textarea.value;
+      textarea.value = val.slice(0, ac.start) + item + val.slice(ac.end);
+      var newPos = ac.start + item.length;
+      textarea.selectionStart = textarea.selectionEnd = newPos;
+      sync();
+      textarea.focus();
+    }
+    function acUpdate() {
+      var ctx = pgappAutocompleteContext(textarea);
+      if (!ctx) { acHide(); return; }
+      ac.items = ctx.matches.slice(0, 8);
+      ac.selected = 0;
+      ac.start = ctx.start;
+      ac.end = ctx.end;
+      ac.open = true;
+      acRender();
+      var coords = pgappCaretCoords(textarea, ctx.end);
+      acPopup.style.left = coords.left + "px";
+      acPopup.style.top = coords.top + "px";
+      acPopup.style.display = "block";
+      var vw = window.innerWidth;
+      var rect = acPopup.getBoundingClientRect();
+      if (rect.right > vw - 8) acPopup.style.left = Math.max(8, vw - rect.width - 8) + "px";
+      if (rect.bottom > window.innerHeight - 8) {
+        acPopup.style.top = (coords.top - rect.height - 24) + "px";
+      }
+    }
+
+    textarea.addEventListener("input", function () { sync(); acUpdate(); });
+    textarea.addEventListener("scroll", function () { sync(); acHide(); });
+    textarea.addEventListener("blur", acHide);
+    textarea.addEventListener("keydown", function (ev) {
+      if (ac.open && (ev.key === "ArrowDown" || ev.key === "ArrowUp" || ev.key === "Enter" || ev.key === "Tab" || ev.key === "Escape")) {
+        ev.preventDefault();
+        if (ev.key === "ArrowDown") { ac.selected = Math.min(ac.selected + 1, ac.items.length - 1); acRender(); }
+        else if (ev.key === "ArrowUp") { ac.selected = Math.max(ac.selected - 1, 0); acRender(); }
+        else if (ev.key === "Escape") { acHide(); }
+        else { acAccept(ac.selected); }
+        return;
+      }
+      if (ev.key === "Tab") {
+        ev.preventDefault();
+        var start = textarea.selectionStart;
+        var end = textarea.selectionEnd;
+        textarea.value = textarea.value.slice(0, start) + "  " + textarea.value.slice(end);
+        textarea.selectionStart = textarea.selectionEnd = start + 2;
+        sync();
+      } else if (ev.key === "Enter") {
+        var start = textarea.selectionStart;
+        var end = textarea.selectionEnd;
+        var lineStart = textarea.value.lastIndexOf("\n", start - 1) + 1;
+        var line = textarea.value.slice(lineStart, start);
+        var indent = (line.match(/^[ \t]*/) || [""])[0];
+        if (/[{(\[]\s*$/.test(line)) indent += "  ";
+        ev.preventDefault();
+        textarea.value = textarea.value.slice(0, start) + "\n" + indent + textarea.value.slice(end);
+        textarea.selectionStart = textarea.selectionEnd = start + 1 + indent.length;
+        sync();
+      }
+    });
+
+    textarea.__pgappSync = sync;
+    sync();
+  }
+
+  // Upgrades every not-yet-upgraded raw-markup textarea currently in
+  // the document — covers the server-rendered full-file editor at
+  // /admin/reload; textareas created later by JS (a component's raw-
+  // source dialog, etc.) call `pgappUpgradeCodeEditor` directly instead
+  // of waiting for this to re-run.
+  function bindCodeEditors() {
+    var areas = document.querySelectorAll("textarea.pgapp-source-textarea");
+    for (var i = 0; i < areas.length; i++) pgappUpgradeCodeEditor(areas[i]);
+  }
+
+  // VS-Code-style file tree for a directory-based (multi-file) app's
+  // /admin/reload page (see render::reload_page's directory branch) —
+  // the App Builder's structured entity/query/page panels are still
+  // single-file only (splicing a change across files isn't
+  // implemented), so this is raw file content only: pick a file, edit
+  // it in the same code editor as the single-file case, save, which
+  // re-syncs the *whole* app (any file's mistake can only be caught by
+  // re-parsing the merged result — see `admin_save_file`).
+  function bindFileTree() {
+    var root = document.getElementById("pgapp-file-editor");
+    if (!root) return;
+    var appKey = root.getAttribute("data-app");
+    var treeSlot = document.getElementById("pgapp-file-tree-slot");
+    var pathLabel = document.getElementById("pgapp-file-editor-path");
+    var saveBtn = document.getElementById("pgapp-file-save-btn");
+    var textarea = document.getElementById("pgapp-file-editor-textarea");
+    var currentPath = null;
+
+    function apiUrl(suffix) {
+      return "/" + appKey + "/admin" + suffix;
+    }
+
+    // Flat sorted "a/b/c.pgapp" paths -> a nested {dirs: {name: node},
+    // files: [name, ...]} tree, built by walking each path's segments.
+    function buildTree(paths) {
+      var root = { dirs: {}, files: [] };
+      paths.forEach(function (p) {
+        var parts = p.split("/");
+        var node = root;
+        for (var i = 0; i < parts.length - 1; i++) {
+          if (!node.dirs[parts[i]]) node.dirs[parts[i]] = { dirs: {}, files: [] };
+          node = node.dirs[parts[i]];
+        }
+        node.files.push(parts[parts.length - 1]);
+      });
+      return root;
+    }
+
+    function openFile(path) {
+      fetch(apiUrl("/files/" + path.split("/").map(encodeURIComponent).join("/")))
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (!data.ok) {
+            pgappAlert("Couldn't open '" + path + "': " + data.error);
+            return;
+          }
+          currentPath = path;
+          pathLabel.textContent = path;
+          textarea.disabled = false;
+          saveBtn.disabled = false;
+          textarea.value = data.content;
+          if (textarea.__pgappSync) textarea.__pgappSync();
+          var rows = treeSlot.querySelectorAll(".pgapp-file-tree-file");
+          for (var i = 0; i < rows.length; i++) {
+            rows[i].classList.toggle("pgapp-file-tree-active", rows[i].getAttribute("data-path") === path);
+          }
+        })
+        .catch(function (e) {
+          pgappAlert("Couldn't open '" + path + "': " + e);
+        });
+    }
+
+    // Renders one directory level as a <ul>; folders default open
+    // (typical app directories here are small — a handful of files).
+    function renderLevel(node, prefix) {
+      var ul = document.createElement("ul");
+      ul.className = "pgapp-file-tree-list";
+      Object.keys(node.dirs).sort().forEach(function (name) {
+        var li = document.createElement("li");
+        var row = document.createElement("div");
+        row.className = "pgapp-file-tree-row pgapp-file-tree-dir";
+        var caret = document.createElement("span");
+        caret.className = "pgapp-file-tree-caret";
+        caret.textContent = "▾";
+        var label = document.createElement("span");
+        label.textContent = name;
+        row.appendChild(caret);
+        row.appendChild(label);
+        li.appendChild(row);
+        var childUl = renderLevel(node.dirs[name], prefix + name + "/");
+        li.appendChild(childUl);
+        row.addEventListener("click", function () {
+          var collapsed = childUl.classList.toggle("pgapp-file-tree-collapsed");
+          caret.textContent = collapsed ? "▸" : "▾";
+        });
+        ul.appendChild(li);
+      });
+      node.files.sort().forEach(function (name) {
+        var li = document.createElement("li");
+        var row = document.createElement("div");
+        row.className = "pgapp-file-tree-row pgapp-file-tree-file";
+        var fullPath = prefix + name;
+        row.setAttribute("data-path", fullPath);
+        row.textContent = name;
+        row.addEventListener("click", function () { openFile(fullPath); });
+        li.appendChild(row);
+        ul.appendChild(li);
+      });
+      return ul;
+    }
+
+    fetch(apiUrl("/files-list"))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        while (treeSlot.firstChild) treeSlot.removeChild(treeSlot.firstChild);
+        if (!data.ok) {
+          treeSlot.textContent = "Couldn't load files: " + data.error;
+          return;
+        }
+        if (data.files.length === 0) {
+          treeSlot.textContent = "No .pgapp files found.";
+          return;
+        }
+        treeSlot.appendChild(renderLevel(buildTree(data.files), ""));
+        openFile(data.files[0]);
+      })
+      .catch(function (e) {
+        treeSlot.textContent = "Couldn't load files: " + e;
+      });
+
+    saveBtn.addEventListener("click", function () {
+      if (!currentPath) return;
+      saveBtn.disabled = true;
+      fetch(apiUrl("/files/" + currentPath.split("/").map(encodeURIComponent).join("/")), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "content=" + encodeURIComponent(textarea.value),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          saveBtn.disabled = false;
+          if (!data.ok) {
+            pgappAlert("Save failed: " + data.error);
+            return;
+          }
+          location.reload();
+        })
+        .catch(function (e) {
+          saveBtn.disabled = false;
+          pgappAlert("Save failed: " + e);
+        });
+    });
+  }
+
   // Raw-markup editing: same shell as pgappPrompt, but a multi-line,
   // monospace `<textarea>` instead of a single-line `<input>` — the
   // App Builder's original component editor, still reachable today via
@@ -3790,6 +4271,7 @@ window.pgapp = (function () {
       textarea.rows = 10;
       textarea.value = initialText || "";
       box.appendChild(textarea);
+      pgappUpgradeCodeEditor(textarea);
       renderLinkControls(box, textarea, pagesList);
       var actions = document.createElement("div");
       actions.className = "pgapp-dialog-actions";
@@ -3877,6 +4359,8 @@ window.pgapp = (function () {
     document.addEventListener("DOMContentLoaded", bindDestroyAppPanel);
     document.addEventListener("DOMContentLoaded", bindDestroyWorkspacePanel);
     document.addEventListener("DOMContentLoaded", wireFileBrowseLinks);
+    document.addEventListener("DOMContentLoaded", bindCodeEditors);
+    document.addEventListener("DOMContentLoaded", bindFileTree);
   } else {
     bindDynamicActions();
     bindNavToggles();
@@ -3900,6 +4384,8 @@ window.pgapp = (function () {
     bindDestroyAppPanel();
     bindDestroyWorkspacePanel();
     wireFileBrowseLinks();
+    bindCodeEditors();
+    bindFileTree();
   }
 
   return {

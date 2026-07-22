@@ -1028,9 +1028,33 @@ off everything markup-derived (`app`, `theme`, `runtime_js`, `icons`,
 snapshots that one app's data once at the top, so a concurrent reload
 can't mix a new `RuntimeApp` with a stale `Theme`. A failed reload (bad
 markup) never swaps in — the old snapshot keeps serving, and the error
-shows on the reload page. The page itself offers an editable textarea
-(single-file apps) or "reload from disk" (directory apps), gated to the
-`admin` role when auth is enabled.
+shows on the reload page. Gated to the `admin` role when auth is enabled.
+
+The page's markup editor (`textarea.pgapp-source-textarea`, upgraded
+in-place by `pgappUpgradeCodeEditor` in `src/runtime.js`) is a small
+IDE, not a plain text box: a line-number gutter, syntax highlighting
+(comments/strings/keywords/numbers via a hand-rolled tokenizer —
+`pgappTokenizeMarkup`, no external JS library), Tab-to-indent,
+Enter auto-indent, and grammar-aware autosuggestions
+(`pgappAutocompleteContext`) that pop up as you type — the full
+keyword list generally, narrowed to just the five field types after
+`field x: ` and just the item kinds after `as ` — accepted with
+Tab/Enter/click, navigated with the arrow keys, dismissed with Escape.
+Caret positioning for the popup uses the standard hidden-mirror-element
+technique, not scrollTop math, so it doesn't share the
+overflow-vs-scrollTop pitfall described below.
+
+For a single-file app this editor sits directly on the page; for a
+directory app, `/admin/reload` instead renders a VS-Code-style
+expandable file tree (`bindFileTree` in `src/runtime.js`, backed by
+`GET /:workspace/:app/admin/files-list` and
+`GET`/`POST /:workspace/:app/admin/files/*path`) — pick any `.pgapp`
+file to load it into the same editor, edit, and "Save & reload" writes
+that one file to disk and re-syncs the whole app. This is raw file
+editing only: the structured entity/query/page panels below are still
+single-file-only (splicing a change across a directory app's files
+isn't implemented), so a directory app's day-to-day editing goes
+through this tree instead.
 
 Not covered: new item types/actions, or the routing table itself, are
 still Rust code — those need `cargo build` + restart. Markup changes
@@ -1637,6 +1661,8 @@ component kinds, e.g.
 - `POST /:workspace/:app/logout`                        — deletes the server-side session
 - `GET  /:workspace/:app/users` (+ create/delete POSTs) — built-in user management, admin role only
 - `GET  /:workspace/:app/admin/reload` (+ POST)         — re-syncs that app's markup file into `pgapp_meta` and reloads it, no restart
+- `GET  /:workspace/:app/admin/files-list`               — every `.pgapp` file in a directory app, for its file-tree editor (see "Hot reload")
+- `GET  /:workspace/:app/admin/files/*path` (+ POST)     — read/write one file's raw content by path within that app's own directory (see "Hot reload")
 - `GET  /:workspace/:app/admin/pages-list`              — every page name in that app, for the App Builder's "Target page" dropdown
 - `POST /:workspace/:app/admin/pages/:page/reorder`     — the App Builder's drag-and-drop save (see "App Builder")
 - `POST /:workspace/:app/admin/pages/add`                          — the App Builder's "Add Page" (see "App Builder")

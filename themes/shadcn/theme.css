@@ -790,6 +790,181 @@ a.pgapp-link:has(.pgapp-icon):hover .pgapp-icon {
   white-space: pre;
 }
 
+/* Lightweight code editor (pgappUpgradeCodeEditor in runtime.js): a
+   line-number gutter plus a syntax-highlighted <pre> overlaid exactly
+   under a transparent-text <textarea> — the classic "poor man's code
+   editor" technique, since this project ships zero external JS. */
+.pgapp-code-editor {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid hsl(var(--input));
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: hsl(var(--background));
+}
+.pgapp-code-gutter {
+  position: relative;
+  flex: none;
+  min-width: 2.5em;
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--muted) / 0.5);
+  border-right: 1px solid hsl(var(--border));
+  user-select: none;
+  overflow: hidden;
+}
+.pgapp-code-gutter-inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 0.5rem 0.6rem 0.5rem 0.75rem;
+  text-align: right;
+}
+.pgapp-code-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.pgapp-code-gutter-inner,
+.pgapp-code-highlight,
+.pgapp-code-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  white-space: pre;
+  tab-size: 2;
+  margin: 0;
+}
+.pgapp-code-highlight {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 0.5rem 0.75rem;
+  pointer-events: none;
+  color: hsl(var(--foreground));
+}
+.pgapp-code-input {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 0.5rem 0.75rem;
+  border: none;
+  outline: none;
+  resize: vertical;
+  background: transparent;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  caret-color: hsl(var(--foreground));
+}
+.pgapp-tok-kw { color: hsl(221 83% 53%); font-weight: 600; }
+.pgapp-tok-str { color: hsl(142 66% 33%); }
+.pgapp-tok-com { color: hsl(var(--muted-foreground)); font-style: italic; }
+.pgapp-tok-num { color: hsl(24 90% 42%); }
+@media (prefers-color-scheme: dark) {
+  .pgapp-tok-kw { color: hsl(213 94% 68%); }
+  .pgapp-tok-str { color: hsl(142 60% 58%); }
+  .pgapp-tok-num { color: hsl(27 96% 61%); }
+}
+
+/* Grammar-based autosuggestions popup (pgappUpgradeCodeEditor's `ac*`
+   state in runtime.js) — position: fixed, set from JS. */
+.pgapp-autocomplete {
+  position: fixed;
+  z-index: 1000;
+  min-width: 8rem;
+  max-height: 12rem;
+  overflow-y: auto;
+  background: hsl(var(--background));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px hsl(var(--foreground) / 0.15);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+}
+.pgapp-autocomplete-item { padding: 0.3rem 0.6rem; cursor: pointer; white-space: nowrap; }
+.pgapp-autocomplete-item-active { background: hsl(var(--primary) / 0.14); color: hsl(var(--primary)); }
+
+/* VS-Code-style file tree + editor for a directory-based (multi-file)
+   app's /admin/reload page (bindFileTree in runtime.js). */
+.pgapp-file-editor {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 1rem;
+  min-height: 24rem;
+}
+.pgapp-file-tree {
+  flex: 0 0 14rem;
+  overflow: auto;
+  background: hsl(var(--muted) / 0.4);
+  border-right: 1px solid hsl(var(--border));
+  padding: 0.5rem 0;
+  font-size: 0.85rem;
+}
+.pgapp-file-tree-list {
+  list-style: none;
+  margin: 0;
+  padding-left: 1rem;
+}
+.pgapp-file-tree > .pgapp-file-tree-list { padding-left: 0.25rem; }
+.pgapp-file-tree-list.pgapp-file-tree-collapsed { display: none; }
+.pgapp-file-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pgapp-file-tree-row:hover { background: hsl(var(--accent)); }
+.pgapp-file-tree-dir { font-weight: 500; color: hsl(var(--foreground)); }
+.pgapp-file-tree-caret { display: inline-block; width: 0.9em; font-size: 0.7em; color: hsl(var(--muted-foreground)); }
+.pgapp-file-tree-file { color: hsl(var(--foreground)); padding-left: 1.4rem; }
+.pgapp-file-tree-file::before { content: "📄"; margin-right: 0.3rem; font-size: 0.8em; }
+.pgapp-file-tree-file.pgapp-file-tree-active {
+  background: hsl(var(--primary) / 0.12);
+  color: hsl(var(--primary));
+  font-weight: 500;
+}
+.pgapp-file-editor-main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.pgapp-file-editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid hsl(var(--border));
+  background: hsl(var(--muted) / 0.3);
+}
+.pgapp-file-editor-path {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  color: hsl(var(--muted-foreground));
+}
+.pgapp-file-editor-main .pgapp-code-editor {
+  flex: 1 1 auto;
+  border: none;
+  border-radius: 0;
+}
+.pgapp-file-editor-main .pgapp-code-input,
+.pgapp-file-editor-main .pgapp-code-body,
+.pgapp-file-editor-main .pgapp-code-gutter {
+  height: 100%;
+}
+
 /* renderLinkControls (runtime.js) — the structured "Target page" +
    "Link parameters" GUI that appears above a component's raw markup
    textarea whenever that text targets a page (a `link` component, or a

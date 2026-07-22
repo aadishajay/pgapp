@@ -441,6 +441,58 @@ a.pgapp-link:hover .pgapp-icon { color: var(--m3-primary); }
 .pgapp-editable-grid-row-alt { background: var(--m3-surface-container-high); }
 .pgapp-editable-grid-new .pgapp-editable-grid-cell { border-bottom: none; }
 
+/* Lightweight code editor: line-number gutter + syntax-highlighted
+   <pre> overlaid under a transparent-text <textarea> (pgappUpgradeCodeEditor
+   in runtime.js) — no external JS, this project ships zero. */
+.pgapp-code-editor { display: flex; align-items: stretch; border: 1px solid var(--m3-outline-variant); border-radius: var(--m3-radius-md); overflow: hidden; background: var(--m3-surface-container-lowest); }
+.pgapp-code-gutter { position: relative; flex: none; min-width: 2.5em; color: var(--m3-on-surface-variant); background: var(--m3-surface-container); border-right: 1px solid var(--m3-outline-variant); user-select: none; overflow: hidden; }
+.pgapp-code-gutter-inner { position: absolute; top: 0; left: 0; right: 0; padding: 0.5rem 0.6rem 0.5rem 0.75rem; text-align: right; }
+.pgapp-code-body { position: relative; flex: 1 1 auto; min-width: 0; overflow: hidden; }
+.pgapp-code-gutter-inner, .pgapp-code-highlight, .pgapp-code-input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  white-space: pre;
+  tab-size: 2;
+  margin: 0;
+}
+.pgapp-code-highlight { position: absolute; top: 0; left: 0; right: 0; padding: 0.5rem 0.75rem; pointer-events: none; color: var(--m3-on-surface); }
+.pgapp-code-input {
+  position: relative; display: block; width: 100%; height: 100%; box-sizing: border-box;
+  padding: 0.5rem 0.75rem; border: none; outline: none; resize: vertical;
+  background: transparent; color: transparent; -webkit-text-fill-color: transparent; caret-color: var(--m3-on-surface);
+}
+.pgapp-tok-kw { color: var(--m3-primary); font-weight: 600; }
+.pgapp-tok-str { color: var(--m3-success); }
+.pgapp-tok-com { color: var(--m3-on-surface-variant); font-style: italic; }
+.pgapp-tok-num { color: #a15c00; }
+
+/* Grammar-based autosuggestions popup (pgappUpgradeCodeEditor's `ac*`
+   state in runtime.js) — position: fixed, set from JS. */
+.pgapp-autocomplete { position: fixed; z-index: 1000; min-width: 8rem; max-height: 12rem; overflow-y: auto; background: var(--m3-surface-container-lowest); border: 1px solid var(--m3-outline-variant); border-radius: var(--m3-radius-xs); box-shadow: 0 4px 16px rgba(0,0,0,0.2); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82rem; }
+.pgapp-autocomplete-item { padding: 0.3rem 0.6rem; cursor: pointer; white-space: nowrap; color: var(--m3-on-surface); }
+.pgapp-autocomplete-item-active { background: var(--m3-primary-container); color: var(--m3-on-primary-container); }
+
+/* VS-Code-style file tree + editor for a directory-based (multi-file)
+   app's /admin/reload page (bindFileTree in runtime.js). */
+.pgapp-file-editor { display: flex; align-items: stretch; border: 1px solid var(--m3-outline-variant); border-radius: var(--m3-radius-lg); overflow: hidden; margin-bottom: 1.25rem; min-height: 24rem; }
+.pgapp-file-tree { flex: 0 0 14rem; overflow: auto; background: var(--m3-surface-container); border-right: 1px solid var(--m3-outline-variant); padding: 0.5rem 0; font-size: 0.85rem; }
+.pgapp-file-tree-list { list-style: none; margin: 0; padding-left: 1rem; }
+.pgapp-file-tree > .pgapp-file-tree-list { padding-left: 0.25rem; }
+.pgapp-file-tree-list.pgapp-file-tree-collapsed { display: none; }
+.pgapp-file-tree-row { display: flex; align-items: center; gap: 0.3rem; padding: 0.25rem 0.5rem; border-radius: var(--m3-radius-xs); cursor: pointer; white-space: nowrap; }
+.pgapp-file-tree-row:hover { background: var(--m3-surface-container-high); }
+.pgapp-file-tree-dir { font-weight: 500; color: var(--m3-on-surface); }
+.pgapp-file-tree-caret { display: inline-block; width: 0.9em; font-size: 0.7em; color: var(--m3-on-surface-variant); }
+.pgapp-file-tree-file { color: var(--m3-on-surface); padding-left: 1.4rem; }
+.pgapp-file-tree-file::before { content: "📄"; margin-right: 0.3rem; font-size: 0.8em; }
+.pgapp-file-tree-file.pgapp-file-tree-active { background: var(--m3-primary-container); color: var(--m3-on-primary-container); font-weight: 500; }
+.pgapp-file-editor-main { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; }
+.pgapp-file-editor-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--m3-outline-variant); background: var(--m3-surface-container); }
+.pgapp-file-editor-path { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; color: var(--m3-on-surface-variant); }
+.pgapp-file-editor-main .pgapp-code-editor { flex: 1 1 auto; border: none; border-radius: 0; }
+.pgapp-file-editor-main .pgapp-code-input, .pgapp-file-editor-main .pgapp-code-body, .pgapp-file-editor-main .pgapp-code-gutter { height: 100%; }
+
 .pgapp-region, .pgapp-dynamic-content, .pgapp-chart {
   margin: 0 0 1.5rem;
   padding: 1.15rem 1.3rem;
