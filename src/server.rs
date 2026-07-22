@@ -1578,10 +1578,20 @@ async fn render_component(
                 .map_err(|(_, msg)| anyhow::anyhow!(msg))?;
             // A sibling FacetedSearch on the same entity ANDs its active
             // facets into this report's own filters — same "sibling by
-            // shared entity" convention as the companion Form.
+            // shared entity" convention as the companion Form. Only
+            // facets whose column is actually one of *this* report's own
+            // `columns:` are kept — a second, narrower report sharing the
+            // entity (e.g. a `source: query` report selecting just a few
+            // columns) would otherwise get a `t.<column>` condition for a
+            // column its own row source never selects, failing with a
+            // Postgres "column does not exist" error instead of just not
+            // applying that facet.
             let facet_qs = match sibling_faceted_search(page, &entity.name) {
                 Some((fs_idx, facets_decl)) => {
-                    filters.facets = FacetFilter::from_query(query, fs_idx, facets_decl, entity);
+                    filters.facets = FacetFilter::from_query(query, fs_idx, facets_decl, entity)
+                        .into_iter()
+                        .filter(|ff| columns.iter().any(|c| c == ff.column()))
+                        .collect();
                     facet_query_string(fs_idx, &filters.facets)
                 }
                 None => String::new(),
@@ -2264,7 +2274,10 @@ async fn report_csv(
 
     let mut filters = ReportFilters::from_query(&query, idx, columns)?;
     if let Some((fs_idx, facets_decl)) = sibling_faceted_search(page, &entity.name) {
-        filters.facets = FacetFilter::from_query(&query, fs_idx, facets_decl, entity);
+        filters.facets = FacetFilter::from_query(&query, fs_idx, facets_decl, entity)
+            .into_iter()
+            .filter(|ff| columns.iter().any(|c| c == ff.column()))
+            .collect();
     }
     let sort = SortSpec::from_query(&query, idx, columns, computed)?;
     let effective_query = source_query.as_deref().or(entity.source_query.as_deref());
