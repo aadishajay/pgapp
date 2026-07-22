@@ -521,6 +521,13 @@ async fn workspace_create(schema_arg: Option<String>, slug_arg: Option<String>, 
 }
 
 async fn workspace_destroy(slug: &str, hard: bool, soft: bool) -> anyhow::Result<()> {
+    if slug == instance::APP_BUILDER_WORKSPACE_SLUG {
+        anyhow::bail!(
+            "'{slug}' is the App Builder's own reserved workspace — it's created automatically \
+             and can't be destroyed on its own; `pgapp instance destroy` removes it along with \
+             everything else."
+        );
+    }
     let inst = instance::load()?;
     instance::verify_operator(&inst)?;
     let pool = instance::connect_as_admin(&inst).await?;
@@ -582,12 +589,32 @@ async fn workspace_list() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The App Builder's own reserved workspace (see
+/// `instance::APP_BUILDER_WORKSPACE_SLUG`'s doc) never holds anyone
+/// else's app — the web "New App"/`run` paths already enforce this
+/// (`actions::create_app::create_one`), so the CLI equivalents
+/// (`app_create`/`cmd_run`) need the same belt-and-suspenders check:
+/// a hand-typed `--workspace pgapp` shouldn't succeed just because it
+/// bypasses `pick_workspace`'s own listing.
+fn reject_app_builder_workspace(slug: &str) -> anyhow::Result<()> {
+    if slug == instance::APP_BUILDER_WORKSPACE_SLUG {
+        anyhow::bail!("the '{slug}' workspace is reserved for the App Builder itself");
+    }
+    Ok(())
+}
+
 /// The "if no clue, list available workspaces and ask to choose"
 /// picker — used by both `pgapp app create` and `pgapp run` when
-/// `--workspace` wasn't given.
+/// `--workspace` wasn't given. Never offers the App Builder's own
+/// reserved workspace as a choice (see `reject_app_builder_workspace`,
+/// the explicit safety net for the case a caller passed `--workspace
+/// pgapp` directly instead of going through this picker).
 async fn pick_workspace(pool: &PgPool) -> anyhow::Result<control::WorkspaceRow> {
     let workspaces = control::list_workspaces(pool).await?;
-    let enabled: Vec<_> = workspaces.into_iter().filter(|w| w.enabled).collect();
+    let enabled: Vec<_> = workspaces
+        .into_iter()
+        .filter(|w| w.enabled && w.slug != instance::APP_BUILDER_WORKSPACE_SLUG)
+        .collect();
     if enabled.is_empty() {
         anyhow::bail!("no workspaces registered yet — run `pgapp workspace create` first");
     }
@@ -774,6 +801,7 @@ async fn app_create(workspace_arg: Option<String>, slug_arg: Option<String>) -> 
             .ok_or_else(|| anyhow::anyhow!("no workspace '{slug}' registered (see `pgapp workspace list`)"))?,
         None => pick_workspace(&pool).await?,
     };
+    reject_app_builder_workspace(&ws.slug)?;
 
     println!("Let's scaffold a new app in workspace '{}'.", ws.slug);
     let name = scaffold::prompt_required("App name")?;
@@ -818,6 +846,13 @@ async fn app_destroy(slug: &str, workspace_arg: Option<String>, hard: bool, soft
     let app = control::find_app(&pool, slug, workspace_arg.as_deref())
         .await?
         .ok_or_else(|| anyhow::anyhow!("no app '{slug}' registered"))?;
+
+    if app.slug == instance::APP_BUILDER_APP_SLUG && app.workspace_slug.as_deref() == Some(instance::APP_BUILDER_WORKSPACE_SLUG) {
+        anyhow::bail!(
+            "'{slug}' is the built-in App Builder — it's created automatically and can't be \
+             destroyed on its own; `pgapp instance destroy` removes it along with everything else."
+        );
+    }
 
     let do_hard = if hard {
         true
@@ -872,6 +907,7 @@ async fn cmd_run(args: &[String]) -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("no workspace '{slug}' registered (see `pgapp workspace list`)"))?,
         None => pick_workspace(&pool).await?,
     };
+    reject_app_builder_workspace(&ws.slug)?;
 
     let discovered =
         source::load_workspace(&markup_path).with_context(|| format!("failed to load '{markup_path}'"))?;

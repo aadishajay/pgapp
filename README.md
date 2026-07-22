@@ -1799,6 +1799,19 @@ pgapp run <file>.pgapp [--workspace <slug>]
   created). `--workspace` disambiguates if that slug happens to be
   registered in more than one workspace (see "Multi-app routing").
 
+The App Builder's own reserved workspace/app (`pgapp`/`builder`) is
+exempt from all of this — `workspace destroy pgapp` and `app destroy
+builder --workspace pgapp` both refuse outright, `app create`/`run`
+refuse to target `--workspace pgapp`, and `pick_workspace`'s own
+interactive listing (when `--workspace` is omitted) never offers it as
+a choice in the first place. It's created automatically by `instance
+init`/every `run` (see "App Builder" above) and the only way to remove
+it is `pgapp instance destroy`, which takes everything else with it
+too — same belt-and-suspenders philosophy as the App Builder's own web
+self-edit guard (`admin_edit_guard`/`admin_destroy_workspace`'s
+explicit workspace-slug check in server.rs), just enforced on the CLI
+side too.
+
 `pgapp workspace list` and `pgapp app list` show what's currently
 registered.
 
