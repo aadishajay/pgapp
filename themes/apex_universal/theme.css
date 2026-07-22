@@ -16,6 +16,8 @@
  */
 
 :root {
+  color-scheme: light;
+
   --au-blue: #2c67c8;
   --au-blue-dark: #1f4f9e;
   --au-red: #c74634;
@@ -123,6 +125,7 @@ body {
 .pgapp-table tbody tr:hover { background: #fafbfd; }
 
 .pgapp-form { display: block; }
+.pgapp-form-wide { max-width: none; }
 .pgapp-field { margin-bottom: 0.85rem; }
 .pgapp-label { display: block; font-weight: 700; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.02em; color: var(--au-muted); margin-bottom: 0.3rem; }
 .pgapp-input, .pgapp-select {

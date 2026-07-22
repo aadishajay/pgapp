@@ -17,6 +17,8 @@
  */
 
 :root {
+  color-scheme: light dark;
+
   --background: 0 0% 100%;
   --foreground: 240 10% 3.9%;
   --card: 0 0% 100%;
@@ -257,6 +259,10 @@ body {
   gap: 0.75rem;
   max-width: 24rem;
 }
+/* A form whose content genuinely needs the room — the /admin/reload
+   single-file markup editor is the main case, since a code editor
+   squeezed into an ordinary settings-form width is unusable. */
+.pgapp-form-wide { max-width: none; }
 
 .pgapp-field {
   display: flex;

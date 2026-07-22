@@ -11,6 +11,8 @@
  */
 
 :root {
+  color-scheme: light dark;
+
   /* Primary (Google blue seed) */
   --m3-primary: #0b57d0;
   --m3-on-primary: #ffffff;
@@ -269,6 +271,7 @@ body {
 /* Forms — M3 outlined text fields: small 4px radius (the spec's own
    field shape, deliberately smaller than every card/dialog around it) */
 .pgapp-form { display: flex; flex-direction: column; gap: 0.9rem; max-width: 26rem; }
+.pgapp-form-wide { max-width: none; }
 .pgapp-field { display: flex; flex-direction: column; gap: 0.3rem; }
 /* Demo of a per-field override via markup's `item name attrs (class: "...")` —
    see examples/helpdesk.pgapp's "Support agents" editable_table. */
@@ -466,6 +469,11 @@ a.pgapp-link:hover .pgapp-icon { color: var(--m3-primary); }
 .pgapp-tok-str { color: var(--m3-success); }
 .pgapp-tok-com { color: var(--m3-on-surface-variant); font-style: italic; }
 .pgapp-tok-num { color: #a15c00; }
+@media (prefers-color-scheme: dark) {
+  /* kw/str/com already track --m3-primary/--m3-success/--m3-on-surface-variant,
+     redefined for dark further up — only num is a fixed hex needing its own override. */
+  .pgapp-tok-num { color: #f2b880; }
+}
 
 /* Grammar-based autosuggestions popup (pgappUpgradeCodeEditor's `ac*`
    state in runtime.js) — position: fixed, set from JS. */

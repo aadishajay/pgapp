@@ -965,7 +965,7 @@ pub fn reload_page(
     match markup_text {
         Some(text) => {
             body.push_str(&format!(
-                r#"<form class="pgapp-form" method="post" action="/{app}/admin/reload">
+                r#"<form class="pgapp-form pgapp-form-wide" method="post" action="/{app}/admin/reload">
 <div class="pgapp-field"><textarea class="pgapp-source-textarea" name="markup" rows="20" spellcheck="false">{}</textarea></div>
 <button class="pgapp-btn pgapp-btn-primary" type="submit" name="do" value="save">Save &amp; reload</button>
 <button class="pgapp-btn pgapp-btn-secondary" type="submit" name="do" value="reload">Reload from disk (discard edits above)</button>

@@ -4,6 +4,8 @@
  */
 
 :root {
+  color-scheme: light;
+
   /* Chart categorical palette (bar/pie/donut per-category fill, see
      render.rs's `chart_slice_fill`) — the dataviz skill's validated
      8-hue reference order (worst adjacent CVD ΔE 9.1, worst adjacent
@@ -74,6 +76,7 @@ body {
 .pgapp-table th { background: #f5f5f5; }
 
 .pgapp-form { display: block; }
+.pgapp-form-wide { max-width: none; }
 .pgapp-field { margin-bottom: 0.6rem; }
 .pgapp-label { display: block; font-weight: 600; margin-bottom: 0.2rem; }
 .pgapp-input, .pgapp-select { padding: 0.3rem; }
