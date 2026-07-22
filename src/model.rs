@@ -136,6 +136,19 @@ pub struct LinkColumn {
     pub extra_params: Vec<(String, String)>,
 }
 
+/// Oracle APEX's Branch after a DML process: where a `Form` redirects
+/// after a successful create/update, instead of the default (back to
+/// the same page/anchor). `extra_params` is `(field, target_param)` —
+/// same `(row field, target page's query param name)` shape as
+/// `LinkColumn::extra_params` — forwarding the just-saved row's own
+/// field values (or `"id"`, always available) as query params on the
+/// target page.
+#[derive(Debug, Clone)]
+pub struct AfterSave {
+    pub target_page: String,
+    pub extra_params: Vec<(String, String)>,
+}
+
 /// What a `ComponentDef::Button` click actually does — see its doc for
 /// why this is a separate variant from `Link`/`Action` rather than
 /// reusing either directly.
@@ -548,6 +561,9 @@ pub enum ComponentDef {
         fields: Vec<String>,
         item_types: HashMap<String, FieldItem>,
         field_html: HashMap<String, HtmlAttrs>,
+        /// Oracle APEX's Branch after a DML process — see `AfterSave`.
+        /// `None` keeps the default (back to the same page/anchor).
+        after_save: Option<AfterSave>,
         requires: Option<String>,
         html: HtmlAttrs,
     },

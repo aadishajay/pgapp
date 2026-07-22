@@ -10,7 +10,9 @@ use super::types::{
     wrap_to_jsonb, ButtonBehavior, LinkColumn, NavNode, RuntimeApp, RuntimeComponent, RuntimeEntity,
     RuntimeField, RuntimePage, RuntimeQuery,
 };
-use crate::model::{AggregateFn, ComputedColumn, Facet, FacetKind, FieldItem, FieldType, FormatMask, HighlightRule, HtmlAttrs, PreAction};
+use crate::model::{
+    AfterSave, AggregateFn, ComputedColumn, Facet, FacetKind, FieldItem, FieldType, FormatMask, HighlightRule, HtmlAttrs, PreAction,
+};
 
 /// One piece of a named query's SQL text, as split by `tokenize_binds`:
 /// either literal SQL or a `:name` bind marker.
@@ -499,6 +501,17 @@ fn decode_string_map(config: &serde_json::Value, key: &str) -> HashMap<String, S
         .collect()
 }
 
+fn decode_after_save(config: &serde_json::Value) -> Option<AfterSave> {
+    let v = config.get("after_save")?;
+    if v.is_null() {
+        return None;
+    }
+    Some(AfterSave {
+        target_page: json_str(v, "target_page"),
+        extra_params: decode_extra_params(v.get("extra_params")),
+    })
+}
+
 fn decode_item_types(v: &serde_json::Value) -> HashMap<String, FieldItem> {
     v.as_object()
         .into_iter()
@@ -567,6 +580,7 @@ fn decode_component(
             fields: json_strings(&config["fields"]),
             item_types: decode_item_types(&config["item_types"]),
             field_html: decode_field_html(&config),
+            after_save: decode_after_save(&config),
             requires,
             html,
         }),

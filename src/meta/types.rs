@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::model::{AggregateFn, ComputedColumn, Facet, FieldItem, FormatMask, HighlightRule, HtmlAttrs, PreAction};
+use crate::model::{AfterSave, AggregateFn, ComputedColumn, Facet, FieldItem, FormatMask, HighlightRule, HtmlAttrs, PreAction};
 
 /// A named query, compiled at load time: `sql` already uses positional
 /// `$N::TYPE` parameters, and `bind_names[i]` is the bind context key
@@ -146,6 +146,8 @@ pub enum RuntimeComponent {
         fields: Vec<String>,
         item_types: HashMap<String, FieldItem>,
         field_html: HashMap<String, HtmlAttrs>,
+        /// Oracle APEX's Branch after a DML process — see `model::AfterSave`.
+        after_save: Option<AfterSave>,
         requires: Option<String>,
         html: HtmlAttrs,
     },
@@ -337,13 +339,17 @@ impl RuntimeComponent {
                 "requires": requires,
                 "html": html_attrs_json(html),
             }),
-            RuntimeComponent::Form { title, entity, fields, item_types, field_html, requires, html } => serde_json::json!({
+            RuntimeComponent::Form { title, entity, fields, item_types, field_html, after_save, requires, html } => serde_json::json!({
                 "title": title,
                 "entity": entity.name,
                 "entity_fields": entity_fields_json(entity),
                 "fields": fields,
                 "item_types": item_types_json(item_types),
                 "field_html": field_html_json(field_html),
+                "after_save": after_save.as_ref().map(|a| serde_json::json!({
+                    "target_page": a.target_page,
+                    "extra_params": a.extra_params,
+                })),
                 "requires": requires,
                 "html": html_attrs_json(html),
             }),

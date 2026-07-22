@@ -128,6 +128,13 @@
 //! form      := "form" String "of" Ident "{" formprop* "}"
 //! formprop  := "fields" ":" identlist
 //!            | itemprop
+//!            | "after_save" "->" "page" Ident ( "(" paramlist ")" )?
+//!            (Oracle APEX's Branch after a DML process: redirects here
+//!            instead of the default same-page/anchor after a
+//!            successful create/update, forwarding the just-saved row's
+//!            own field values — or "id" — under new query param
+//!            names, same shape as a report's "link:" — see
+//!            model::AfterSave)
 //!
 //! editable_table := "editable_table" String "of" Ident "{" etprop* "}"
 //! etprop    := "columns" ":" identlist
@@ -1212,6 +1219,7 @@ impl Parser {
         let mut fields = Vec::new();
         let mut item_types = std::collections::HashMap::new();
         let mut field_html = std::collections::HashMap::new();
+        let mut after_save = None;
         while !self.at_symbol('}') {
             if self.at_keyword("item") {
                 let (field, item, html) = self.parse_field_item()?;
@@ -1221,6 +1229,13 @@ impl Parser {
                 if !html.is_empty() {
                     field_html.insert(field, html);
                 }
+                continue;
+            }
+            if self.at_keyword("after_save") {
+                self.advance()?;
+                let target_page = self.parse_page_target()?;
+                let extra_params = if self.at_symbol('(') { self.parse_param_list()? } else { Vec::new() };
+                after_save = Some(crate::model::AfterSave { target_page, extra_params });
                 continue;
             }
             let prop = self.expect_ident()?;
@@ -1238,6 +1253,7 @@ impl Parser {
             fields,
             item_types,
             field_html,
+            after_save,
             requires: None,
             html: HtmlAttrs::default(),
         })

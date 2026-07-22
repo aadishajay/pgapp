@@ -379,6 +379,13 @@ fixed "page kind." Eleven kinds:
   (...)]` picks a widget and/or sets `id`/`class`/attributes on that
   field's wrapper (at least one of the two required). Blank by default;
   `?edit_<n>=<id>` switches it into edit mode with a Delete button.
+  `after_save -> page <Name> (field: param, ...)` — Oracle APEX's
+  Branch after a DML process: redirects there instead of the default
+  (back to the same page/anchor) after a successful create or update,
+  forwarding the just-saved row's own field values as query params
+  under new names (same `(field, target param)` shape as a report's
+  `link:`). `field` must be `"id"` or one of this form's own `fields:`
+  — the only data available to forward without a second DB round trip.
 - **`editable_table "Title" of <entity> { ... }`** — every row rendered
   as its own inline-editable form, plus an "add new" row. Not
   paginated. Same `item` syntax as `form`.

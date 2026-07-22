@@ -755,6 +755,7 @@ fn build_component_config(
             fields,
             item_types,
             field_html,
+            after_save,
             ..
         } => {
             if !entity_ids.contains_key(entity) {
@@ -776,6 +777,25 @@ fn build_component_config(
             let owner = format!("{owner_label} form '{title}'");
             let resolved = resolve_item_types(entity_def, fields, item_types, registry, &owner)?;
             let field_html_resolved = field_html_json(field_html, fields, &owner)?;
+            let after_save_json = match after_save {
+                None => serde_json::Value::Null,
+                Some(a) => {
+                    if !page_ids.contains_key(&a.target_page) {
+                        anyhow::bail!("{owner} branches after save to unknown page '{}'", a.target_page);
+                    }
+                    for (field, _) in &a.extra_params {
+                        if field != "id" && !fields.contains(field) {
+                            anyhow::bail!(
+                                "{owner} forwards field '{field}' after save, which isn't 'id' or in this form's own 'fields:' list"
+                            );
+                        }
+                    }
+                    serde_json::json!({
+                        "target_page": a.target_page,
+                        "extra_params": a.extra_params,
+                    })
+                }
+            };
             Ok((
                 "form",
                 serde_json::json!({
@@ -784,6 +804,7 @@ fn build_component_config(
                     "fields": fields,
                     "item_types": resolved,
                     "field_html": field_html_resolved,
+                    "after_save": after_save_json,
                 }),
             ))
         }

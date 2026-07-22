@@ -2303,6 +2303,26 @@ async fn report_csv(
         .into_response())
 }
 
+/// Oracle APEX's Branch after a DML process: where a `Form` with
+/// `after_save` set redirects instead of the default same-page/anchor
+/// — `None` for any other component kind, or a `Form` with no
+/// `after_save`. `id` is the just-saved row's id; `values` are the
+/// submitted form fields — together the only data forwarded fields can
+/// draw from (see `model::AfterSave`'s doc comment on that restriction).
+fn after_save_target(app: &str, component: &RuntimeComponent, id: &str, values: &HashMap<String, String>) -> Option<String> {
+    let RuntimeComponent::Form { after_save: Some(a), .. } = component else {
+        return None;
+    };
+    let mut url = format!("/{app}/{}", a.target_page);
+    let mut sep = '?';
+    for (field, param) in &a.extra_params {
+        let value = if field == "id" { id } else { values.get(field).map(|s| s.as_str()).unwrap_or("") };
+        url.push_str(&format!("{sep}{param}={}", url_encode(value)));
+        sep = '&';
+    }
+    Some(url)
+}
+
 async fn create(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
@@ -2317,6 +2337,7 @@ async fn create(
     let component = component_at(page, idx)?;
     auth::authorize(&data, component_requires(component), &auth_ctx)?;
     let (entity, fields, item_types) = writable_fields(component, &page_name, idx)?;
+    let branches_after_save = matches!(component, RuntimeComponent::Form { after_save: Some(_), .. });
 
     match build_value_exprs(entity, fields, item_types, &values, &state.item_types) {
         Ok((columns, exprs, binds)) => {
@@ -2327,15 +2348,36 @@ async fn create(
                 columns.join(", "),
                 exprs.join(", ")
             );
-            let mut sql_query = sqlx::query(&sql);
-            for b in &binds {
-                sql_query = sql_query.bind(b);
+            // Branch after save needs the new row's id (to forward as
+            // `id`, or just to build the redirect at all when no other
+            // field is enough) — otherwise stick to the plain `execute`
+            // every other create already used.
+            let new_id = if branches_after_save {
+                let sql_with_returning = format!("{sql} returning id::text");
+                let mut sql_query = sqlx::query_scalar(&sql_with_returning);
+                for b in &binds {
+                    sql_query = sql_query.bind(b);
+                }
+                let id: String = sql_query
+                    .fetch_one(&state.pool)
+                    .await
+                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("failed to create row: {e}")))?;
+                Some(id)
+            } else {
+                let mut sql_query = sqlx::query(&sql);
+                for b in &binds {
+                    sql_query = sql_query.bind(b);
+                }
+                sql_query
+                    .execute(&state.pool)
+                    .await
+                    .map_err(|e| (StatusCode::BAD_REQUEST, format!("failed to create row: {e}")))?;
+                None
+            };
+            match new_id.and_then(|id| after_save_target(&app, component, &id, &values)) {
+                Some(url) => Ok(Redirect::to(&url).into_response()),
+                None => Ok(Redirect::to(&format!("/{app}/{page_name}#pgapp-c{}", redirect_anchor(page, idx))).into_response()),
             }
-            sql_query
-                .execute(&state.pool)
-                .await
-                .map_err(|e| (StatusCode::BAD_REQUEST, format!("failed to create row: {e}")))?;
-            Ok(Redirect::to(&format!("/{app}/{page_name}#pgapp-c{}", redirect_anchor(page, idx))).into_response())
         }
         // Reopen the popup in create mode (via new_{idx}) so the error is
         // visible instead of silently closing.
@@ -2385,7 +2427,10 @@ async fn update(
                 .execute(&state.pool)
                 .await
                 .map_err(|e| (StatusCode::BAD_REQUEST, format!("failed to update row: {e}")))?;
-            Ok(Redirect::to(&format!("/{app}/{page_name}#pgapp-c{}", redirect_anchor(page, idx))).into_response())
+            match after_save_target(&app, component, &id, &values) {
+                Some(url) => Ok(Redirect::to(&url).into_response()),
+                None => Ok(Redirect::to(&format!("/{app}/{page_name}#pgapp-c{}", redirect_anchor(page, idx))).into_response()),
+            }
         }
         Err(e) => {
             // A Form component re-enters edit mode on error (so the
