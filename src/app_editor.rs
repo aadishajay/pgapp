@@ -103,17 +103,26 @@ pub fn replace_entity(source: &str, name: &str, new_entity_text: &str) -> Result
 
 // ---- queries ----
 
-/// Appends a brand-new app-level named query just before the app's
-/// closing `}`.
+/// Inserts a brand-new app-level named query right after the last
+/// existing one — clustered with its siblings, not tacked onto the end
+/// of the file after every page (app-scoped queries conventionally
+/// live up top, and a page or two later in the file would otherwise
+/// silently end up between the new query and the ones before it). With
+/// no existing query to anchor on, falls back to right after the app's
+/// own opening `{`, same reasoning.
 pub fn add_query(source: &str, new_query_text: &str) -> Result<String> {
-    let (_, closing_line) = markup::app_query_start_lines(source).context("failed to parse app")?;
-    let end_of_app_body = (closing_line - 1) as usize;
+    let (queries, _) = markup::app_query_start_lines(source).context("failed to parse app")?;
+    let insert_after_line = match queries.last() {
+        Some((_, _, end_line)) => *end_line,
+        None => markup::app_settings_lines(source).context("failed to parse app")?.app_open_line,
+    };
+    let insert_at = insert_after_line as usize; // 0-based index right after that 1-based line
     let lines: Vec<&str> = source.lines().collect();
 
     let mut new_lines: Vec<&str> = Vec::with_capacity(lines.len() + 4);
-    new_lines.extend_from_slice(&lines[..end_of_app_body]);
+    new_lines.extend_from_slice(&lines[..insert_at]);
     new_lines.extend(new_query_text.lines());
-    new_lines.extend_from_slice(&lines[end_of_app_body..]);
+    new_lines.extend_from_slice(&lines[insert_at..]);
     Ok(join_lines(&new_lines, source.ends_with('\n')))
 }
 
@@ -446,6 +455,40 @@ mod tests {
     #[test]
     fn rejects_deleting_an_unknown_query() {
         assert!(delete_query(SRC, "nope").is_err());
+    }
+
+    #[test]
+    fn adds_a_new_query_right_after_the_last_existing_one_not_at_file_end() {
+        let added = add_query(SRC, "  query other {\n    sql: \"select 2\"\n  }").unwrap();
+        assert!(markup::parse_app(&added).is_ok());
+        // "other" must land before the entity/page that already
+        // followed "recent" in SRC — not after them.
+        let recent_pos = added.find("query recent").unwrap();
+        let other_pos = added.find("query other").unwrap();
+        let entity_pos = added.find("entity \"t\"").unwrap();
+        let page_pos = added.find("page \"P\"").unwrap();
+        assert!(recent_pos < other_pos, "other should come after recent");
+        assert!(other_pos < entity_pos, "other should still come before the entity");
+        assert!(other_pos < page_pos, "other should still come before the page");
+    }
+
+    #[test]
+    fn adds_the_first_query_right_after_the_apps_opening_brace() {
+        let src = r#"app "Demo" {
+  entity "t" {
+    field id: id
+  }
+
+  page "P" {
+    text "hi"
+  }
+}
+"#;
+        let added = add_query(src, "  query first {\n    sql: \"select 1\"\n  }").unwrap();
+        assert!(markup::parse_app(&added).is_ok());
+        let first_pos = added.find("query first").unwrap();
+        let entity_pos = added.find("entity \"t\"").unwrap();
+        assert!(first_pos < entity_pos, "the first query should land before the entity, not after the page");
     }
 
     #[test]
