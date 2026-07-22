@@ -789,6 +789,8 @@ window.pgapp = (function () {
         if (ev.key === "Escape") {
           cleanup();
           resolve(null);
+        } else {
+          pgappTrapTab(box, ev);
         }
       }
       cancelBtn.addEventListener("click", function () {
@@ -812,6 +814,8 @@ window.pgapp = (function () {
       overlay.appendChild(box);
       document.body.appendChild(overlay);
       document.addEventListener("keydown", onKey);
+      var firstField = body.querySelector("input, select, textarea, button");
+      (firstField || cancelBtn).focus();
     });
   }
 
@@ -3252,6 +3256,8 @@ window.pgapp = (function () {
         if (ev.key === "Escape") {
           cleanup();
           resolve(null);
+        } else {
+          pgappTrapTab(box, ev);
         }
       }
       cancelBtn.addEventListener("click", function () {
@@ -3280,6 +3286,8 @@ window.pgapp = (function () {
       overlay.appendChild(box);
       document.body.appendChild(overlay);
       document.addEventListener("keydown", onKey);
+      var firstField = body.querySelector("input, select, textarea, button");
+      (firstField || cancelBtn).focus();
     });
   }
 
@@ -3832,6 +3840,29 @@ window.pgapp = (function () {
     });
   }
 
+  // Keeps Tab/Shift+Tab cycling within an open modal's own focusable
+  // elements instead of escaping to background page controls that are
+  // still interactive but hidden behind the dialog overlay. Called from
+  // each dialog constructor's own keydown handler, alongside its
+  // existing Escape check.
+  function pgappTrapTab(box, ev) {
+    if (ev.key !== "Tab") return;
+    var focusable = Array.prototype.filter.call(
+      box.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'),
+      function (el) { return !el.disabled && el.offsetParent !== null; }
+    );
+    if (!focusable.length) return;
+    var first = focusable[0];
+    var last = focusable[focusable.length - 1];
+    if (ev.shiftKey && document.activeElement === first) {
+      ev.preventDefault();
+      last.focus();
+    } else if (!ev.shiftKey && document.activeElement === last) {
+      ev.preventDefault();
+      first.focus();
+    }
+  }
+
   // A small promise-based dialog used for both alert() and confirm()
   // below — styled via the .pgapp-dialog-* theme classes instead of the
   // browser's native (unstyleable, blocking) alert/confirm popups.
@@ -3870,6 +3901,8 @@ window.pgapp = (function () {
         if (ev.key === "Escape") {
           cleanup();
           resolve(false);
+        } else {
+          pgappTrapTab(box, ev);
         }
       }
       function cleanup() {
@@ -3937,6 +3970,8 @@ window.pgapp = (function () {
         } else if (ev.key === "Enter") {
           cleanup();
           resolve(input.value);
+        } else {
+          pgappTrapTab(box, ev);
         }
       }
       cancelBtn.addEventListener("click", function () {
