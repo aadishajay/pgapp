@@ -84,9 +84,9 @@ declare
   n_feedback integer;
   avg_rating numeric;
 begin
-  select count(*) into n_tasks from showcase_tasks;
-  select count(*) into n_open from showcase_tasks where status = 'Open';
-  select count(*), avg(rating) into n_feedback, avg_rating from showcase_feedback;
+  select count(*) into n_tasks from tasks;
+  select count(*) into n_open from tasks where status = 'Open';
+  select count(*), avg(rating) into n_feedback, avg_rating from feedback;
 
   return format(
     '%s task(s) tracked (%s open); %s feedback submission(s), average rating %s.',

@@ -4,10 +4,10 @@
 # any time you visit /admin/reload — that sync is what actually drives
 # routing and rendering, not the file itself.
 #
-# Named-query SQL below references todo_tasks directly —
-# that's this entity's physical table name (<app slug>_<entity slug>),
-# printed at startup. A named query isn't translated from the logical
-# entity name, so it has to know the real table.
+# Named-query SQL below references tasks directly —
+# that's this entity's physical table name (just the entity's own
+# slug), printed at startup. A named query isn't translated from the
+# logical entity name, so it has to know the real table.
 
 app "Todo" {
   header {
@@ -30,19 +30,19 @@ app "Todo" {
 
   # App-scoped: visible from every page's LOVs/regions.
   query assignees {
-    sql: "select distinct assignee as value from todo_tasks where assignee is not null order by 1"
+    sql: "select distinct assignee as value from tasks where assignee is not null order by 1"
   }
 
   # Rows only open tasks — sourced by the OpenTasks report below instead
   # of a flat `select * from` the entity table.
   query open {
-    sql: "select id, title, priority, assignee from todo_tasks
+    sql: "select id, title, priority, assignee from tasks
           where done = false order by id"
   }
 
   # Powers the "Tasks by priority" chart on the About page.
   query by_priority {
-    sql: "select priority as label, count(*) as value from todo_tasks group by priority order by 1"
+    sql: "select priority as label, count(*) as value from tasks group by priority order by 1"
   }
 
   entity "tasks" {
@@ -89,7 +89,7 @@ app "Todo" {
 
     # Page-scoped: only this page's items/LOVs can see "recent".
     query recent {
-      sql: "select id, title, priority, done from todo_tasks order by id desc limit 5"
+      sql: "select id, title, priority, done from tasks order by id desc limit 5"
     }
     region "Recently added" from query recent
   }
@@ -101,7 +101,7 @@ app "Todo" {
     # needs a cast: compile_named_query asks Postgres what type
     # priority/id actually are and casts accordingly, every load.
     query siblings {
-      sql: "select id, title from todo_tasks
+      sql: "select id, title from tasks
             where priority = :priority and id != :id
             order by id"
     }

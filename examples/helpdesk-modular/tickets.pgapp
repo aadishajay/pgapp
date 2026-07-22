@@ -15,26 +15,26 @@ entity "tickets" {
 }
 
 query by_status {
-  sql: "select status as label, count(*) as value from helpdesk_tickets group by status order by 1"
+  sql: "select status as label, count(*) as value from tickets group by status order by 1"
 }
 
 query by_day {
   sql: "select to_char(created_at, 'MM-DD') as label, count(*) as value
-        from helpdesk_tickets group by 1 order by 1"
+        from tickets group by 1 order by 1"
 }
 
 query top_agents {
-  sql: "select agent as label, count(*) as value from helpdesk_tickets
+  sql: "select agent as label, count(*) as value from tickets
         where agent is not null group by agent order by 2 desc limit 6"
 }
 
 query recent {
-  sql: "select id, subject, status, priority, agent from helpdesk_tickets
+  sql: "select id, subject, status, priority, agent from tickets
         order by id desc limit 6"
 }
 
 query open_backlog {
-  sql: "select id, subject, priority, agent, satisfaction from helpdesk_tickets
+  sql: "select id, subject, priority, agent, satisfaction from tickets
         where status = 'Open' order by id"
 }
 

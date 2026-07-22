@@ -2,42 +2,42 @@
 
 query records_per_module {
   sql: "select label, value from (
-        select 'CRM' as label, ((select count(*) from nexus_erp_accounts) + (select count(*) from nexus_erp_contacts) + (select count(*) from nexus_erp_leads) + (select count(*) from nexus_erp_opportunities) + (select count(*) from nexus_erp_activities)) as value
+        select 'CRM' as label, ((select count(*) from accounts) + (select count(*) from contacts) + (select count(*) from leads) + (select count(*) from opportunities) + (select count(*) from activities)) as value
         union all
-        select 'Sales' as label, ((select count(*) from nexus_erp_quotes) + (select count(*) from nexus_erp_sales_orders) + (select count(*) from nexus_erp_invoices) + (select count(*) from nexus_erp_payments) + (select count(*) from nexus_erp_price_lists)) as value
+        select 'Sales' as label, ((select count(*) from quotes) + (select count(*) from sales_orders) + (select count(*) from invoices) + (select count(*) from payments) + (select count(*) from price_lists)) as value
         union all
-        select 'Inventory' as label, ((select count(*) from nexus_erp_products) + (select count(*) from nexus_erp_categories) + (select count(*) from nexus_erp_warehouses) + (select count(*) from nexus_erp_stock_levels) + (select count(*) from nexus_erp_stock_movements)) as value
+        select 'Inventory' as label, ((select count(*) from products) + (select count(*) from categories) + (select count(*) from warehouses) + (select count(*) from stock_levels) + (select count(*) from stock_movements)) as value
         union all
-        select 'Purchasing' as label, ((select count(*) from nexus_erp_suppliers) + (select count(*) from nexus_erp_purchase_orders) + (select count(*) from nexus_erp_purchase_order_lines) + (select count(*) from nexus_erp_goods_receipts) + (select count(*) from nexus_erp_supplier_invoices)) as value
+        select 'Purchasing' as label, ((select count(*) from suppliers) + (select count(*) from purchase_orders) + (select count(*) from purchase_order_lines) + (select count(*) from goods_receipts) + (select count(*) from supplier_invoices)) as value
         union all
-        select 'HR' as label, ((select count(*) from nexus_erp_employees) + (select count(*) from nexus_erp_departments) + (select count(*) from nexus_erp_positions) + (select count(*) from nexus_erp_leave_requests) + (select count(*) from nexus_erp_attendance)) as value
+        select 'HR' as label, ((select count(*) from employees) + (select count(*) from departments) + (select count(*) from positions) + (select count(*) from leave_requests) + (select count(*) from attendance)) as value
         union all
-        select 'Finance' as label, ((select count(*) from nexus_erp_ledger_accounts) + (select count(*) from nexus_erp_expenses) + (select count(*) from nexus_erp_budgets) + (select count(*) from nexus_erp_ar_invoices) + (select count(*) from nexus_erp_ap_bills)) as value
+        select 'Finance' as label, ((select count(*) from ledger_accounts) + (select count(*) from expenses) + (select count(*) from budgets) + (select count(*) from ar_invoices) + (select count(*) from ap_bills)) as value
         union all
-        select 'Projects' as label, ((select count(*) from nexus_erp_projects) + (select count(*) from nexus_erp_tasks) + (select count(*) from nexus_erp_milestones) + (select count(*) from nexus_erp_timesheets) + (select count(*) from nexus_erp_project_risks)) as value
+        select 'Projects' as label, ((select count(*) from projects) + (select count(*) from tasks) + (select count(*) from milestones) + (select count(*) from timesheets) + (select count(*) from project_risks)) as value
         union all
-        select 'Support' as label, ((select count(*) from nexus_erp_tickets) + (select count(*) from nexus_erp_agents) + (select count(*) from nexus_erp_knowledge_articles) + (select count(*) from nexus_erp_slas) + (select count(*) from nexus_erp_escalations)) as value
+        select 'Support' as label, ((select count(*) from tickets) + (select count(*) from agents) + (select count(*) from knowledge_articles) + (select count(*) from slas) + (select count(*) from escalations)) as value
         union all
-        select 'Marketing' as label, ((select count(*) from nexus_erp_campaigns) + (select count(*) from nexus_erp_marketing_leads) + (select count(*) from nexus_erp_email_templates) + (select count(*) from nexus_erp_segments) + (select count(*) from nexus_erp_events)) as value
+        select 'Marketing' as label, ((select count(*) from campaigns) + (select count(*) from marketing_leads) + (select count(*) from email_templates) + (select count(*) from segments) + (select count(*) from events)) as value
         union all
-        select 'Operations' as label, ((select count(*) from nexus_erp_work_orders) + (select count(*) from nexus_erp_boms) + (select count(*) from nexus_erp_machines) + (select count(*) from nexus_erp_maintenance_logs) + (select count(*) from nexus_erp_quality_checks)) as value
+        select 'Operations' as label, ((select count(*) from work_orders) + (select count(*) from boms) + (select count(*) from machines) + (select count(*) from maintenance_logs) + (select count(*) from quality_checks)) as value
         union all
-        select 'Facilities' as label, ((select count(*) from nexus_erp_assets) + (select count(*) from nexus_erp_locations) + (select count(*) from nexus_erp_contracts) + (select count(*) from nexus_erp_maintenance_requests) + (select count(*) from nexus_erp_reservations)) as value
+        select 'Facilities' as label, ((select count(*) from assets) + (select count(*) from locations) + (select count(*) from contracts) + (select count(*) from maintenance_requests) + (select count(*) from reservations)) as value
         union all
-        select 'Compliance' as label, ((select count(*) from nexus_erp_policies) + (select count(*) from nexus_erp_audit_logs) + (select count(*) from nexus_erp_approvals) + (select count(*) from nexus_erp_notifications) + (select count(*) from nexus_erp_documents)) as value
+        select 'Compliance' as label, ((select count(*) from policies) + (select count(*) from audit_logs) + (select count(*) from approvals) + (select count(*) from notifications) + (select count(*) from documents)) as value
       ) t order by value desc"
 }
 
 query top_opportunities {
-  sql: "select id, opportunity_name, status, deal_value from nexus_erp_opportunities where status = 'Open' order by deal_value desc limit 8"
+  sql: "select id, opportunity_name, status, deal_value from opportunities where status = 'Open' order by deal_value desc limit 8"
 }
 
 query overdue_invoices {
-  sql: "select id, invoice_number, status, outstanding_amount from nexus_erp_ar_invoices where status in ('Open', 'PartiallyPaid') order by outstanding_amount desc limit 8"
+  sql: "select id, invoice_number, status, outstanding_amount from ar_invoices where status in ('Open', 'PartiallyPaid') order by outstanding_amount desc limit 8"
 }
 
 query recent_audit_findings {
-  sql: "select id, audit_reference, status, finding_count from nexus_erp_audit_logs order by id desc limit 8"
+  sql: "select id, audit_reference, status, finding_count from audit_logs order by id desc limit 8"
 }
 
 page "CompanyDashboard" {

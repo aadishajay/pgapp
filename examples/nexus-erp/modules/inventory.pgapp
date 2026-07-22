@@ -11,7 +11,7 @@ entity "products" {
 }
 
 query products_names {
-  sql: "select product_name as value from nexus_erp_products order by 1"
+  sql: "select product_name as value from products order by 1"
 }
 
 entity "categories" {
@@ -25,7 +25,7 @@ entity "categories" {
 }
 
 query categories_names {
-  sql: "select category_name as value from nexus_erp_categories order by 1"
+  sql: "select category_name as value from categories order by 1"
 }
 
 entity "warehouses" {
@@ -39,7 +39,7 @@ entity "warehouses" {
 }
 
 query warehouses_names {
-  sql: "select warehouse_name as value from nexus_erp_warehouses order by 1"
+  sql: "select warehouse_name as value from warehouses order by 1"
 }
 
 entity "stock_levels" {
@@ -54,7 +54,7 @@ entity "stock_levels" {
 }
 
 query stock_levels_names {
-  sql: "select sku as value from nexus_erp_stock_levels order by 1"
+  sql: "select sku as value from stock_levels order by 1"
 }
 
 entity "stock_movements" {
@@ -68,7 +68,7 @@ entity "stock_movements" {
 }
 
 query stock_movements_names {
-  sql: "select movement_reference as value from nexus_erp_stock_movements order by 1"
+  sql: "select movement_reference as value from stock_movements order by 1"
 }
 
 page "Products" {
@@ -89,7 +89,7 @@ page "Products" {
 }
 
 query products_peer_status {
-  sql: "select id, product_name, status, unit_price from nexus_erp_products
+  sql: "select id, product_name, status, unit_price from products
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -123,7 +123,7 @@ page "Categories" {
 }
 
 query categories_peer_status {
-  sql: "select id, category_name, status, sort_order from nexus_erp_categories
+  sql: "select id, category_name, status, sort_order from categories
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -157,7 +157,7 @@ page "Warehouses" {
 }
 
 query warehouses_peer_status {
-  sql: "select id, warehouse_name, status, capacity_units from nexus_erp_warehouses
+  sql: "select id, warehouse_name, status, capacity_units from warehouses
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -192,7 +192,7 @@ page "StockLevels" {
 }
 
 query stock_levels_peer_status {
-  sql: "select id, sku, status, quantity_on_hand from nexus_erp_stock_levels
+  sql: "select id, sku, status, quantity_on_hand from stock_levels
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -226,7 +226,7 @@ page "StockMovements" {
 }
 
 query stock_movements_peer_status {
-  sql: "select id, movement_reference, status, quantity_moved from nexus_erp_stock_movements
+  sql: "select id, movement_reference, status, quantity_moved from stock_movements
         where status = :status and id != :id order by id desc limit 8"
 }
 

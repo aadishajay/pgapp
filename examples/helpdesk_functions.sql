@@ -9,7 +9,7 @@
 -- close_stale_tickets()`, and pgapp resolves that query's bind types
 -- by asking Postgres to describe it at sync time — so the function
 -- has to exist first, the same way any table a query joins against
--- has to exist first. The function references `helpdesk_tickets` bare
+-- has to exist first. The function references `tickets` bare
 -- (no schema prefix) since pgapp always calls it on a connection whose
 -- `search_path` is already pinned to the app's workspace schema (see
 -- `meta::scoped_conn`) — pass `-v schema=<your workspace's schema>` so
@@ -29,7 +29,7 @@ language plpgsql as $$
 declare
   n integer;
 begin
-  update helpdesk_tickets
+  update tickets
      set status = 'Resolved'
    where status = 'Open'
      and created_at < now() - interval '10 days';

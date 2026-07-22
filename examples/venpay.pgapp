@@ -51,19 +51,19 @@ app "VenPay" {
   # ---- App-scoped named queries (LOVs + cross-entity lookups) ----
 
   query trip_types_lov {
-    sql: "select trip_type as value from venpay_trip_types order by 1"
+    sql: "select trip_type as value from trip_types order by 1"
   }
 
   query trip_ids_lov {
-    sql: "select trip_id as value from venpay_trips order by 1"
+    sql: "select trip_id as value from trips order by 1"
   }
 
   query vendor_ids_lov {
-    sql: "select vendor_id as value from venpay_vendors order by 1"
+    sql: "select vendor_id as value from vendors order by 1"
   }
 
   query bill_keys_lov {
-    sql: "select bill_key as value from venpay_vendor_bills order by 1"
+    sql: "select bill_key as value from vendor_bills order by 1"
   }
 
   # Vendor Bills, joined back to their trip/vendor for display — the
@@ -72,9 +72,9 @@ app "VenPay" {
   query vendor_bills_view {
     sql: "select b.id, b.bill_key, b.bill_amount, b.bill_comment,
                  v.vendor_name, t.trip_name
-            from venpay_vendor_bills b
-            left join venpay_vendors v on v.vendor_id = b.vendor_id
-            left join venpay_trips t on t.trip_id = b.trip_id
+            from vendor_bills b
+            left join vendors v on v.vendor_id = b.vendor_id
+            left join trips t on t.trip_id = b.trip_id
            order by b.id desc"
   }
 
@@ -83,7 +83,7 @@ app "VenPay" {
   # link.
   query bill_line_items {
     sql: "select seq_no, item, rate, qty, line_total, comments
-            from venpay_bill_details
+            from bill_details
            where bill_key = :bill_key
            order by seq_no"
   }
@@ -91,14 +91,14 @@ app "VenPay" {
   # Every payment made against one bill — same :bill_key forwarding.
   query bill_payments {
     sql: "select payment_id, amount, payment_date, payment_status, payment_reference_number
-            from venpay_payments
+            from payments
            where bill_key = :bill_key
            order by id desc"
   }
 
   query payments_by_status {
     sql: "select payment_status as label, count(*) as value
-            from venpay_payments
+            from payments
            group by payment_status
            order by 1"
   }

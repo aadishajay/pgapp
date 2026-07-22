@@ -11,7 +11,7 @@ entity "quotes" {
 }
 
 query quotes_names {
-  sql: "select quote_number as value from nexus_erp_quotes order by 1"
+  sql: "select quote_number as value from quotes order by 1"
 }
 
 entity "sales_orders" {
@@ -26,7 +26,7 @@ entity "sales_orders" {
 }
 
 query sales_orders_names {
-  sql: "select order_number as value from nexus_erp_sales_orders order by 1"
+  sql: "select order_number as value from sales_orders order by 1"
 }
 
 entity "invoices" {
@@ -40,7 +40,7 @@ entity "invoices" {
 }
 
 query invoices_names {
-  sql: "select invoice_number as value from nexus_erp_invoices order by 1"
+  sql: "select invoice_number as value from invoices order by 1"
 }
 
 entity "payments" {
@@ -54,7 +54,7 @@ entity "payments" {
 }
 
 query payments_names {
-  sql: "select payment_reference as value from nexus_erp_payments order by 1"
+  sql: "select payment_reference as value from payments order by 1"
 }
 
 entity "price_lists" {
@@ -68,7 +68,7 @@ entity "price_lists" {
 }
 
 query price_lists_names {
-  sql: "select price_list_name as value from nexus_erp_price_lists order by 1"
+  sql: "select price_list_name as value from price_lists order by 1"
 }
 
 page "Quotes" {
@@ -89,7 +89,7 @@ page "Quotes" {
 }
 
 query quotes_peer_status {
-  sql: "select id, quote_number, status, quote_total from nexus_erp_quotes
+  sql: "select id, quote_number, status, quote_total from quotes
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -124,7 +124,7 @@ page "SalesOrders" {
 }
 
 query sales_orders_peer_status {
-  sql: "select id, order_number, status, order_total from nexus_erp_sales_orders
+  sql: "select id, order_number, status, order_total from sales_orders
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -158,7 +158,7 @@ page "Invoices" {
 }
 
 query invoices_peer_status {
-  sql: "select id, invoice_number, status, amount_due from nexus_erp_invoices
+  sql: "select id, invoice_number, status, amount_due from invoices
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -192,7 +192,7 @@ page "Payments" {
 }
 
 query payments_peer_status {
-  sql: "select id, payment_reference, status, payment_amount from nexus_erp_payments
+  sql: "select id, payment_reference, status, payment_amount from payments
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -226,7 +226,7 @@ page "PriceLists" {
 }
 
 query price_lists_peer_status {
-  sql: "select id, price_list_name, status, discount_percent from nexus_erp_price_lists
+  sql: "select id, price_list_name, status, discount_percent from price_lists
         where status = :status and id != :id order by id desc limit 8"
 }
 

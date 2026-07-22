@@ -6,10 +6,10 @@
 --   psql "$DATABASE_URL" -v schema=<workspace_schema> -f examples/helpdesk_seed.sql
 set search_path to :"schema", public;
 
-truncate helpdesk_tickets restart identity;
-truncate helpdesk_agents restart identity;
+truncate tickets restart identity;
+truncate agents restart identity;
 
-insert into helpdesk_agents (name, team, active) values
+insert into agents (name, team, active) values
   ('Priya Sharma',   'Support',  true),
   ('Marcus Chen',    'Support',  true),
   ('Sofia Reyes',    'Billing',  true),
@@ -17,7 +17,7 @@ insert into helpdesk_agents (name, team, active) values
   ('Aisha Bello',    'Support',  true),
   ('Jordan Lee',     'Billing',  false);
 
-insert into helpdesk_tickets (subject, status, priority, agent, urgent, satisfaction, notes, created_at) values
+insert into tickets (subject, status, priority, agent, urgent, satisfaction, notes, created_at) values
   ('Cannot log in after password reset',        'Resolved',    'High',   'Priya Sharma',  false, 5, 'Cleared stale session cookie.',        now() - interval '13 days'),
   ('Invoice PDF renders blank',                 'Resolved',    'Medium', 'Sofia Reyes',   false, 4, 'Fixed by re-running the export.',      now() - interval '13 days'),
   ('API rate limits too aggressive',            'In Progress', 'High',   'Tomasz Nowak',  true,  3, 'Investigating burst allowance.',       now() - interval '12 days'),

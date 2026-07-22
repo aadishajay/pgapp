@@ -228,7 +228,7 @@ app "App Builder" {
   # Application-wizard style.
   query new_app_requests_view {
     sql: "select id, app_name, workspace_slug, theme, status, result
-            from pgapp_builder.app_builder_new_app_requests
+            from pgapp_builder.new_app_requests
            order by id desc"
   }
 

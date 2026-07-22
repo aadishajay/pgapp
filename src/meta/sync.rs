@@ -108,7 +108,7 @@ pub async fn sync_app(
     // read-only by construction.
     let mut entity_ids: HashMap<String, i32> = HashMap::new();
     for entity in &app.entities {
-        let table_name = format!("{}_{}", slug(&app.name), slug(&entity.name));
+        let table_name = slug(&entity.name);
 
         if let Some(query_name) = &entity.source_query {
             if !app.queries.iter().any(|q| &q.name == query_name) {
@@ -159,6 +159,34 @@ pub async fn sync_app(
         }
 
         if entity.source_query.is_none() && entity.source_collection.is_none() {
+            // The table name is now just the entity's own slug (no more
+            // app-name prefix — see slug() above), so two different
+            // apps sharing a data_schema (a workspace can hold more
+            // than one) can collide on it where the old
+            // `<app>_<entity>` naming never did. Catch that at sync
+            // time with a clear message rather than letting
+            // ensure_data_table's `create table if not exists` silently
+            // adopt (and potentially misinterpret the columns of) the
+            // other app's table.
+            if let Some(other_app_name) = sqlx::query_scalar::<_, String>(
+                "select a.name from pgapp_meta.entities e
+                 join pgapp_meta.apps a on a.id = e.app_id
+                 where e.table_name = $1 and a.data_schema = $2 and e.app_id != $3
+                 limit 1",
+            )
+            .bind(&table_name)
+            .bind(data_schema)
+            .bind(app_id)
+            .fetch_optional(pool)
+            .await?
+            {
+                anyhow::bail!(
+                    "entity '{}' would use physical table '{table_name}' in schema '{data_schema}', \
+                     but that table is already used by app '{other_app_name}' in the same schema — \
+                     rename one of the two entities to avoid a collision",
+                    entity.name
+                );
+            }
             ensure_data_table(pool, data_schema, &table_name, entity).await?;
             verify_data_table(pool, data_schema, &table_name, entity).await?;
         }

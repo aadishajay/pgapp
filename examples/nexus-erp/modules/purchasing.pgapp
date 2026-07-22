@@ -11,7 +11,7 @@ entity "suppliers" {
 }
 
 query suppliers_names {
-  sql: "select supplier_name as value from nexus_erp_suppliers order by 1"
+  sql: "select supplier_name as value from suppliers order by 1"
 }
 
 entity "purchase_orders" {
@@ -26,7 +26,7 @@ entity "purchase_orders" {
 }
 
 query purchase_orders_names {
-  sql: "select po_number as value from nexus_erp_purchase_orders order by 1"
+  sql: "select po_number as value from purchase_orders order by 1"
 }
 
 entity "purchase_order_lines" {
@@ -40,7 +40,7 @@ entity "purchase_order_lines" {
 }
 
 query purchase_order_lines_names {
-  sql: "select line_reference as value from nexus_erp_purchase_order_lines order by 1"
+  sql: "select line_reference as value from purchase_order_lines order by 1"
 }
 
 entity "goods_receipts" {
@@ -54,7 +54,7 @@ entity "goods_receipts" {
 }
 
 query goods_receipts_names {
-  sql: "select receipt_number as value from nexus_erp_goods_receipts order by 1"
+  sql: "select receipt_number as value from goods_receipts order by 1"
 }
 
 entity "supplier_invoices" {
@@ -68,7 +68,7 @@ entity "supplier_invoices" {
 }
 
 query supplier_invoices_names {
-  sql: "select invoice_reference as value from nexus_erp_supplier_invoices order by 1"
+  sql: "select invoice_reference as value from supplier_invoices order by 1"
 }
 
 page "Suppliers" {
@@ -89,7 +89,7 @@ page "Suppliers" {
 }
 
 query suppliers_peer_status {
-  sql: "select id, supplier_name, status, rating_score from nexus_erp_suppliers
+  sql: "select id, supplier_name, status, rating_score from suppliers
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -124,7 +124,7 @@ page "PurchaseOrders" {
 }
 
 query purchase_orders_peer_status {
-  sql: "select id, po_number, status, po_total from nexus_erp_purchase_orders
+  sql: "select id, po_number, status, po_total from purchase_orders
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -158,7 +158,7 @@ page "PurchaseOrderLines" {
 }
 
 query purchase_order_lines_peer_status {
-  sql: "select id, line_reference, status, line_quantity from nexus_erp_purchase_order_lines
+  sql: "select id, line_reference, status, line_quantity from purchase_order_lines
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -192,7 +192,7 @@ page "GoodsReceipts" {
 }
 
 query goods_receipts_peer_status {
-  sql: "select id, receipt_number, status, received_quantity from nexus_erp_goods_receipts
+  sql: "select id, receipt_number, status, received_quantity from goods_receipts
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -226,7 +226,7 @@ page "SupplierInvoices" {
 }
 
 query supplier_invoices_peer_status {
-  sql: "select id, invoice_reference, status, invoice_amount from nexus_erp_supplier_invoices
+  sql: "select id, invoice_reference, status, invoice_amount from supplier_invoices
         where status = :status and id != :id order by id desc limit 8"
 }
 

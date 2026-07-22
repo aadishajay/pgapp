@@ -1,19 +1,19 @@
 # Inventory dashboard: status split + recent activity for the module's two lead entities.
 
 query inventory_hero_by_status {
-  sql: "select status as label, count(*) as value from nexus_erp_products group by status order by 1"
+  sql: "select status as label, count(*) as value from products group by status order by 1"
 }
 
 query inventory_second_by_status {
-  sql: "select status as label, count(*) as value from nexus_erp_categories group by status order by 1"
+  sql: "select status as label, count(*) as value from categories group by status order by 1"
 }
 
 query inventory_hero_recent {
-  sql: "select id, product_name, status from nexus_erp_products order by id desc limit 6"
+  sql: "select id, product_name, status from products order by id desc limit 6"
 }
 
 query inventory_second_recent {
-  sql: "select id, category_name, status from nexus_erp_categories order by id desc limit 6"
+  sql: "select id, category_name, status from categories order by id desc limit 6"
 }
 
 page "InventoryDashboard" {

@@ -11,7 +11,7 @@ entity "policies" {
 }
 
 query policies_names {
-  sql: "select policy_name as value from nexus_erp_policies order by 1"
+  sql: "select policy_name as value from policies order by 1"
 }
 
 entity "audit_logs" {
@@ -25,7 +25,7 @@ entity "audit_logs" {
 }
 
 query audit_logs_names {
-  sql: "select audit_reference as value from nexus_erp_audit_logs order by 1"
+  sql: "select audit_reference as value from audit_logs order by 1"
 }
 
 entity "approvals" {
@@ -39,7 +39,7 @@ entity "approvals" {
 }
 
 query approvals_names {
-  sql: "select approval_reference as value from nexus_erp_approvals order by 1"
+  sql: "select approval_reference as value from approvals order by 1"
 }
 
 entity "notifications" {
@@ -53,7 +53,7 @@ entity "notifications" {
 }
 
 query notifications_names {
-  sql: "select notification_title as value from nexus_erp_notifications order by 1"
+  sql: "select notification_title as value from notifications order by 1"
 }
 
 entity "documents" {
@@ -68,7 +68,7 @@ entity "documents" {
 }
 
 query documents_names {
-  sql: "select document_title as value from nexus_erp_documents order by 1"
+  sql: "select document_title as value from documents order by 1"
 }
 
 page "Policies" {
@@ -89,7 +89,7 @@ page "Policies" {
 }
 
 query policies_peer_status {
-  sql: "select id, policy_name, status, version_number from nexus_erp_policies
+  sql: "select id, policy_name, status, version_number from policies
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -123,7 +123,7 @@ page "AuditLogs" {
 }
 
 query audit_logs_peer_status {
-  sql: "select id, audit_reference, status, finding_count from nexus_erp_audit_logs
+  sql: "select id, audit_reference, status, finding_count from audit_logs
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -157,7 +157,7 @@ page "Approvals" {
 }
 
 query approvals_peer_status {
-  sql: "select id, approval_reference, status, approval_level from nexus_erp_approvals
+  sql: "select id, approval_reference, status, approval_level from approvals
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -191,7 +191,7 @@ page "Notifications" {
 }
 
 query notifications_peer_status {
-  sql: "select id, notification_title, status, priority_score from nexus_erp_notifications
+  sql: "select id, notification_title, status, priority_score from notifications
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -226,7 +226,7 @@ page "Documents" {
 }
 
 query documents_peer_status {
-  sql: "select id, document_title, status, page_count from nexus_erp_documents
+  sql: "select id, document_title, status, page_count from documents
         where status = :status and id != :id order by id desc limit 8"
 }
 

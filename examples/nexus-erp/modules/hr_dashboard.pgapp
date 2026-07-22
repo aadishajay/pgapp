@@ -1,19 +1,19 @@
 # HR dashboard: status split + recent activity for the module's two lead entities.
 
 query hr_hero_by_status {
-  sql: "select status as label, count(*) as value from nexus_erp_employees group by status order by 1"
+  sql: "select status as label, count(*) as value from employees group by status order by 1"
 }
 
 query hr_second_by_status {
-  sql: "select status as label, count(*) as value from nexus_erp_departments group by status order by 1"
+  sql: "select status as label, count(*) as value from departments group by status order by 1"
 }
 
 query hr_hero_recent {
-  sql: "select id, full_name, status from nexus_erp_employees order by id desc limit 6"
+  sql: "select id, full_name, status from employees order by id desc limit 6"
 }
 
 query hr_second_recent {
-  sql: "select id, department_name, status from nexus_erp_departments order by id desc limit 6"
+  sql: "select id, department_name, status from departments order by id desc limit 6"
 }
 
 page "HRDashboard" {

@@ -927,18 +927,27 @@ under the automatic one).
 (defaults to `value`). A `report`'s `source:` query needs an `id`
 column plus whatever `columns` reference. A `region` has no
 requirements. A `chart` needs whatever `x`/`y` name. Query SQL
-references the entity's real physical table (`<app>_<entity>`, printed
-at startup) and is decoded generically via `to_jsonb`, so there's no
-compile-time column-type checking beyond what Postgres itself enforces.
+references the entity's real physical table — just the entity's own
+slug (printed at startup), no app-name prefix — and is decoded
+generically via `to_jsonb`, so there's no compile-time column-type
+checking beyond what Postgres itself enforces.
 
-**Write the table name bare (`<app>_<entity>`), never schema-qualified.**
-Every connection a named query runs on — at sync time (type inference)
-and at request time alike — has its `search_path` pinned to this app's
-own `data_schema` first (its workspace's own schema; see [Instance
-mode](#instance-mode)). A schema-qualified reference still works
-(qualified names ignore `search_path` entirely) but stops working the
-moment the app is re-registered into a different workspace — its
-tables move, but a hardcoded schema prefix doesn't.
+**Write the table name bare (the entity's own slug), never
+schema-qualified.** Every connection a named query runs on — at sync
+time (type inference) and at request time alike — has its
+`search_path` pinned to this app's own `data_schema` first (its
+workspace's own schema; see [Instance mode](#instance-mode)). A
+schema-qualified reference still works (qualified names ignore
+`search_path` entirely) but stops working the moment the app is
+re-registered into a different workspace — its tables move, but a
+hardcoded schema prefix doesn't.
+
+Since the table name is just the entity's slug, two different apps
+that share a `data_schema` (a workspace can hold more than one app)
+collide if they declare same-named entities — `sync_app` catches this
+at sync time (a clear error naming both apps and the schema) rather
+than one app silently adopting the other's table. Apps in different
+workspaces never collide, since each workspace is its own schema.
 
 ## Authentication & authorization
 

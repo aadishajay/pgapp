@@ -11,7 +11,7 @@ entity "accounts" {
 }
 
 query accounts_names {
-  sql: "select company_name as value from nexus_erp_accounts order by 1"
+  sql: "select company_name as value from accounts order by 1"
 }
 
 entity "contacts" {
@@ -25,7 +25,7 @@ entity "contacts" {
 }
 
 query contacts_names {
-  sql: "select full_name as value from nexus_erp_contacts order by 1"
+  sql: "select full_name as value from contacts order by 1"
 }
 
 entity "leads" {
@@ -39,7 +39,7 @@ entity "leads" {
 }
 
 query leads_names {
-  sql: "select lead_name as value from nexus_erp_leads order by 1"
+  sql: "select lead_name as value from leads order by 1"
 }
 
 entity "opportunities" {
@@ -53,7 +53,7 @@ entity "opportunities" {
 }
 
 query opportunities_names {
-  sql: "select opportunity_name as value from nexus_erp_opportunities order by 1"
+  sql: "select opportunity_name as value from opportunities order by 1"
 }
 
 entity "activities" {
@@ -67,7 +67,7 @@ entity "activities" {
 }
 
 query activities_names {
-  sql: "select subject as value from nexus_erp_activities order by 1"
+  sql: "select subject as value from activities order by 1"
 }
 
 page "Accounts" {
@@ -88,7 +88,7 @@ page "Accounts" {
 }
 
 query accounts_peer_status {
-  sql: "select id, company_name, status, annual_revenue from nexus_erp_accounts
+  sql: "select id, company_name, status, annual_revenue from accounts
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -123,7 +123,7 @@ page "Contacts" {
 }
 
 query contacts_peer_status {
-  sql: "select id, full_name, status from nexus_erp_contacts
+  sql: "select id, full_name, status from contacts
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -157,7 +157,7 @@ page "Leads" {
 }
 
 query leads_peer_status {
-  sql: "select id, lead_name, status, estimated_value from nexus_erp_leads
+  sql: "select id, lead_name, status, estimated_value from leads
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -191,7 +191,7 @@ page "Opportunities" {
 }
 
 query opportunities_peer_status {
-  sql: "select id, opportunity_name, status, deal_value from nexus_erp_opportunities
+  sql: "select id, opportunity_name, status, deal_value from opportunities
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -225,7 +225,7 @@ page "Activities" {
 }
 
 query activities_peer_status {
-  sql: "select id, subject, status, duration_minutes from nexus_erp_activities
+  sql: "select id, subject, status, duration_minutes from activities
         where status = :status and id != :id order by id desc limit 8"
 }
 

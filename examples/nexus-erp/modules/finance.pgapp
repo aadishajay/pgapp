@@ -11,7 +11,7 @@ entity "ledger_accounts" {
 }
 
 query ledger_accounts_names {
-  sql: "select account_name as value from nexus_erp_ledger_accounts order by 1"
+  sql: "select account_name as value from ledger_accounts order by 1"
 }
 
 entity "expenses" {
@@ -25,7 +25,7 @@ entity "expenses" {
 }
 
 query expenses_names {
-  sql: "select expense_reference as value from nexus_erp_expenses order by 1"
+  sql: "select expense_reference as value from expenses order by 1"
 }
 
 entity "budgets" {
@@ -39,7 +39,7 @@ entity "budgets" {
 }
 
 query budgets_names {
-  sql: "select budget_name as value from nexus_erp_budgets order by 1"
+  sql: "select budget_name as value from budgets order by 1"
 }
 
 entity "ar_invoices" {
@@ -54,7 +54,7 @@ entity "ar_invoices" {
 }
 
 query ar_invoices_names {
-  sql: "select invoice_number as value from nexus_erp_ar_invoices order by 1"
+  sql: "select invoice_number as value from ar_invoices order by 1"
 }
 
 entity "ap_bills" {
@@ -68,7 +68,7 @@ entity "ap_bills" {
 }
 
 query ap_bills_names {
-  sql: "select bill_number as value from nexus_erp_ap_bills order by 1"
+  sql: "select bill_number as value from ap_bills order by 1"
 }
 
 page "LedgerAccounts" {
@@ -89,7 +89,7 @@ page "LedgerAccounts" {
 }
 
 query ledger_accounts_peer_status {
-  sql: "select id, account_name, status, current_balance from nexus_erp_ledger_accounts
+  sql: "select id, account_name, status, current_balance from ledger_accounts
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -123,7 +123,7 @@ page "Expenses" {
 }
 
 query expenses_peer_status {
-  sql: "select id, expense_reference, status, expense_amount from nexus_erp_expenses
+  sql: "select id, expense_reference, status, expense_amount from expenses
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -157,7 +157,7 @@ page "Budgets" {
 }
 
 query budgets_peer_status {
-  sql: "select id, budget_name, status, budget_amount from nexus_erp_budgets
+  sql: "select id, budget_name, status, budget_amount from budgets
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -192,7 +192,7 @@ page "ArInvoices" {
 }
 
 query ar_invoices_peer_status {
-  sql: "select id, invoice_number, status, outstanding_amount from nexus_erp_ar_invoices
+  sql: "select id, invoice_number, status, outstanding_amount from ar_invoices
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -226,7 +226,7 @@ page "ApBills" {
 }
 
 query ap_bills_peer_status {
-  sql: "select id, bill_number, status, bill_amount from nexus_erp_ap_bills
+  sql: "select id, bill_number, status, bill_amount from ap_bills
         where status = :status and id != :id order by id desc limit 8"
 }
 

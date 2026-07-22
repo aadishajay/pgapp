@@ -1,19 +1,19 @@
 # CRM dashboard: status split + recent activity for the module's two lead entities.
 
 query crm_hero_by_status {
-  sql: "select status as label, count(*) as value from nexus_erp_accounts group by status order by 1"
+  sql: "select status as label, count(*) as value from accounts group by status order by 1"
 }
 
 query crm_second_by_status {
-  sql: "select status as label, count(*) as value from nexus_erp_contacts group by status order by 1"
+  sql: "select status as label, count(*) as value from contacts group by status order by 1"
 }
 
 query crm_hero_recent {
-  sql: "select id, company_name, status from nexus_erp_accounts order by id desc limit 6"
+  sql: "select id, company_name, status from accounts order by id desc limit 6"
 }
 
 query crm_second_recent {
-  sql: "select id, full_name, status from nexus_erp_contacts order by id desc limit 6"
+  sql: "select id, full_name, status from contacts order by id desc limit 6"
 }
 
 page "CRMDashboard" {

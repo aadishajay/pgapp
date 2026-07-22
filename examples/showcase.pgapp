@@ -47,15 +47,15 @@ app "Showcase" {
   }
 
   query category_lov_q {
-    sql: "select distinct category as value from showcase_products order by 1"
+    sql: "select distinct category as value from products order by 1"
   }
 
   query assignee_lov_q {
-    sql: "select distinct assignee as value from showcase_tasks where assignee is not null order by 1"
+    sql: "select distinct assignee as value from tasks where assignee is not null order by 1"
   }
 
   query department_lov_q {
-    sql: "select distinct department as value from showcase_team_members order by 1"
+    sql: "select distinct department as value from team_members order by 1"
   }
 
   query topic_lov_q {
@@ -64,28 +64,28 @@ app "Showcase" {
 
   query category_summary_q {
     sql: "select category, count(*) as product_count, avg(price::numeric)::text as avg_price
-            from showcase_products group by category order by 1"
+            from products group by category order by 1"
   }
 
   query status_counts_q {
-    sql: "select status as label, count(*) as value from showcase_tasks group by status order by 1"
+    sql: "select status as label, count(*) as value from tasks group by status order by 1"
   }
 
   query priority_counts_q {
-    sql: "select priority as label, count(*) as value from showcase_tasks group by priority order by 1"
+    sql: "select priority as label, count(*) as value from tasks group by priority order by 1"
   }
 
   query team_by_department_q {
-    sql: "select department as label, count(*) as value from showcase_team_members group by department order by 1"
+    sql: "select department as label, count(*) as value from team_members group by department order by 1"
   }
 
   query price_by_product_q {
-    sql: "select name as label, price::numeric as value from showcase_products order by price::numeric desc limit 8"
+    sql: "select name as label, price::numeric as value from products order by price::numeric desc limit 8"
   }
 
   query feedback_by_day_q {
     sql: "select to_char(submitted_at, 'MM-DD') as label, count(*) as value
-            from showcase_feedback group by 1 order by 1"
+            from feedback group by 1 order by 1"
   }
 
   # ---- Entities ----
@@ -229,7 +229,7 @@ app "Showcase" {
     }
 
     query task_load_for_assignee {
-      sql: "select count(*) as open_tasks from showcase_tasks
+      sql: "select count(*) as open_tasks from tasks
               where assignee = :assignee and status = 'Open'"
     }
     region "Open tasks for the selected assignee" from query task_load_for_assignee
@@ -246,7 +246,7 @@ app "Showcase" {
     # A raw SQL action (src/actions/run_query.rs): the button executes
     # this named UPDATE directly, no PL/pgSQL function needed.
     query mark_overdue_urgent {
-      sql: "update showcase_tasks set urgent = true, priority = 'High'
+      sql: "update tasks set urgent = true, priority = 'High'
               where due_date < to_char(now(), 'YYYY-MM-DD') and status <> 'Done'"
     }
     action "Mark all overdue tasks as urgent" calls run_query (query: "mark_overdue_urgent")
@@ -256,7 +256,7 @@ app "Showcase" {
     # has no assumed sort key, but still gets edit/delete actions since
     # it targets the same "tasks" entity by id.
     query overdue_tasks_q {
-      sql: "select id, title, priority, assignee from showcase_tasks
+      sql: "select id, title, priority, assignee from tasks
               where due_date < to_char(now(), 'YYYY-MM-DD') and status <> 'Done'
              order by due_date"
     }
@@ -285,10 +285,10 @@ app "Showcase" {
   page "TaskDetail" {
     query task_context {
       sql: "select title, status, priority, assignee, due_date, notes
-              from showcase_tasks where id = :id"
+              from tasks where id = :id"
     }
     query same_status_tasks {
-      sql: "select id, title, priority, assignee from showcase_tasks
+      sql: "select id, title, priority, assignee from tasks
               where status = :status and id != :id
              order by id desc limit 8"
     }

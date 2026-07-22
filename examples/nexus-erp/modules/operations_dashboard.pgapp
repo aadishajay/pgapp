@@ -1,19 +1,19 @@
 # Operations dashboard: status split + recent activity for the module's two lead entities.
 
 query operations_hero_by_status {
-  sql: "select status as label, count(*) as value from nexus_erp_work_orders group by status order by 1"
+  sql: "select status as label, count(*) as value from work_orders group by status order by 1"
 }
 
 query operations_second_by_status {
-  sql: "select status as label, count(*) as value from nexus_erp_boms group by status order by 1"
+  sql: "select status as label, count(*) as value from boms group by status order by 1"
 }
 
 query operations_hero_recent {
-  sql: "select id, work_order_number, status from nexus_erp_work_orders order by id desc limit 6"
+  sql: "select id, work_order_number, status from work_orders order by id desc limit 6"
 }
 
 query operations_second_recent {
-  sql: "select id, bom_name, status from nexus_erp_boms order by id desc limit 6"
+  sql: "select id, bom_name, status from boms order by id desc limit 6"
 }
 
 page "OperationsDashboard" {

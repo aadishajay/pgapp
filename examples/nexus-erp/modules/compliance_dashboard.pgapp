@@ -1,19 +1,19 @@
 # Compliance dashboard: status split + recent activity for the module's two lead entities.
 
 query compliance_hero_by_status {
-  sql: "select status as label, count(*) as value from nexus_erp_policies group by status order by 1"
+  sql: "select status as label, count(*) as value from policies group by status order by 1"
 }
 
 query compliance_second_by_status {
-  sql: "select status as label, count(*) as value from nexus_erp_audit_logs group by status order by 1"
+  sql: "select status as label, count(*) as value from audit_logs group by status order by 1"
 }
 
 query compliance_hero_recent {
-  sql: "select id, policy_name, status from nexus_erp_policies order by id desc limit 6"
+  sql: "select id, policy_name, status from policies order by id desc limit 6"
 }
 
 query compliance_second_recent {
-  sql: "select id, audit_reference, status from nexus_erp_audit_logs order by id desc limit 6"
+  sql: "select id, audit_reference, status from audit_logs order by id desc limit 6"
 }
 
 page "ComplianceDashboard" {

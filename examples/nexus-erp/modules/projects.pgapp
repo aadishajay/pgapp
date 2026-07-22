@@ -11,7 +11,7 @@ entity "projects" {
 }
 
 query projects_names {
-  sql: "select project_name as value from nexus_erp_projects order by 1"
+  sql: "select project_name as value from projects order by 1"
 }
 
 entity "tasks" {
@@ -26,7 +26,7 @@ entity "tasks" {
 }
 
 query tasks_names {
-  sql: "select task_name as value from nexus_erp_tasks order by 1"
+  sql: "select task_name as value from tasks order by 1"
 }
 
 entity "milestones" {
@@ -40,7 +40,7 @@ entity "milestones" {
 }
 
 query milestones_names {
-  sql: "select milestone_name as value from nexus_erp_milestones order by 1"
+  sql: "select milestone_name as value from milestones order by 1"
 }
 
 entity "timesheets" {
@@ -54,7 +54,7 @@ entity "timesheets" {
 }
 
 query timesheets_names {
-  sql: "select timesheet_reference as value from nexus_erp_timesheets order by 1"
+  sql: "select timesheet_reference as value from timesheets order by 1"
 }
 
 entity "project_risks" {
@@ -68,7 +68,7 @@ entity "project_risks" {
 }
 
 query project_risks_names {
-  sql: "select risk_name as value from nexus_erp_project_risks order by 1"
+  sql: "select risk_name as value from project_risks order by 1"
 }
 
 page "Projects" {
@@ -89,7 +89,7 @@ page "Projects" {
 }
 
 query projects_peer_status {
-  sql: "select id, project_name, status, budget_allocated from nexus_erp_projects
+  sql: "select id, project_name, status, budget_allocated from projects
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -124,7 +124,7 @@ page "Tasks" {
 }
 
 query tasks_peer_status {
-  sql: "select id, task_name, status, estimated_hours from nexus_erp_tasks
+  sql: "select id, task_name, status, estimated_hours from tasks
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -158,7 +158,7 @@ page "Milestones" {
 }
 
 query milestones_peer_status {
-  sql: "select id, milestone_name, status, completion_percent from nexus_erp_milestones
+  sql: "select id, milestone_name, status, completion_percent from milestones
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -192,7 +192,7 @@ page "Timesheets" {
 }
 
 query timesheets_peer_status {
-  sql: "select id, timesheet_reference, status, hours_logged from nexus_erp_timesheets
+  sql: "select id, timesheet_reference, status, hours_logged from timesheets
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -226,7 +226,7 @@ page "ProjectRisks" {
 }
 
 query project_risks_peer_status {
-  sql: "select id, risk_name, status, impact_score from nexus_erp_project_risks
+  sql: "select id, risk_name, status, impact_score from project_risks
         where status = :status and id != :id order by id desc limit 8"
 }
 

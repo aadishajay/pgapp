@@ -1,19 +1,19 @@
 # Support dashboard: status split + recent activity for the module's two lead entities.
 
 query support_hero_by_status {
-  sql: "select status as label, count(*) as value from nexus_erp_tickets group by status order by 1"
+  sql: "select status as label, count(*) as value from tickets group by status order by 1"
 }
 
 query support_second_by_status {
-  sql: "select status as label, count(*) as value from nexus_erp_agents group by status order by 1"
+  sql: "select status as label, count(*) as value from agents group by status order by 1"
 }
 
 query support_hero_recent {
-  sql: "select id, subject, status from nexus_erp_tickets order by id desc limit 6"
+  sql: "select id, subject, status from tickets order by id desc limit 6"
 }
 
 query support_second_recent {
-  sql: "select id, agent_name, status from nexus_erp_agents order by id desc limit 6"
+  sql: "select id, agent_name, status from agents order by id desc limit 6"
 }
 
 page "SupportDashboard" {

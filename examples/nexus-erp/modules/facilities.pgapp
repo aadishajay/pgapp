@@ -11,7 +11,7 @@ entity "assets" {
 }
 
 query assets_names {
-  sql: "select asset_name as value from nexus_erp_assets order by 1"
+  sql: "select asset_name as value from assets order by 1"
 }
 
 entity "locations" {
@@ -25,7 +25,7 @@ entity "locations" {
 }
 
 query locations_names {
-  sql: "select location_name as value from nexus_erp_locations order by 1"
+  sql: "select location_name as value from locations order by 1"
 }
 
 entity "contracts" {
@@ -40,7 +40,7 @@ entity "contracts" {
 }
 
 query contracts_names {
-  sql: "select contract_name as value from nexus_erp_contracts order by 1"
+  sql: "select contract_name as value from contracts order by 1"
 }
 
 entity "maintenance_requests" {
@@ -54,7 +54,7 @@ entity "maintenance_requests" {
 }
 
 query maintenance_requests_names {
-  sql: "select request_reference as value from nexus_erp_maintenance_requests order by 1"
+  sql: "select request_reference as value from maintenance_requests order by 1"
 }
 
 entity "reservations" {
@@ -68,7 +68,7 @@ entity "reservations" {
 }
 
 query reservations_names {
-  sql: "select reservation_reference as value from nexus_erp_reservations order by 1"
+  sql: "select reservation_reference as value from reservations order by 1"
 }
 
 page "Assets" {
@@ -89,7 +89,7 @@ page "Assets" {
 }
 
 query assets_peer_status {
-  sql: "select id, asset_name, status, asset_value from nexus_erp_assets
+  sql: "select id, asset_name, status, asset_value from assets
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -123,7 +123,7 @@ page "Locations" {
 }
 
 query locations_peer_status {
-  sql: "select id, location_name, status, square_footage from nexus_erp_locations
+  sql: "select id, location_name, status, square_footage from locations
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -158,7 +158,7 @@ page "Contracts" {
 }
 
 query contracts_peer_status {
-  sql: "select id, contract_name, status, contract_value from nexus_erp_contracts
+  sql: "select id, contract_name, status, contract_value from contracts
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -192,7 +192,7 @@ page "MaintenanceRequests" {
 }
 
 query maintenance_requests_peer_status {
-  sql: "select id, request_reference, status, priority_level from nexus_erp_maintenance_requests
+  sql: "select id, request_reference, status, priority_level from maintenance_requests
         where status = :status and id != :id order by id desc limit 8"
 }
 
@@ -226,7 +226,7 @@ page "Reservations" {
 }
 
 query reservations_peer_status {
-  sql: "select id, reservation_reference, status, attendee_count from nexus_erp_reservations
+  sql: "select id, reservation_reference, status, attendee_count from reservations
         where status = :status and id != :id order by id desc limit 8"
 }
 
