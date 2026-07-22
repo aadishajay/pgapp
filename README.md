@@ -536,6 +536,30 @@ entity backed by a named query instead of a physical table (the APEX
 "view" pattern). No table created; binding a `form`/`editable_table` to
 it is a sync-time error; reports over it paginate by `OFFSET`.
 
+## Binding an entity to an existing table
+
+`entity "name" from table "existing_table_name" { field ... }` — unlike
+`from query`/`from collection`, this is a normal, **writable** entity
+(`Form`/`EditableTable` both work) whose physical table already exists
+under a name other than the entity's own slug. Use it to point pgapp at
+a table something else created — a legacy table, one owned by another
+tool, or one two apps deliberately share.
+
+Sync-time behavior is different from an entity pgapp owns: the table
+must already exist (a clear error if it doesn't — pgapp never creates
+or alters a `from table` entity's table the way `ensure_data_table`
+does for its own), and there's no cross-app collision guard, since
+pointing two entities at the same existing table is the point, not a
+mistake. Declared fields are still checked against the table's real
+columns (`meta::sync_app`'s usual `verify_data_table` check), and the
+connecting role needs its own Postgres-level privileges on that table
+— pgapp doesn't grant access to a table it didn't create.
+
+The App Builder's entity editor offers this as "existing table" under
+Source, with a picker (`/admin/tables-list`) listing every table
+actually in the app's schema — including ones no entity has claimed
+yet, unlike the field-name suggestions on `/admin/schema-metadata`.
+
 ## Collections
 
 `entity "name" from collection "name" { field ... }` — an APEX-

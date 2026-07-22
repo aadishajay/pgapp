@@ -86,6 +86,19 @@ pub struct EntityDef {
     /// so there's no WHERE clause an app author could omit or bypass.
     /// Mutually exclusive with `source_query` (checked at parse time).
     pub source_collection: Option<String>,
+    /// `entity "x" from table "existing_table_name"` — a normal,
+    /// writable entity (unlike `source_query`/`source_collection`, full
+    /// Form/EditableTable CRUD is allowed) whose physical table already
+    /// exists under this name, declared by something other than this
+    /// entity's own slug. `meta::sync_app` never creates or alters this
+    /// table's structure the way it does for a table it owns — it only
+    /// verifies the declared fields' columns are actually there (same
+    /// `verify_data_table` check every entity gets), and errors at sync
+    /// time if the table doesn't exist at all, since there's nothing
+    /// sensible to create for a binding declared as "already there".
+    /// Mutually exclusive with `source_query`/`source_collection`
+    /// (checked at parse time).
+    pub source_table: Option<String>,
 }
 
 /// An action run automatically, server-side, immediately before a

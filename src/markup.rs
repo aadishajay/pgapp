@@ -24,7 +24,7 @@
 //!
 //! query     := "query" Ident "{" "sql" ":" String "}"
 //!
-//! entity    := "entity" String ("from" ("query" Ident | "collection" String))? "{" field* "}"
+//! entity    := "entity" String ("from" ("query" Ident | "collection" String | "table" String))? "{" field* "}"
 //! field     := "field" Ident ":" Ident ("required")? ("default" Value)?
 //!
 //! page      := "page" String "{" (pageprop | component | query | dynaction)* "}"
@@ -548,11 +548,15 @@ impl Parser {
 
         let mut source_query = None;
         let mut source_collection = None;
+        let mut source_table = None;
         if self.at_keyword("from") {
             self.advance()?;
             if self.at_keyword("query") {
                 self.advance()?;
                 source_query = Some(self.expect_ident()?);
+            } else if self.at_keyword("table") {
+                self.advance()?;
+                source_table = Some(self.expect_string()?);
             } else {
                 self.expect_keyword("collection")?;
                 source_collection = Some(self.expect_string()?);
@@ -583,7 +587,7 @@ impl Parser {
             );
         }
 
-        Ok(EntityDef { name, fields, source_query, source_collection })
+        Ok(EntityDef { name, fields, source_query, source_collection, source_table })
     }
 
     fn parse_field(&mut self) -> Result<FieldDef> {
@@ -2544,6 +2548,31 @@ app "Demo" {
         let t = app.entities.iter().find(|e| e.name == "t").unwrap();
         assert!(t.source_collection.is_none());
         assert!(t.source_query.is_none());
+    }
+
+    #[test]
+    fn parses_an_entity_bound_to_an_existing_table() {
+        let src = r#"
+            app "Demo" {
+                entity "legacy_customers" from table "customers" {
+                    field id: id
+                    field name: text required
+                }
+                entity "t" { field id: id field name: text }
+
+                page "P" {
+                    report "Customers" of legacy_customers { columns: name }
+                }
+            }
+        "#;
+        let app = parse_app(src).unwrap();
+        let bound = app.entities.iter().find(|e| e.name == "legacy_customers").unwrap();
+        assert_eq!(bound.source_table.as_deref(), Some("customers"));
+        assert!(bound.source_query.is_none());
+        assert!(bound.source_collection.is_none());
+
+        let t = app.entities.iter().find(|e| e.name == "t").unwrap();
+        assert!(t.source_table.is_none());
     }
 
     #[test]

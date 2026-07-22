@@ -815,24 +815,48 @@ window.pgapp = (function () {
   var ENTITY_FIELD_TYPES = ["id", "text", "boolean", "integer", "timestamp"];
 
   // Renders the entity structured form into `container`; `data` is
-  // `{name, source_query, source_collection, fields: [{name, type,
-  // required, default}]}` (blank/absent for a brand-new entity — see
-  // `admin_entities_list`'s JSON shape in server.rs). `queries` (from
-  // the same fetch) populates the "from query" dropdown. `columns` (from
-  // `/admin/schema-metadata`, only non-empty for an *existing* physical
-  // entity) suggests real Postgres column names for the field-name
-  // input — a datalist, not a hard dropdown, since adding a field that
-  // doesn't exist in the table yet is normal (the next sync creates it).
-  function renderEntityForm(container, data, queries, columns) {
+  // `{name, source_query, source_collection, source_table, fields:
+  // [{name, type, required, default}]}` (blank/absent for a brand-new
+  // entity — see `admin_entities_list`'s JSON shape in server.rs).
+  // `queries` (from the same fetch) populates the "from query" dropdown.
+  // `columns` (from `/admin/schema-metadata`, only non-empty for an
+  // *existing* physical entity) suggests real Postgres column names for
+  // the field-name input — a datalist, not a hard dropdown, since
+  // adding a field that doesn't exist in the table yet is normal (the
+  // next sync creates it). `tables` (from `/admin/tables-list`) is
+  // every table actually in this app's schema, for the "bind to an
+  // existing table" option — unlike `columns`, this includes tables no
+  // entity has claimed yet, since that's the whole point of binding.
+  function renderEntityForm(container, data, queries, columns, tables) {
     var nameInput = pgappTextInput(data.name);
     if (data.name) nameInput.disabled = true; // renaming isn't supported here — delete + recreate, or the Advanced editor
     pgappFieldRow(container, "Name", nameInput);
 
-    var sourceSel = pgappSelect(
-      ["physical table"].concat((queries || []).map(function (q) { return "from query " + q; })),
-      data.source_query ? "from query " + data.source_query : "physical table"
+    var sourceOptions = ["physical table", "existing table"].concat(
+      (queries || []).map(function (q) { return "from query " + q; })
     );
+    var sourceValue = data.source_table
+      ? "existing table"
+      : data.source_query
+        ? "from query " + data.source_query
+        : "physical table";
+    var sourceSel = pgappSelect(sourceOptions, sourceValue);
     pgappFieldRow(container, "Source", sourceSel);
+
+    var tableWrap = document.createElement("div");
+    var tableInput = pgappDatalistInput(data.source_table || "", tables || []);
+    pgappFieldRow(tableWrap, "Existing table name", tableInput);
+    if (tableInput.__pgappDatalist) tableWrap.appendChild(tableInput.__pgappDatalist);
+    var tableHint = document.createElement("p");
+    tableHint.className = "pgapp-designer-properties-empty";
+    tableHint.textContent = "pgapp never creates or alters this table — it must already exist, with columns matching the fields below.";
+    tableWrap.appendChild(tableHint);
+    container.appendChild(tableWrap);
+    function syncSourceVisibility() {
+      tableWrap.style.display = sourceSel.value === "existing table" ? "" : "none";
+    }
+    sourceSel.addEventListener("change", syncSourceVisibility);
+    syncSourceVisibility();
 
     pgappSectionTitle(container, "Fields");
     if (columns && columns.length) {
@@ -859,7 +883,11 @@ window.pgapp = (function () {
         var name = nameInput.value.trim();
         if (!name) throw "an entity needs a name";
         var fromClause = "";
-        if (sourceSel.value !== "physical table") {
+        if (sourceSel.value === "existing table") {
+          var tableName = tableInput.value.trim();
+          if (!tableName) throw "pick or type the existing table's name";
+          fromClause = " from table " + pgappMarkupStr(tableName);
+        } else if (sourceSel.value !== "physical table") {
           fromClause = " from query " + sourceSel.value.replace(/^from query /, "");
         }
         var rows = fieldsList.getRows().filter(function (r) { return r.name && r.name.trim(); });
@@ -911,16 +939,19 @@ window.pgapp = (function () {
       Promise.all([
         fetch(pgappAdminAppUrl(target, "/entities-list")).then(function (r) { return r.json(); }),
         fetch(pgappAdminAppUrl(target, "/schema-metadata")).then(function (r) { return r.json(); }),
+        fetch(pgappAdminAppUrl(target, "/tables-list")).then(function (r) { return r.json(); }),
       ]).then(function (results) {
           var data = results[0];
           var schema = results[1];
+          var tablesResp = results[2];
           var queries = data.ok ? data.meta.queries : [];
           var columns = [];
           if (existing && existing.name && schema.ok && schema.entities[existing.name]) {
             columns = schema.entities[existing.name].columns.map(function (c) { return c.name; });
           }
+          var tables = tablesResp.ok ? tablesResp.tables : [];
           pgappGenericEditor(title, function (body) {
-            return renderEntityForm(body, existing || {}, queries, columns);
+            return renderEntityForm(body, existing || {}, queries, columns, tables);
           }).then(function (generated) {
             if (generated === null) return;
             var isNew = !existing || !existing.name;
@@ -954,7 +985,13 @@ window.pgapp = (function () {
         var row = document.createElement("div");
         row.className = "pgapp-builder-two-col";
         var label = document.createElement("div");
-        var sourceNote = e.source_query ? " (from query " + e.source_query + ")" : e.source_collection ? " (from collection)" : "";
+        var sourceNote = e.source_query
+          ? " (from query " + e.source_query + ")"
+          : e.source_collection
+            ? " (from collection)"
+            : e.source_table
+              ? " (bound to table " + e.source_table + ")"
+              : "";
         label.textContent = e.name + sourceNote + " — " + e.fields.length + " field(s)";
         row.appendChild(label);
 
@@ -1936,6 +1973,28 @@ window.pgapp = (function () {
     el.type = "text";
     el.className = "pgapp-input";
     el.value = value == null ? "" : value;
+    return el;
+  }
+
+  // A plain text input with `<datalist>` suggestions appended right
+  // after it — same "suggest, don't force" convention as pgappRowList's
+  // own `"datalist"` column type, just usable standalone (a single
+  // field, not part of a row-list). Returns the input; the caller still
+  // has to append the input to the DOM itself, same as pgappTextInput.
+  function pgappDatalistInput(value, options) {
+    var el = pgappTextInput(value);
+    if (options && options.length) {
+      var listId = "pgapp-datalist-" + pgappDatalistCounter++;
+      var dl = document.createElement("datalist");
+      dl.id = listId;
+      options.forEach(function (opt) {
+        var o = document.createElement("option");
+        o.value = opt;
+        dl.appendChild(o);
+      });
+      el.setAttribute("list", listId);
+      el.__pgappDatalist = dl; // caller appends this sibling node too
+    }
     return el;
   }
 

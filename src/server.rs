@@ -291,6 +291,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/:workspace/:app/admin/nav/:idx/delete", post(admin_delete_nav_item))
         .route("/:workspace/:app/admin/settings", get(admin_settings_get).post(admin_settings_set))
         .route("/:workspace/:app/admin/schema-metadata", get(admin_schema_metadata))
+        .route("/:workspace/:app/admin/tables-list", get(admin_tables_list))
         .route("/:workspace/:app/admin/queries/test", post(admin_test_query))
         .route("/:workspace/:app/admin/secrets-list", get(admin_secrets_list))
         .route("/:workspace/:app/admin/secrets/set", post(admin_secrets_set))
@@ -3491,6 +3492,7 @@ async fn admin_entities_list(
                     "name": e.name,
                     "source_query": e.source_query,
                     "source_collection": e.source_collection,
+                    "source_table": e.source_table,
                     "fields": e.fields.iter().map(|f| json!({
                         "name": f.name,
                         "type": f.ty.as_str(),
@@ -4106,6 +4108,40 @@ async fn admin_schema_metadata(
 
     match result {
         Ok(v) => Ok(axum::Json(json!({"ok": true, "entities": v})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// GET /:workspace/:app/admin/tables-list — every table Postgres
+/// actually has in this app's `data_schema`, regardless of whether any
+/// entity has claimed it yet. Unlike `admin_schema_metadata` (which is
+/// scoped to entities that already exist in the markup), this is what
+/// powers the entity editor's "bind to an existing table" picker — an
+/// author needs to see a table *before* declaring the entity that binds
+/// to it.
+async fn admin_tables_list(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let data_schema = entry.data().app.data_schema.clone();
+    let result: anyhow::Result<Vec<String>> = async {
+        let tables: Vec<String> = sqlx::query_scalar(
+            "select table_name from information_schema.tables
+              where table_schema = $1 and table_type = 'BASE TABLE'
+              order by table_name",
+        )
+        .bind(&data_schema)
+        .fetch_all(&state.pool)
+        .await
+        .context("failed to read table list")?;
+        Ok(tables)
+    }
+    .await;
+
+    match result {
+        Ok(tables) => Ok(axum::Json(json!({"ok": true, "tables": tables})).into_response()),
         Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
     }
 }

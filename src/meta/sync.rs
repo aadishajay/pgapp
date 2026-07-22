@@ -108,7 +108,10 @@ pub async fn sync_app(
     // read-only by construction.
     let mut entity_ids: HashMap<String, i32> = HashMap::new();
     for entity in &app.entities {
-        let table_name = slug(&entity.name);
+        // `from table "..."` names the physical table directly — this
+        // entity is binding to something that already exists, not
+        // asking pgapp to own a table of its own naming.
+        let table_name = entity.source_table.clone().unwrap_or_else(|| slug(&entity.name));
 
         if let Some(query_name) = &entity.source_query {
             if !app.queries.iter().any(|q| &q.name == query_name) {
@@ -159,35 +162,63 @@ pub async fn sync_app(
         }
 
         if entity.source_query.is_none() && entity.source_collection.is_none() {
-            // The table name is now just the entity's own slug (no more
-            // app-name prefix — see slug() above), so two different
-            // apps sharing a data_schema (a workspace can hold more
-            // than one) can collide on it where the old
-            // `<app>_<entity>` naming never did. Catch that at sync
-            // time with a clear message rather than letting
-            // ensure_data_table's `create table if not exists` silently
-            // adopt (and potentially misinterpret the columns of) the
-            // other app's table.
-            if let Some(other_app_name) = sqlx::query_scalar::<_, String>(
-                "select a.name from pgapp_meta.entities e
-                 join pgapp_meta.apps a on a.id = e.app_id
-                 where e.table_name = $1 and a.data_schema = $2 and e.app_id != $3
-                 limit 1",
-            )
-            .bind(&table_name)
-            .bind(data_schema)
-            .bind(app_id)
-            .fetch_optional(pool)
-            .await?
-            {
-                anyhow::bail!(
-                    "entity '{}' would use physical table '{table_name}' in schema '{data_schema}', \
-                     but that table is already used by app '{other_app_name}' in the same schema — \
-                     rename one of the two entities to avoid a collision",
-                    entity.name
-                );
+            if entity.source_table.is_some() {
+                // A `from table` entity binds to a table that must
+                // already exist — pgapp never creates or owns it, so
+                // there's no `ensure_data_table` step and no collision
+                // guard (deliberately pointing two entities, even two
+                // apps, at the same existing table is the whole point
+                // of this feature, not a mistake to catch). Checked
+                // explicitly here, before `verify_data_table`, for a
+                // clear "doesn't exist" message rather than that
+                // function's per-column "missing" list, which is
+                // phrased for a table pgapp itself half-manages.
+                let exists: bool = sqlx::query_scalar(
+                    "select exists (select 1 from information_schema.tables where table_schema = $1 and table_name = $2)",
+                )
+                .bind(data_schema)
+                .bind(&table_name)
+                .fetch_one(pool)
+                .await?;
+                if !exists {
+                    anyhow::bail!(
+                        "entity '{}' is bound to table '{data_schema}.{table_name}' via `from table`, \
+                         but that table doesn't exist — pgapp never creates a table for a `from table` \
+                         entity, so create it yourself first (or drop `from table` to let pgapp manage it)",
+                        entity.name
+                    );
+                }
+            } else {
+                // The table name is now just the entity's own slug (no
+                // more app-name prefix — see slug() above), so two
+                // different apps sharing a data_schema (a workspace can
+                // hold more than one) can collide on it where the old
+                // `<app>_<entity>` naming never did. Catch that at
+                // sync time with a clear message rather than letting
+                // ensure_data_table's `create table if not exists`
+                // silently adopt (and potentially misinterpret the
+                // columns of) the other app's table.
+                if let Some(other_app_name) = sqlx::query_scalar::<_, String>(
+                    "select a.name from pgapp_meta.entities e
+                     join pgapp_meta.apps a on a.id = e.app_id
+                     where e.table_name = $1 and a.data_schema = $2 and e.app_id != $3
+                     limit 1",
+                )
+                .bind(&table_name)
+                .bind(data_schema)
+                .bind(app_id)
+                .fetch_optional(pool)
+                .await?
+                {
+                    anyhow::bail!(
+                        "entity '{}' would use physical table '{table_name}' in schema '{data_schema}', \
+                         but that table is already used by app '{other_app_name}' in the same schema — \
+                         rename one of the two entities to avoid a collision",
+                        entity.name
+                    );
+                }
+                ensure_data_table(pool, data_schema, &table_name, entity).await?;
             }
-            ensure_data_table(pool, data_schema, &table_name, entity).await?;
             verify_data_table(pool, data_schema, &table_name, entity).await?;
         }
         entity_ids.insert(entity.name.clone(), entity_id);
