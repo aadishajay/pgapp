@@ -1398,7 +1398,7 @@ window.pgapp = (function () {
         title.textContent = "App Settings";
         slot.appendChild(title);
 
-        var themeSel = pgappSelect(["plain", "shadcn", "vivid", "google_m3", "apex_universal"], s.theme);
+        var themeSel = pgappSelect(["plain", "shadcn", "postgres", "vivid", "google_m3", "apex_universal"], s.theme);
         pgappFieldRow(slot, "Theme", themeSel);
         var iconsSel = pgappSelect(["builtin"], s.icons);
         pgappFieldRow(slot, "Icons", iconsSel);

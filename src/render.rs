@@ -774,6 +774,7 @@ fn layout(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
 <title>{title}</title>
 <link rel="stylesheet" href="/{app_esc}/theme.css">
 {icons_stylesheet}
@@ -818,6 +819,7 @@ fn bare_layout(app: &str, title: &str, body: &str) -> String {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
 <title>{title}</title>
 <link rel="stylesheet" href="/{app}/theme.css">
 </head>
@@ -1868,6 +1870,7 @@ pub fn workspace_landing(apps: &[String]) -> String {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
 <title>pgapp</title>
 </head>
 <body>
