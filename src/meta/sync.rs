@@ -162,6 +162,24 @@ pub async fn sync_app(
         entity_ids.insert(entity.name.clone(), entity_id);
     }
 
+    // An entity removed from the markup (the App Builder's "Delete
+    // Entity", or just hand-edited out) needs its `pgapp_meta.entities`
+    // row gone too, cascading to `.fields` (see db/schema.sql's `on
+    // delete cascade`) — same reasoning as the page cleanup in phase 3
+    // below. Deliberately metadata-only: this never touches the
+    // physical table, matching `ensure_data_table`'s own "pgapp adds
+    // columns but never changes or drops them" rule one level up — a
+    // dropped entity's table is left in place, still holding whatever
+    // data it had, until something else (an operator, or the App
+    // Builder's own physical-table-drop step for an app's *own*
+    // teardown) removes it deliberately.
+    let current_entity_names: Vec<&str> = app.entities.iter().map(|e| e.name.as_str()).collect();
+    sqlx::query("delete from pgapp_meta.entities where app_id = $1 and not (name = any($2))")
+        .bind(app_id)
+        .bind(&current_entity_names)
+        .execute(pool)
+        .await?;
+
     // Phase 2: a bare row for every page, so every page has an id before
     // anything below tries to link to one by name.
     let mut page_ids: HashMap<String, i32> = HashMap::new();

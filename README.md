@@ -1016,13 +1016,16 @@ entity/columns/computed columns/format masks/item types/dynamic-action
 ops/requires/attrs — whatever that kind supports, as typed fields and
 add/remove/reorder row lists, not a raw markup blob), delete it, add/
 rename/delete whole pages, jump straight to a live preview, scaffold
-brand-new apps, and stand up a brand-new workspace from scratch — an
-Oracle-APEX-Page-Designer-flavored way to build without hand-editing
-markup over SSH. Anything structural this picker doesn't have a
-dedicated control for yet (entities, queries, nav, header/footer,
-app-level settings) is still one click away via its "Advanced" link
-into the full-file raw editor every app already has; each component's
-raw markup text is also still reachable one click deeper, via its own
+brand-new apps, stand up a brand-new workspace from scratch, and — via
+each app's own "AppSettings" page — edit its data model
+(entities/fields), named queries, navigation menu, and
+theme/icons/chart_lib/auth settings, plus delete the app or its whole
+workspace outright — an Oracle-APEX-App-Builder-flavored way to build
+without hand-editing markup over SSH. What's still Advanced-editor-only
+(`header`/`footer` chrome, `auth_scheme` role groups, a directory-based
+app's structure) is one click away via the "Advanced" link into the
+full-file raw editor every app already has; each component's raw
+markup text is also still reachable one click deeper, via its own
 "Edit as raw markup" fallback next to the structured editor.
 
 **Available by default, no setup needed.** Every instance auto-provisions
@@ -1225,6 +1228,89 @@ in a static `.context(...)` rather than interpolating it, and
 `ensure_role`/`grant_admin_on_schema` (in `src/control.rs`) are the
 same DDL `pgapp workspace create` itself runs, shared by both so the
 CLI and this web form can't drift.
+
+### Editing an app's data model, queries, navigation, and settings
+
+Every app's "AppSettings" page (reached from a "Data Model, Queries,
+Nav & Settings →" link on the Pages screen) is the App-Builder
+counterpart to APEX's Data workshop, Shared Components, and Edit
+Application Properties, all in one place:
+
+- **Data Model**: add/edit/delete entities and their fields (name,
+  type, required, default) through the same structured field-list
+  editor a Form/Report's own field picker already uses. Adding a
+  physical entity provisions its table on the next sync exactly like a
+  hand-written `entity { }` block would; adding a query-backed one
+  (`from query <name>`) just needs an existing query to point at.
+  Renaming an entity, or changing an existing field's type, isn't
+  supported here — the former needs rewriting every place that entity
+  is referenced (unlike a page, which already has that machinery via
+  `page_reorder::rename_page`; entities don't yet), and the latter is
+  already a hard sync-time error if it doesn't match the physical
+  column, so there's nothing this editor could safely do differently.
+  Deleting an entity removes its `pgapp_meta` bookkeeping only — its
+  physical table (if it has one) is deliberately left in place, same
+  "pgapp adds columns but never changes or drops them" caution
+  `meta::sync_app`'s `ensure_data_table` already applies to fields.
+- **Queries**: add/edit/delete a named query (name + SQL). Deleting
+  one still in use (an entity `from query`, a report/chart/region/LOV
+  bound to it) is rejected at the next sync with the same "unknown
+  query" error a hand-edit would get.
+- **Navigation**: add/edit/delete/reorder the nav menu's *top-level*
+  items (label + target page) with plain ▲▼ buttons, same convention
+  every other repeatable-row editor here uses. A nested submenu item
+  shows up as a single, non-editable row ("edit as raw markup via
+  Advanced") — same "not covered yet" treatment as anything else the
+  structured editors don't have a dedicated control for.
+- **App Settings**: theme/icons/chart_lib pickers plus the `auth { }`
+  on/off toggle — APEX's "Edit Application Properties," scoped
+  deliberately: an `auth_scheme`'s own role list, and which pages
+  `requires:` which role, both stay Advanced-editor-only.
+
+All four are line-splice edits in `src/app_editor.rs`, the entity/
+query/nav/settings counterpart to `src/page_reorder.rs`'s page/
+component splices — same discipline (reusing the real parser's own
+walk to find exact line ranges, so untouched content, including
+comments and formatting, survives every edit unchanged), same routes
+shape (`/:workspace/:app/admin/{entities,queries,nav,settings}...`,
+JSON in/out, validated with `markup::parse_app` before writing, ending
+in a hot `entry.reload()` — no restart).
+
+### Deleting an app or its whole workspace
+
+Two "danger zone" panels at the bottom of "AppSettings", each with the
+same soft/hard choice `pgapp app destroy`/`pgapp workspace destroy`
+already have on the CLI:
+
+- **Delete This App**: soft disables it (reversible — its tables and
+  rows are untouched, and re-registering it later reactivates it,
+  though on an already-running server this takes effect on the next
+  `pgapp run`, not immediately, same as the CLI); hard permanently
+  drops its own data tables, needs the app's own slug typed in to
+  confirm (mirroring the CLI's confirmation), and unregisters it from
+  the live server immediately (`AppState::unregister_app`) so it starts
+  404ing right away rather than erroring against now-missing tables. No
+  superuser connection needed either way — `pgapp_admin` already owns
+  every table it created, in any workspace schema it's been granted
+  into (see `control::hard_delete_app`).
+- **Delete Workspace**: same soft/hard choice, but for the *whole*
+  workspace — every app registered in it, torn down together. Hard
+  delete needs the workspace's own slug typed in, **plus** a
+  superuser-capable Postgres connection string (dropping a schema/role
+  needs privilege beyond what a schema-level grant gives `pgapp_admin`,
+  and an "attach to an existing schema" workspace was never owned by it
+  to begin with) — used once, in memory, to run the `DROP SCHEMA`/`DROP
+  ROLE`, and never persisted, the exact same contract as "New
+  Workspace"'s existing-schema attach (see `control::hard_delete_workspace`).
+
+Both routes reuse `admin_edit_guard` (the same self-edit guard and
+"borrow the target app's own auth" access check as everywhere else in
+the App Builder) — the workspace-destroy route's URL still names an
+`:app` even though the *operation* isn't scoped to one, because the
+global `auth::require_login` middleware resolves every request's auth
+context from the `/{workspace}/{app}/...` shape before any route
+handler runs, so a workspace-wide action still needs *some* registered
+app in the URL to borrow that context from.
 
 ### Migrating from Oracle APEX
 

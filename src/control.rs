@@ -421,6 +421,87 @@ pub async fn create_workspace_existing_schema(pool: &PgPool, slug: &str, schema_
     Ok(())
 }
 
+/// Best-effort `drop <sql>` — logs and swallows a failure rather than
+/// aborting the rest of a teardown over one already-gone object, same
+/// tolerance `main.rs`'s own `try_drop` (CLI) has always had.
+async fn try_drop(pool: &PgPool, sql: &str, what: &str) {
+    if let Err(e) = sqlx::raw_sql(sql).execute(pool).await {
+        println!("pgapp: warning: failed to drop {what}: {e}");
+    }
+}
+
+// ---- teardown ----
+
+/// Hard-deletes one app: drops its own physical entity tables (never a
+/// query-backed entity's, which has none), then its `pgapp_meta.apps`
+/// row (cascading to entities/fields/pages/components/etc. — see
+/// `db/schema.sql`), then its `pgapp_control.apps` row. No
+/// superuser-capable connection is needed — `pgapp_admin` already owns
+/// every table it created via `create table`, in any workspace schema
+/// it's been granted into. Shared by `pgapp app destroy --hard` and the
+/// App Builder's own "Delete App" (hard) button, so the two can't
+/// drift.
+pub async fn hard_delete_app(pool: &PgPool, app: &AppRow) -> Result<()> {
+    let app_id: Option<i32> = sqlx::query_scalar("select id from pgapp_meta.apps where name = $1")
+        .bind(&app.app_name)
+        .fetch_optional(pool)
+        .await
+        .context("failed to look up the app's own pgapp_meta row")?;
+    if let Some(app_id) = app_id {
+        let tables: Vec<String> =
+            sqlx::query_scalar("select table_name from pgapp_meta.entities where app_id = $1 and source_query is null")
+                .bind(app_id)
+                .fetch_all(pool)
+                .await
+                .context("failed to list the app's own data tables")?;
+        for table in tables {
+            try_drop(
+                pool,
+                &format!("drop table if exists {}.{table} cascade", app.data_schema),
+                &format!("table '{}.{table}'", app.data_schema),
+            )
+            .await;
+        }
+        sqlx::query("delete from pgapp_meta.apps where id = $1")
+            .bind(app_id)
+            .execute(pool)
+            .await
+            .context("failed to delete the app's own pgapp_meta row")?;
+    }
+    delete_app_row(pool, app.id).await?;
+    Ok(())
+}
+
+/// Hard-deletes a workspace: drops its schema (cascading to every
+/// table in it, including any app's data tables still inside) and its
+/// owning role (if pgapp created one), then its `pgapp_control.workspaces`
+/// row. Unlike [`hard_delete_app`], this genuinely needs a fresh
+/// superuser-capable connection — a workspace attached via "attach to
+/// an existing schema" was never owned by `pgapp_admin` to begin with,
+/// and `DROP ROLE` on the schema's own owning role (when pgapp created
+/// one) needs privilege beyond a schema-level grant either way.
+/// `grantor_conn` is used only for the `DROP SCHEMA`/`DROP ROLE`
+/// themselves and is never persisted, same "used once, in memory only"
+/// contract as `create_workspace_existing_schema`'s own connection
+/// string.
+pub async fn hard_delete_workspace(pool: &PgPool, ws: &WorkspaceRow, grantor_conn: &str) -> Result<()> {
+    let opts: PgConnectOptions = grantor_conn.parse().context("not a valid Postgres connection string")?;
+    let grantor_pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with(opts)
+        .await
+        .context("failed to connect with the given connection string")?;
+
+    try_drop(&grantor_pool, &format!("drop schema if exists {} cascade", ws.schema_name), &format!("schema '{}'", ws.schema_name)).await;
+    if let Some(role) = &ws.owner_role {
+        try_drop(&grantor_pool, &format!("drop role if exists {role}"), &format!("role '{role}'")).await;
+    }
+    grantor_pool.close().await;
+
+    delete_workspace_row(pool, &ws.slug).await?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

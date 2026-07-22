@@ -549,6 +549,26 @@ window.pgapp = (function () {
     slot.appendChild(a);
   }
 
+  // A link from the Pages screen to the "AppSettings" page (data
+  // model, queries, nav, app settings, teardown) — same "carry
+  // ?target_workspace=&target_app= forward" pattern as
+  // `bindAdvancedSourceLink`, just staying inside the App Builder
+  // itself rather than opening the target app's own raw editor.
+  function bindAppSettingsLink() {
+    var slot = document.getElementById("pgapp-app-settings-link-slot");
+    if (!slot) return;
+    var target = pgappEditTarget();
+    if (!pgappEditTargetValid2(target)) return;
+    slot.textContent = "";
+    slot.classList.add("pgapp-toolbar-slot");
+    var a = document.createElement("a");
+    a.className = "pgapp-link pgapp-btn pgapp-btn-secondary";
+    a.href =
+      "AppSettings?target_workspace=" + encodeURIComponent(target.workspace) + "&target_app=" + encodeURIComponent(target.app);
+    a.textContent = "Data Model, Queries, Nav & Settings →";
+    slot.appendChild(a);
+  }
+
   // The App Builder's breadcrumb: a `text ... attrs (id:
   // "pgapp-context-slot")` placeholder (on both the Pages and EditPage
   // pages) gets filled with which app/page is actually being edited —
@@ -699,6 +719,738 @@ window.pgapp = (function () {
         row.appendChild(btn);
       })(rows[i]);
     }
+  }
+
+  // ---- App Builder: entities, queries, nav, app settings, teardown ----
+  //
+  // The "full data model" layer above pages/components: every panel
+  // below lives on the App Builder's "AppSettings" page (see
+  // examples/app_builder.pgapp), reached with the same
+  // ?target_workspace=&target_app= this page's own URL already carries
+  // (no ?target_page= needed — these are all app-wide, not page-scoped
+  // — see `pgappEditTargetValid2`). Same shape as everything above:
+  // a `text ... attrs (id: "pgapp-...-slot")` placeholder gets replaced
+  // client-side, fetches list data fresh from the server (never the
+  // page's own static HTML), and every mutation POSTs then
+  // `location.reload()`s on success.
+
+  function pgappAdminAppUrl(target, suffix) {
+    return "/" + encodeURIComponent(target.workspace) + "/" + encodeURIComponent(target.app) + "/admin" + suffix;
+  }
+
+  // A minimal modal shell shared by the entity/query/nav-item editors
+  // below — same visual chrome as `pgappStructuredEditor`, but driven
+  // directly by a `renderFn(body)` (returning `{generate}`) instead of
+  // a `PGAPP_KIND_RENDERERS` lookup, since none of these are component
+  // kinds.
+  function pgappGenericEditor(dialogTitle, renderFn) {
+    return new Promise(function (resolve) {
+      pgappEnsureBuilderStyle();
+      var overlay = document.createElement("div");
+      overlay.className = "pgapp-dialog-overlay";
+      var box = document.createElement("div");
+      box.className = "pgapp-dialog-box pgapp-builder-form-box";
+      box.setAttribute("role", "alertdialog");
+      box.setAttribute("aria-modal", "true");
+      var p = document.createElement("p");
+      p.className = "pgapp-dialog-message";
+      p.textContent = dialogTitle;
+      box.appendChild(p);
+
+      var body = document.createElement("div");
+      body.className = "pgapp-builder-form-body";
+      box.appendChild(body);
+      var rendered = renderFn(body);
+
+      var actions = document.createElement("div");
+      actions.className = "pgapp-dialog-actions";
+      var cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "pgapp-btn pgapp-btn-secondary";
+      cancelBtn.textContent = "Cancel";
+      var saveBtn = document.createElement("button");
+      saveBtn.type = "button";
+      saveBtn.className = "pgapp-btn pgapp-btn-primary";
+      saveBtn.textContent = "Save";
+
+      function cleanup() {
+        document.removeEventListener("keydown", onKey);
+        overlay.remove();
+      }
+      function onKey(ev) {
+        if (ev.key === "Escape") {
+          cleanup();
+          resolve(null);
+        }
+      }
+      cancelBtn.addEventListener("click", function () {
+        cleanup();
+        resolve(null);
+      });
+      saveBtn.addEventListener("click", function () {
+        var text;
+        try {
+          text = rendered.generate();
+        } catch (e) {
+          pgappAlert("Couldn't build markup from the form: " + e);
+          return;
+        }
+        cleanup();
+        resolve(text);
+      });
+      actions.appendChild(cancelBtn);
+      actions.appendChild(saveBtn);
+      box.appendChild(actions);
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      document.addEventListener("keydown", onKey);
+    });
+  }
+
+  var ENTITY_FIELD_TYPES = ["id", "text", "boolean", "integer", "timestamp"];
+
+  // Renders the entity structured form into `container`; `data` is
+  // `{name, source_query, source_collection, fields: [{name, type,
+  // required, default}]}` (blank/absent for a brand-new entity — see
+  // `admin_entities_list`'s JSON shape in server.rs). `queries` (from
+  // the same fetch) populates the "from query" dropdown.
+  function renderEntityForm(container, data, queries) {
+    var nameInput = pgappTextInput(data.name);
+    if (data.name) nameInput.disabled = true; // renaming isn't supported here — delete + recreate, or the Advanced editor
+    pgappFieldRow(container, "Name", nameInput);
+
+    var sourceSel = pgappSelect(
+      ["physical table"].concat((queries || []).map(function (q) { return "from query " + q; })),
+      data.source_query ? "from query " + data.source_query : "physical table"
+    );
+    pgappFieldRow(container, "Source", sourceSel);
+
+    pgappSectionTitle(container, "Fields");
+    var fieldsList = pgappRowList(
+      [
+        { key: "name", label: "Name", type: "text" },
+        { key: "type", label: "Type", type: "select", options: ENTITY_FIELD_TYPES },
+        { key: "required", label: "Required (y/n)", type: "text" },
+        { key: "default", label: "Default", type: "text" },
+      ],
+      (data.fields || []).map(function (f) {
+        return { name: f.name, type: f.type, required: f.required ? "y" : "", default: f.default || "" };
+      })
+    );
+    container.appendChild(fieldsList.el);
+
+    return {
+      generate: function () {
+        var name = nameInput.value.trim();
+        if (!name) throw "an entity needs a name";
+        var fromClause = "";
+        if (sourceSel.value !== "physical table") {
+          fromClause = " from query " + sourceSel.value.replace(/^from query /, "");
+        }
+        var lines = ["  entity " + pgappMarkupStr(name) + fromClause + " {"];
+        fieldsList.getRows().forEach(function (r) {
+          if (!r.name || !r.name.trim()) return;
+          var line = "    field " + r.name.trim() + ": " + (r.type || "text");
+          if (r.required && /^y/i.test(r.required.trim())) line += " required";
+          if (r.default && r.default.trim()) line += " default " + r.default.trim();
+          lines.push(line);
+        });
+        lines.push("  }");
+        return lines.join("\n");
+      },
+    };
+  }
+
+  // The "Data Model" panel — a `text ... attrs (id:
+  // "pgapp-entities-slot")` placeholder.
+  function bindEntitiesPanel() {
+    var slot = document.getElementById("pgapp-entities-slot");
+    if (!slot) return;
+    var target = pgappEditTarget();
+    if (!pgappEditTargetValid2(target)) return;
+    pgappEnsureBuilderStyle();
+
+    function render() {
+      fetch(pgappAdminAppUrl(target, "/entities-list"))
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (!data.ok) {
+            slot.textContent = "Couldn't load entities: " + data.error;
+            return;
+          }
+          renderEntitiesList(data.meta.entities, data.meta.queries);
+        })
+        .catch(function (e) {
+          slot.textContent = "pgapp: " + e;
+        });
+    }
+
+    function openEditor(title, existing) {
+      fetch(pgappAdminAppUrl(target, "/entities-list"))
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          var queries = data.ok ? data.meta.queries : [];
+          pgappGenericEditor(title, function (body) {
+            return renderEntityForm(body, existing || {}, queries);
+          }).then(function (generated) {
+            if (generated === null) return;
+            var isNew = !existing || !existing.name;
+            var url = isNew
+              ? pgappAdminAppUrl(target, "/entities/add")
+              : pgappAdminAppUrl(target, "/entities/" + encodeURIComponent(existing.name) + "/edit");
+            fetch(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: "source=" + encodeURIComponent(generated),
+            })
+              .then(function (r) { return r.json(); })
+              .then(function (d) {
+                if (d.ok) location.reload();
+                else pgappAlert("Couldn't save entity: " + d.error);
+              })
+              .catch(function (e) { pgappAlert("pgapp: " + e); });
+          });
+        });
+    }
+
+    function renderEntitiesList(entities, queries) {
+      slot.textContent = "";
+      slot.classList.add("pgapp-panel-card");
+      var title = document.createElement("div");
+      title.className = "pgapp-panel-card-title";
+      title.textContent = "Data Model";
+      slot.appendChild(title);
+
+      entities.forEach(function (e) {
+        var row = document.createElement("div");
+        row.className = "pgapp-builder-two-col";
+        var label = document.createElement("div");
+        var sourceNote = e.source_query ? " (from query " + e.source_query + ")" : e.source_collection ? " (from collection)" : "";
+        label.textContent = e.name + sourceNote + " — " + e.fields.length + " field(s)";
+        row.appendChild(label);
+
+        var btns = document.createElement("div");
+        var editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.className = "pgapp-icon-btn";
+        editBtn.title = "Edit";
+        editBtn.textContent = "✎";
+        editBtn.addEventListener("click", function () {
+          openEditor("Edit entity", e);
+        });
+        var delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
+        delBtn.title = "Delete";
+        delBtn.textContent = "✕";
+        delBtn.addEventListener("click", function () {
+          pgappConfirm('Delete entity "' + e.name + '"? Its physical table (if any) is left in place.').then(function (ok) {
+            if (!ok) return;
+            fetch(pgappAdminAppUrl(target, "/entities/" + encodeURIComponent(e.name) + "/delete"), { method: "POST" })
+              .then(function (r) { return r.json(); })
+              .then(function (d) {
+                if (d.ok) location.reload();
+                else pgappAlert("Couldn't delete entity: " + d.error);
+              })
+              .catch(function (err) { pgappAlert("pgapp: " + err); });
+          });
+        });
+        btns.appendChild(editBtn);
+        btns.appendChild(delBtn);
+        row.appendChild(btns);
+        slot.appendChild(row);
+      });
+
+      var addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.className = "pgapp-btn pgapp-btn-secondary";
+      addBtn.textContent = "+ Add Entity";
+      addBtn.addEventListener("click", function () {
+        openEditor("Add entity", null);
+      });
+      slot.appendChild(addBtn);
+    }
+
+    render();
+  }
+
+  // The "Queries" panel — a `text ... attrs (id: "pgapp-queries-slot")`
+  // placeholder.
+  function bindQueriesPanel() {
+    var slot = document.getElementById("pgapp-queries-slot");
+    if (!slot) return;
+    var target = pgappEditTarget();
+    if (!pgappEditTargetValid2(target)) return;
+    pgappEnsureBuilderStyle();
+
+    function renderForm(container, data) {
+      var nameInput = pgappTextInput(data.name);
+      if (data.name) nameInput.disabled = true;
+      pgappFieldRow(container, "Name", nameInput);
+      var sqlArea = pgappTextArea(data.sql, 5);
+      pgappFieldRow(container, "SQL", sqlArea);
+      return {
+        generate: function () {
+          var name = nameInput.value.trim();
+          if (!name) throw "a query needs a name";
+          return "  query " + name + " {\n    sql: " + pgappMarkupStr(sqlArea.value) + "\n  }";
+        },
+      };
+    }
+
+    function openEditor(title, existing) {
+      pgappGenericEditor(title, function (body) {
+        return renderForm(body, existing || {});
+      }).then(function (generated) {
+        if (generated === null) return;
+        var isNew = !existing || !existing.name;
+        var url = isNew
+          ? pgappAdminAppUrl(target, "/queries/add")
+          : pgappAdminAppUrl(target, "/queries/" + encodeURIComponent(existing.name) + "/edit");
+        fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "source=" + encodeURIComponent(generated),
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d.ok) location.reload();
+            else pgappAlert("Couldn't save query: " + d.error);
+          })
+          .catch(function (e) { pgappAlert("pgapp: " + e); });
+      });
+    }
+
+    fetch(pgappAdminAppUrl(target, "/queries-list"))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) {
+          slot.textContent = "Couldn't load queries: " + data.error;
+          return;
+        }
+        slot.textContent = "";
+        slot.classList.add("pgapp-panel-card");
+        var title = document.createElement("div");
+        title.className = "pgapp-panel-card-title";
+        title.textContent = "Queries";
+        slot.appendChild(title);
+
+        data.meta.queries.forEach(function (q) {
+          var row = document.createElement("div");
+          row.className = "pgapp-builder-two-col";
+          var label = document.createElement("div");
+          label.textContent = q.name;
+          row.appendChild(label);
+
+          var btns = document.createElement("div");
+          var editBtn = document.createElement("button");
+          editBtn.type = "button";
+          editBtn.className = "pgapp-icon-btn";
+          editBtn.title = "Edit";
+          editBtn.textContent = "✎";
+          editBtn.addEventListener("click", function () {
+            openEditor("Edit query", q);
+          });
+          var delBtn = document.createElement("button");
+          delBtn.type = "button";
+          delBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
+          delBtn.title = "Delete";
+          delBtn.textContent = "✕";
+          delBtn.addEventListener("click", function () {
+            pgappConfirm('Delete query "' + q.name + '"?').then(function (ok) {
+              if (!ok) return;
+              fetch(pgappAdminAppUrl(target, "/queries/" + encodeURIComponent(q.name) + "/delete"), { method: "POST" })
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                  if (d.ok) location.reload();
+                  else pgappAlert("Couldn't delete query: " + d.error);
+                })
+                .catch(function (err) { pgappAlert("pgapp: " + err); });
+            });
+          });
+          btns.appendChild(editBtn);
+          btns.appendChild(delBtn);
+          row.appendChild(btns);
+          slot.appendChild(row);
+        });
+
+        var addBtn = document.createElement("button");
+        addBtn.type = "button";
+        addBtn.className = "pgapp-btn pgapp-btn-secondary";
+        addBtn.textContent = "+ Add Query";
+        addBtn.addEventListener("click", function () {
+          openEditor("Add query", null);
+        });
+        slot.appendChild(addBtn);
+      })
+      .catch(function (e) {
+        slot.textContent = "pgapp: " + e;
+      });
+  }
+
+  // The "Navigation" panel — a `text ... attrs (id:
+  // "pgapp-nav-slot")` placeholder. Reordering uses plain ▲▼ buttons
+  // (not drag-and-drop) — nav lists are short enough that this is
+  // simpler to get right than wiring up a second drag surface, same
+  // convention `pgappRowList` already uses everywhere else.
+  function bindNavPanel() {
+    var slot = document.getElementById("pgapp-nav-slot");
+    if (!slot) return;
+    var target = pgappEditTarget();
+    if (!pgappEditTargetValid2(target)) return;
+    pgappEnsureBuilderStyle();
+
+    function renderForm(container, data, pages) {
+      var labelInput = pgappTextInput(data.label);
+      pgappFieldRow(container, "Label", labelInput);
+      var pageSel = pgappSelect(pages || [], data.target_page);
+      pgappFieldRow(container, "Target page", pageSel);
+      return {
+        generate: function () {
+          var label = labelInput.value.trim();
+          if (!label) throw "a nav item needs a label";
+          if (!pageSel.value) throw "a nav item needs a target page";
+          return "    item " + pgappMarkupStr(label) + " -> page " + pageSel.value;
+        },
+      };
+    }
+
+    function reorder(items, fromIdx, toIdx) {
+      var order = items.map(function (_, i) { return i; });
+      var moved = order.splice(fromIdx, 1)[0];
+      order.splice(toIdx, 0, moved);
+      fetch(pgappAdminAppUrl(target, "/nav/reorder"), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "order=" + encodeURIComponent(order.join(",")),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.ok) location.reload();
+          else pgappAlert("Couldn't reorder: " + d.error);
+        })
+        .catch(function (e) { pgappAlert("pgapp: " + e); });
+    }
+
+    function openEditor(title, idx, existing, pages) {
+      pgappGenericEditor(title, function (body) {
+        return renderForm(body, existing || {}, pages);
+      }).then(function (generated) {
+        if (generated === null) return;
+        var isNew = idx === null;
+        var url = isNew ? pgappAdminAppUrl(target, "/nav/add") : pgappAdminAppUrl(target, "/nav/" + idx + "/edit");
+        fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "source=" + encodeURIComponent(generated),
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d.ok) location.reload();
+            else pgappAlert("Couldn't save nav item: " + d.error);
+          })
+          .catch(function (e) { pgappAlert("pgapp: " + e); });
+      });
+    }
+
+    fetch(pgappAdminAppUrl(target, "/nav-list"))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) {
+          slot.textContent = "Couldn't load navigation: " + data.error;
+          return;
+        }
+        var items = data.meta.items;
+        var pages = data.meta.pages;
+        slot.textContent = "";
+        slot.classList.add("pgapp-panel-card");
+        var title = document.createElement("div");
+        title.className = "pgapp-panel-card-title";
+        title.textContent = "Navigation";
+        slot.appendChild(title);
+
+        items.forEach(function (item, idx) {
+          var row = document.createElement("div");
+          row.className = "pgapp-builder-two-col";
+          var label = document.createElement("div");
+          label.textContent = item.submenu
+            ? item.label + " (submenu — edit as raw markup via Advanced)"
+            : item.label + " → " + item.target_page;
+          row.appendChild(label);
+
+          var btns = document.createElement("div");
+          if (idx > 0) {
+            var upBtn = document.createElement("button");
+            upBtn.type = "button";
+            upBtn.className = "pgapp-icon-btn";
+            upBtn.title = "Move up";
+            upBtn.textContent = "▲";
+            upBtn.addEventListener("click", function () { reorder(items, idx, idx - 1); });
+            btns.appendChild(upBtn);
+          }
+          if (idx < items.length - 1) {
+            var downBtn = document.createElement("button");
+            downBtn.type = "button";
+            downBtn.className = "pgapp-icon-btn";
+            downBtn.title = "Move down";
+            downBtn.textContent = "▼";
+            downBtn.addEventListener("click", function () { reorder(items, idx, idx + 1); });
+            btns.appendChild(downBtn);
+          }
+          if (!item.submenu) {
+            var editBtn = document.createElement("button");
+            editBtn.type = "button";
+            editBtn.className = "pgapp-icon-btn";
+            editBtn.title = "Edit";
+            editBtn.textContent = "✎";
+            editBtn.addEventListener("click", function () {
+              openEditor("Edit nav item", idx, item, pages);
+            });
+            btns.appendChild(editBtn);
+          }
+          var delBtn = document.createElement("button");
+          delBtn.type = "button";
+          delBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
+          delBtn.title = "Delete";
+          delBtn.textContent = "✕";
+          delBtn.addEventListener("click", function () {
+            pgappConfirm('Delete nav item "' + item.label + '"?').then(function (ok) {
+              if (!ok) return;
+              fetch(pgappAdminAppUrl(target, "/nav/" + idx + "/delete"), { method: "POST" })
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                  if (d.ok) location.reload();
+                  else pgappAlert("Couldn't delete nav item: " + d.error);
+                })
+                .catch(function (err) { pgappAlert("pgapp: " + err); });
+            });
+          });
+          btns.appendChild(delBtn);
+          row.appendChild(btns);
+          slot.appendChild(row);
+        });
+
+        var addBtn = document.createElement("button");
+        addBtn.type = "button";
+        addBtn.className = "pgapp-btn pgapp-btn-secondary";
+        addBtn.textContent = "+ Add Nav Item";
+        addBtn.addEventListener("click", function () {
+          openEditor("Add nav item", null, null, pages);
+        });
+        slot.appendChild(addBtn);
+      })
+      .catch(function (e) {
+        slot.textContent = "pgapp: " + e;
+      });
+  }
+
+  // The "App Settings" panel — a `text ... attrs (id:
+  // "pgapp-app-settings-slot")` placeholder: theme/icons/chart_lib
+  // selects plus the auth on/off toggle (see `admin_settings_set`'s own
+  // doc for why that's the deliberate scope boundary — auth *schemes*
+  // stay Advanced-editor-only).
+  function bindAppSettingsForm() {
+    var slot = document.getElementById("pgapp-app-settings-slot");
+    if (!slot) return;
+    var target = pgappEditTarget();
+    if (!pgappEditTargetValid2(target)) return;
+
+    fetch(pgappAdminAppUrl(target, "/settings"))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) {
+          slot.textContent = "Couldn't load settings: " + data.error;
+          return;
+        }
+        var s = data.meta;
+        slot.textContent = "";
+        slot.classList.add("pgapp-panel-card");
+        var title = document.createElement("div");
+        title.className = "pgapp-panel-card-title";
+        title.textContent = "App Settings";
+        slot.appendChild(title);
+
+        var themeSel = pgappSelect(["plain", "shadcn", "vivid", "google_m3", "apex_universal"], s.theme);
+        pgappFieldRow(slot, "Theme", themeSel);
+        var iconsSel = pgappSelect(["builtin"], s.icons);
+        pgappFieldRow(slot, "Icons", iconsSel);
+        var chartSel = pgappSelect(["inline"], s.chart_lib);
+        pgappFieldRow(slot, "Chart library", chartSel);
+
+        var authRow = document.createElement("div");
+        authRow.className = "pgapp-field";
+        var authLabel = document.createElement("label");
+        authLabel.className = "pgapp-label";
+        var authCheck = document.createElement("input");
+        authCheck.type = "checkbox";
+        authCheck.checked = !!s.auth_enabled;
+        authLabel.appendChild(authCheck);
+        authLabel.appendChild(document.createTextNode(" Require sign-in (auth enabled)"));
+        authRow.appendChild(authLabel);
+        slot.appendChild(authRow);
+
+        var saveBtn = document.createElement("button");
+        saveBtn.type = "button";
+        saveBtn.className = "pgapp-btn pgapp-btn-primary";
+        saveBtn.textContent = "Save Settings";
+        saveBtn.addEventListener("click", function () {
+          var body =
+            "theme=" + encodeURIComponent(themeSel.value) +
+            "&icons=" + encodeURIComponent(iconsSel.value) +
+            "&chart_lib=" + encodeURIComponent(chartSel.value) +
+            "&auth_enabled=" + (authCheck.checked ? "true" : "false");
+          fetch(pgappAdminAppUrl(target, "/settings"), {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: body,
+          })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+              if (d.ok) location.reload();
+              else pgappAlert("Couldn't save settings: " + d.error);
+            })
+            .catch(function (e) { pgappAlert("pgapp: " + e); });
+        });
+        slot.appendChild(saveBtn);
+      })
+      .catch(function (e) {
+        slot.textContent = "pgapp: " + e;
+      });
+  }
+
+  // The "Delete App" panel — a `text ... attrs (id:
+  // "pgapp-destroy-app-slot")` placeholder: soft (disable) needs only a
+  // confirm; hard (permanently drop its data tables) also needs the
+  // app's own slug typed in, mirroring `pgapp app destroy --hard`'s own
+  // confirmation.
+  function bindDestroyAppPanel() {
+    var slot = document.getElementById("pgapp-destroy-app-slot");
+    if (!slot) return;
+    var target = pgappEditTarget();
+    if (!pgappEditTargetValid2(target)) return;
+
+    slot.textContent = "";
+    slot.classList.add("pgapp-panel-card");
+    var title = document.createElement("div");
+    title.className = "pgapp-panel-card-title";
+    title.textContent = "Delete This App";
+    slot.appendChild(title);
+
+    function post(mode, confirm) {
+      fetch(pgappAdminAppUrl(target, "/destroy"), {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "mode=" + mode + "&confirm=" + encodeURIComponent(confirm || ""),
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.ok) {
+            pgappAlert("App " + (mode === "hard" ? "permanently deleted." : "disabled.")).then(function () {
+              location.href = "/pgapp/builder/Apps";
+            });
+          } else {
+            pgappAlert("Couldn't delete app: " + d.error);
+          }
+        })
+        .catch(function (e) { pgappAlert("pgapp: " + e); });
+    }
+
+    var disableBtn = document.createElement("button");
+    disableBtn.type = "button";
+    disableBtn.className = "pgapp-btn pgapp-btn-secondary";
+    disableBtn.textContent = "Disable (soft)";
+    disableBtn.addEventListener("click", function () {
+      pgappConfirm("Disable this app? Its data is untouched; re-registering it later reactivates it.").then(function (ok) {
+        if (ok) post("soft", "");
+      });
+    });
+    slot.appendChild(disableBtn);
+
+    var deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "pgapp-btn pgapp-btn-destructive";
+    deleteBtn.textContent = "Delete permanently (hard)";
+    deleteBtn.addEventListener("click", function () {
+      pgappPrompt('Type "' + target.app + '" to permanently delete this app and its data tables:', "").then(function (typed) {
+        if (typed === null) return;
+        if (typed !== target.app) {
+          pgappAlert("That didn't match — nothing was deleted.");
+          return;
+        }
+        post("hard", typed);
+      });
+    });
+    slot.appendChild(deleteBtn);
+  }
+
+  // The "Delete Workspace" panel — a `text ... attrs (id:
+  // "pgapp-destroy-workspace-slot")` placeholder. Hard delete also
+  // needs a superuser-capable connection string (used once to drop the
+  // schema/role, never stored — same contract as "New Workspace"'s
+  // existing-schema attach).
+  function bindDestroyWorkspacePanel() {
+    var slot = document.getElementById("pgapp-destroy-workspace-slot");
+    if (!slot) return;
+    var target = pgappEditTarget();
+    if (!pgappEditTargetValid2(target)) return;
+
+    slot.textContent = "";
+    slot.classList.add("pgapp-panel-card");
+    var title = document.createElement("div");
+    title.className = "pgapp-panel-card-title";
+    title.textContent = "Delete Workspace \"" + target.workspace + "\"";
+    slot.appendChild(title);
+
+    var url = pgappAdminAppUrl(target, "/destroy-workspace");
+
+    function post(body) {
+      fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body,
+      })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.ok) {
+            pgappAlert("Workspace " + (d.hard ? "permanently deleted." : "disabled.")).then(function () {
+              location.href = "/pgapp/builder/Apps";
+            });
+          } else {
+            pgappAlert("Couldn't delete workspace: " + d.error);
+          }
+        })
+        .catch(function (e) { pgappAlert("pgapp: " + e); });
+    }
+
+    var disableBtn = document.createElement("button");
+    disableBtn.type = "button";
+    disableBtn.className = "pgapp-btn pgapp-btn-secondary";
+    disableBtn.textContent = "Disable (soft)";
+    disableBtn.addEventListener("click", function () {
+      pgappConfirm("Disable this whole workspace? Its schema and data are untouched.").then(function (ok) {
+        if (ok) post("mode=soft");
+      });
+    });
+    slot.appendChild(disableBtn);
+
+    var deleteBtn = document.createElement("button");
+    deleteBtn.type = "button";
+    deleteBtn.className = "pgapp-btn pgapp-btn-destructive";
+    deleteBtn.textContent = "Delete permanently (hard)";
+    deleteBtn.addEventListener("click", function () {
+      pgappPrompt('Type "' + target.workspace + '" to permanently destroy this workspace:', "").then(function (typed) {
+        if (typed === null) return;
+        if (typed !== target.workspace) {
+          pgappAlert("That didn't match — nothing was deleted.");
+          return;
+        }
+        pgappPrompt("Superuser-capable Postgres connection string (used once to drop the schema/role, never stored):", "").then(function (conn) {
+          if (conn === null || !conn.trim()) return;
+          post("mode=hard&confirm=" + encodeURIComponent(typed) + "&grantor_conn=" + encodeURIComponent(conn.trim()));
+        });
+      });
+    });
+    slot.appendChild(deleteBtn);
   }
 
   // The App Builder's "New App" processing: on every load of the
@@ -949,8 +1701,9 @@ window.pgapp = (function () {
       ".pgapp-builder-rowlist table { width: 100%; margin-bottom: 0.4rem; } " +
       ".pgapp-builder-row-actions { white-space: nowrap; } " +
       ".pgapp-builder-attrs { margin-bottom: 0.5rem; } " +
-      ".pgapp-builder-two-col { display: flex; gap: 0.75rem; } " +
-      ".pgapp-builder-two-col > div { flex: 1; }";
+      ".pgapp-builder-two-col { display: flex; gap: 0.75rem; align-items: center; justify-content: space-between; margin-bottom: 0.4rem; } " +
+      ".pgapp-builder-two-col > div { flex: 1; }" +
+      ".pgapp-danger-zone { border: 1px solid #b91c1c; border-radius: 0.375rem; padding: 0.75rem; margin-top: 1rem; }";
     document.head.appendChild(style);
   }
 
@@ -2687,6 +3440,13 @@ window.pgapp = (function () {
     document.addEventListener("DOMContentLoaded", bindPageCardActions);
     document.addEventListener("DOMContentLoaded", bindNewAppProcessing);
     document.addEventListener("DOMContentLoaded", bindAdvancedSourceLink);
+    document.addEventListener("DOMContentLoaded", bindAppSettingsLink);
+    document.addEventListener("DOMContentLoaded", bindEntitiesPanel);
+    document.addEventListener("DOMContentLoaded", bindQueriesPanel);
+    document.addEventListener("DOMContentLoaded", bindNavPanel);
+    document.addEventListener("DOMContentLoaded", bindAppSettingsForm);
+    document.addEventListener("DOMContentLoaded", bindDestroyAppPanel);
+    document.addEventListener("DOMContentLoaded", bindDestroyWorkspacePanel);
     document.addEventListener("DOMContentLoaded", wireFileBrowseLinks);
   } else {
     bindDynamicActions();
@@ -2702,6 +3462,13 @@ window.pgapp = (function () {
     bindPageCardActions();
     bindNewAppProcessing();
     bindAdvancedSourceLink();
+    bindAppSettingsLink();
+    bindEntitiesPanel();
+    bindQueriesPanel();
+    bindNavPanel();
+    bindAppSettingsForm();
+    bindDestroyAppPanel();
+    bindDestroyWorkspacePanel();
     wireFileBrowseLinks();
   }
 

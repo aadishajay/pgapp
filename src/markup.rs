@@ -1588,6 +1588,247 @@ pub fn app_page_start_lines(source: &str) -> Result<(Vec<(String, u32)>, u32)> {
     Ok((pages, closing_line))
 }
 
+/// The 1-based `[start, end]` (inclusive) line range of every
+/// top-level `entity` block (name, in file order), plus the app's own
+/// closing line — the entity counterpart of `app_page_start_lines`,
+/// for `src/app_editor.rs`'s add/edit/delete-entity splices. Unlike
+/// pages (always the last thing in the file, by convention, in every
+/// example so far), an entity or query can have other blocks — most
+/// commonly a `page` — declared after it, so each block's *own* end
+/// line has to come from where the parser actually finished parsing
+/// it, not from "the next entity's start line" or "the app's own
+/// closing line" (either of which would silently swallow whatever
+/// comes between). Single-file apps only.
+pub fn app_entity_start_lines(source: &str) -> Result<(Vec<(String, u32, u32)>, u32)> {
+    let mut parser = Parser::new(source)?;
+    parser.expect_keyword("app")?;
+    parser.expect_string()?;
+    parser.expect_symbol('{')?;
+    let mut entities = Vec::new();
+    while !parser.at_symbol('}') {
+        if parser.at_keyword("entity") {
+            let line = parser.cur_line();
+            let save = parser.pos;
+            parser.advance()?; // "entity"
+            let name = parser.expect_string()?;
+            parser.pos = save;
+            parser.parse_entity()?;
+            let end_line = parser.lines[parser.pos - 1];
+            entities.push((name, line, end_line));
+        } else if parser.at_keyword("page") {
+            parser.parse_page()?;
+        } else if parser.at_keyword("nav") {
+            parser.parse_nav()?;
+        } else if parser.at_keyword("header") {
+            parser.parse_component_block("header")?;
+        } else if parser.at_keyword("footer") {
+            parser.parse_component_block("footer")?;
+        } else if parser.at_keyword("query") {
+            parser.parse_query()?;
+        } else if parser.at_keyword("auth_scheme") {
+            parser.parse_auth_scheme()?;
+        } else if parser.at_keyword("theme") || parser.at_keyword("icons") || parser.at_keyword("chart_lib") {
+            parser.parse_app_prop()?;
+        } else if parser.at_keyword("auth") {
+            parser.advance()?;
+            parser.expect_symbol('{')?;
+            parser.expect_symbol('}')?;
+        } else {
+            bail!(
+                "expected 'entity', 'page', 'nav', 'header', 'footer', 'query', 'auth', \
+                 'auth_scheme', 'theme', 'icons', or 'chart_lib', found {:?} (line {})",
+                parser.peek(),
+                parser.cur_line()
+            );
+        }
+    }
+    let closing_line = parser.cur_line();
+    Ok((entities, closing_line))
+}
+
+/// The 1-based `[start, end]` (inclusive) line range of every
+/// top-level `query` block (name, in file order), plus the app's own
+/// closing line — the query counterpart of `app_entity_start_lines`,
+/// same reasoning for tracking each block's own end line directly.
+pub fn app_query_start_lines(source: &str) -> Result<(Vec<(String, u32, u32)>, u32)> {
+    let mut parser = Parser::new(source)?;
+    parser.expect_keyword("app")?;
+    parser.expect_string()?;
+    parser.expect_symbol('{')?;
+    let mut queries = Vec::new();
+    while !parser.at_symbol('}') {
+        if parser.at_keyword("entity") {
+            parser.parse_entity()?;
+        } else if parser.at_keyword("page") {
+            parser.parse_page()?;
+        } else if parser.at_keyword("nav") {
+            parser.parse_nav()?;
+        } else if parser.at_keyword("header") {
+            parser.parse_component_block("header")?;
+        } else if parser.at_keyword("footer") {
+            parser.parse_component_block("footer")?;
+        } else if parser.at_keyword("query") {
+            let line = parser.cur_line();
+            let save = parser.pos;
+            parser.advance()?; // "query"
+            let name = parser.expect_ident()?;
+            parser.pos = save;
+            parser.parse_query()?;
+            let end_line = parser.lines[parser.pos - 1];
+            queries.push((name, line, end_line));
+        } else if parser.at_keyword("auth_scheme") {
+            parser.parse_auth_scheme()?;
+        } else if parser.at_keyword("theme") || parser.at_keyword("icons") || parser.at_keyword("chart_lib") {
+            parser.parse_app_prop()?;
+        } else if parser.at_keyword("auth") {
+            parser.advance()?;
+            parser.expect_symbol('{')?;
+            parser.expect_symbol('}')?;
+        } else {
+            bail!(
+                "expected 'entity', 'page', 'nav', 'header', 'footer', 'query', 'auth', \
+                 'auth_scheme', 'theme', 'icons', or 'chart_lib', found {:?} (line {})",
+                parser.peek(),
+                parser.cur_line()
+            );
+        }
+    }
+    let closing_line = parser.cur_line();
+    Ok((queries, closing_line))
+}
+
+/// Where the app's single top-level `nav { }` block is, if it has one:
+/// its own opening (`nav {`) and closing (`}`) 1-based lines, plus the
+/// 1-based start line of each of its *top-level* items only — a nested
+/// submenu item (`item "X" { ... }`) counts as one opaque chunk here,
+/// same "not covered yet, falls back to raw editing" treatment as
+/// anything else the structured editor doesn't have a dedicated control
+/// for. `None` when the app has no `nav` block at all.
+pub struct NavBlockLines {
+    pub open_line: u32,
+    pub item_start_lines: Vec<u32>,
+    pub close_line: u32,
+}
+
+pub fn app_nav_block_lines(source: &str) -> Result<Option<NavBlockLines>> {
+    let mut parser = Parser::new(source)?;
+    parser.expect_keyword("app")?;
+    parser.expect_string()?;
+    parser.expect_symbol('{')?;
+    let mut found = None;
+    while !parser.at_symbol('}') {
+        if parser.at_keyword("entity") {
+            parser.parse_entity()?;
+        } else if parser.at_keyword("page") {
+            parser.parse_page()?;
+        } else if parser.at_keyword("nav") {
+            let open_line = parser.cur_line();
+            parser.advance()?; // "nav"
+            parser.expect_symbol('{')?;
+            let mut item_start_lines = Vec::new();
+            while !parser.at_symbol('}') {
+                item_start_lines.push(parser.cur_line());
+                parser.parse_nav_item()?;
+            }
+            let close_line = parser.cur_line();
+            parser.expect_symbol('}')?;
+            found = Some(NavBlockLines { open_line, item_start_lines, close_line });
+        } else if parser.at_keyword("header") {
+            parser.parse_component_block("header")?;
+        } else if parser.at_keyword("footer") {
+            parser.parse_component_block("footer")?;
+        } else if parser.at_keyword("query") {
+            parser.parse_query()?;
+        } else if parser.at_keyword("auth_scheme") {
+            parser.parse_auth_scheme()?;
+        } else if parser.at_keyword("theme") || parser.at_keyword("icons") || parser.at_keyword("chart_lib") {
+            parser.parse_app_prop()?;
+        } else if parser.at_keyword("auth") {
+            parser.advance()?;
+            parser.expect_symbol('{')?;
+            parser.expect_symbol('}')?;
+        } else {
+            bail!(
+                "expected 'entity', 'page', 'nav', 'header', 'footer', 'query', 'auth', \
+                 'auth_scheme', 'theme', 'icons', or 'chart_lib', found {:?} (line {})",
+                parser.peek(),
+                parser.cur_line()
+            );
+        }
+    }
+    Ok(found)
+}
+
+/// Where each app-level setting currently lives, line-wise (1-based):
+/// the app's own opening (`app "Name" {`) line, each of
+/// `theme`/`icons`/`chart_lib`'s line if declared, and the `auth { }`
+/// block's `[start, end]` (inclusive) if present — everything
+/// `src/app_editor.rs::set_app_settings` needs to replace an existing
+/// property line in place, insert a missing one right after the app's
+/// opening line, or add/remove the `auth` toggle block.
+pub struct AppSettingsLines {
+    pub app_open_line: u32,
+    pub theme_line: Option<u32>,
+    pub icons_line: Option<u32>,
+    pub chart_lib_line: Option<u32>,
+    pub auth_lines: Option<(u32, u32)>,
+}
+
+pub fn app_settings_lines(source: &str) -> Result<AppSettingsLines> {
+    let mut parser = Parser::new(source)?;
+    parser.expect_keyword("app")?;
+    parser.expect_string()?;
+    let app_open_line = parser.cur_line();
+    parser.expect_symbol('{')?;
+
+    let mut theme_line = None;
+    let mut icons_line = None;
+    let mut chart_lib_line = None;
+    let mut auth_lines = None;
+    while !parser.at_symbol('}') {
+        if parser.at_keyword("entity") {
+            parser.parse_entity()?;
+        } else if parser.at_keyword("page") {
+            parser.parse_page()?;
+        } else if parser.at_keyword("nav") {
+            parser.parse_nav()?;
+        } else if parser.at_keyword("header") {
+            parser.parse_component_block("header")?;
+        } else if parser.at_keyword("footer") {
+            parser.parse_component_block("footer")?;
+        } else if parser.at_keyword("query") {
+            parser.parse_query()?;
+        } else if parser.at_keyword("auth_scheme") {
+            parser.parse_auth_scheme()?;
+        } else if parser.at_keyword("theme") {
+            theme_line = Some(parser.cur_line());
+            parser.parse_app_prop()?;
+        } else if parser.at_keyword("icons") {
+            icons_line = Some(parser.cur_line());
+            parser.parse_app_prop()?;
+        } else if parser.at_keyword("chart_lib") {
+            chart_lib_line = Some(parser.cur_line());
+            parser.parse_app_prop()?;
+        } else if parser.at_keyword("auth") {
+            let start = parser.cur_line();
+            parser.advance()?;
+            parser.expect_symbol('{')?;
+            parser.expect_symbol('}')?;
+            let end = parser.lines[parser.pos - 1];
+            auth_lines = Some((start, end));
+        } else {
+            bail!(
+                "expected 'entity', 'page', 'nav', 'header', 'footer', 'query', 'auth', \
+                 'auth_scheme', 'theme', 'icons', or 'chart_lib', found {:?} (line {})",
+                parser.peek(),
+                parser.cur_line()
+            );
+        }
+    }
+
+    Ok(AppSettingsLines { app_open_line, theme_line, icons_line, chart_lib_line, auth_lines })
+}
+
 /// The top-level blocks a non-`app` file in a directory-based app may
 /// contain — see [`parse_fragment`] and `src/source.rs`.
 #[derive(Debug, Default)]
@@ -1671,6 +1912,103 @@ app "Demo" {
         assert_eq!(closing_line, 15);
 
         assert!(page_component_start_lines(src, "Nonexistent").is_err());
+    }
+
+    #[test]
+    fn app_entity_and_query_start_lines_find_every_block() {
+        let src = r#"
+app "Demo" {
+  query recent {
+    sql: "select 1"
+  }
+
+  entity "t" {
+    field id: id
+    field name: text
+  }
+
+  entity "u" from query recent {
+    field id: integer
+  }
+
+  page "P" {
+    text "hi"
+  }
+}
+"#;
+        let (entities, closing) = app_entity_start_lines(src).unwrap();
+        assert_eq!(entities, vec![("t".to_string(), 7, 10), ("u".to_string(), 12, 14)]);
+        assert_eq!(closing, 19);
+
+        let (queries, closing2) = app_query_start_lines(src).unwrap();
+        assert_eq!(queries, vec![("recent".to_string(), 3, 5)]);
+        assert_eq!(closing2, closing);
+    }
+
+    #[test]
+    fn app_nav_block_lines_finds_top_level_items_and_treats_submenus_as_opaque() {
+        let src = r#"
+app "Demo" {
+  nav {
+    item "Home" -> page Home
+    item "More" {
+      item "Sub" -> page Sub
+    }
+    item "About" -> page About
+  }
+
+  page "Home" { text "hi" }
+  page "Sub" { text "hi" }
+  page "About" { text "hi" }
+}
+"#;
+        let nav = app_nav_block_lines(src).unwrap().unwrap();
+        assert_eq!(nav.open_line, 3);
+        assert_eq!(nav.item_start_lines, vec![4, 5, 8]);
+        assert_eq!(nav.close_line, 9);
+    }
+
+    #[test]
+    fn app_nav_block_lines_is_none_without_a_nav_block() {
+        let src = r#"
+app "Demo" {
+  page "P" { text "hi" }
+}
+"#;
+        assert!(app_nav_block_lines(src).unwrap().is_none());
+    }
+
+    #[test]
+    fn app_settings_lines_finds_declared_props_and_auth_block() {
+        let src = r#"
+app "Demo" {
+  theme: shadcn
+  auth {
+  }
+
+  page "P" { text "hi" }
+}
+"#;
+        let s = app_settings_lines(src).unwrap();
+        assert_eq!(s.app_open_line, 2);
+        assert_eq!(s.theme_line, Some(3));
+        assert_eq!(s.icons_line, None);
+        assert_eq!(s.chart_lib_line, None);
+        assert_eq!(s.auth_lines, Some((4, 5)));
+    }
+
+    #[test]
+    fn app_settings_lines_reports_absence_when_nothing_declared() {
+        let src = r#"
+app "Demo" {
+  page "P" { text "hi" }
+}
+"#;
+        let s = app_settings_lines(src).unwrap();
+        assert_eq!(s.theme_line, None);
+        assert_eq!(s.icons_line, None);
+        assert_eq!(s.chart_lib_line, None);
+        assert_eq!(s.auth_lines, None);
     }
 
     #[test]
@@ -1838,7 +2176,7 @@ app "Demo" {
         assert_eq!(app.name, "App Builder");
         assert_eq!(app.queries.len(), 6);
         assert_eq!(app.entities.len(), 5);
-        assert_eq!(app.pages.len(), 5);
+        assert_eq!(app.pages.len(), 6);
 
         let edit_page = app.pages.iter().find(|p| p.name == "EditPage").unwrap();
         assert_eq!(edit_page.components.len(), 5); // text (context), text (preview), text, region, text (add-component)

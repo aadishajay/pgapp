@@ -4,21 +4,26 @@
 # workspace/app slugs "pgapp"/"builder". Lists every OTHER app
 # registered across every workspace in this instance and lets you:
 # reorder/add/edit/delete a page's components (through a real per-
-# attribute property form for every one of the 9 component kinds —
+# attribute property form for every one of the 13 component kinds —
 # title/entity/columns/computed columns/format masks/item types/
 # dynamic-action ops/requires/attrs, as typed fields and add/remove/
 # reorder row lists, not a raw markup blob — see runtime.js's
 # `pgappStructuredEditor`), add/rename/delete whole pages, jump to a
-# live preview, scaffold brand-new apps with zero restart, and (via the
-# "Advanced" link) reach the full-file raw editor for anything
-# structural this picker doesn't have a dedicated control for yet
-# (entities, queries, nav, header/footer, app-level settings) — an
-# Oracle-APEX-Page-Designer-flavored editor, without hand-editing markup
-# over SSH. Also lets you stand up a brand-new workspace from scratch
-# (either a fresh schema+role or an existing schema handed a grant via a
-# one-time superuser connection string — see actions/create_workspace.rs
-# for why that's two action modules, not an entity Form) — the one thing
-# that previously still required the CLI's `pgapp workspace create`.
+# live preview, scaffold brand-new apps with zero restart, stand up a
+# brand-new workspace from scratch (either a fresh schema+role or an
+# existing schema handed a grant via a one-time superuser connection
+# string — see actions/create_workspace.rs for why that's two action
+# modules, not an entity Form), and — via each app's own "AppSettings"
+# page — edit its data model (add/edit/delete entities and their
+# fields), named queries, navigation menu, and theme/icons/chart_lib/
+# auth-on-off settings, plus delete the app or its whole workspace
+# outright (soft-disable or a real hard delete) — an Oracle-APEX-App-
+# Builder-flavored editor covering entities/pages/nav/settings/teardown
+# alike, without hand-editing markup over SSH. What's still Advanced-
+# editor-only: `header`/`footer` chrome, `auth_scheme` role groups, and
+# a directory-based (multi-file) app's structure — genuinely rarer
+# edits that don't earn a dedicated control yet.
+#
 # Every entity here reading pgapp_control.*/pgapp_meta.* is
 # query-backed — no core framework changes were needed for that read
 # side: a named query can reference any schema this connection can see,
@@ -30,22 +35,23 @@
 # The actual file-editing mechanics for an existing app's pages/
 # components — reorder/add/edit/delete a component, add/rename/delete a
 # whole page — live in src/page_reorder.rs and the
-# `/:workspace/:app/admin/pages/...` routes in server.rs, not here; this
-# app is only the picker + the draggable list + a few small forms.
+# `/:workspace/:app/admin/pages/...` routes in server.rs; the same for
+# entities/queries/nav/settings lives in src/app_editor.rs and the
+# `/:workspace/:app/admin/{entities,queries,nav,settings}...` routes.
+# This app is only the picker + the draggable list + a few small forms.
 # Every add/edit still ultimately submits raw markup text to those same
-# routes exactly as before — the structured property form
-# (`pgappStructuredEditor`) only changes what *generates* that text
-# (typed fields client-side, via `RuntimeComponent::to_json` for the
-# prefill and one `pgappGenerate`-style function per kind for the
-# regenerate) and what a user *sees* while editing; page_reorder.rs
-# itself never changed. Every one of those routes also refuses outright
-# if the target is the App Builder itself — belt and suspenders
-# alongside the self-exclusion below, since a URL can always be hand-
-# crafted past whatever a picker itself declines to link to. The
-# "Advanced" link instead points at `/admin/reload` — a full-file raw
-# editor already built into every app (not something the App Builder
-# adds), for whatever neither the structured nor per-component raw-
-# markup ("Edit as raw markup"/"{ }" button) editors cover.
+# routes — the structured property forms only change what *generates*
+# that text (typed fields client-side) and what a user *sees* while
+# editing; the splice modules themselves never touch anything but exact
+# line ranges the real parser identified, so untouched content (including
+# comments and formatting) survives every edit unchanged. Every one of
+# these routes also refuses outright if the target is the App Builder
+# itself — belt and suspenders alongside the self-exclusion below, since
+# a URL can always be hand-crafted past whatever a picker itself
+# declines to link to. The "Advanced" link instead points at
+# `/admin/reload` — a full-file raw editor already built into every app
+# (not something the App Builder adds), for whatever none of the
+# structured editors cover.
 
 app "App Builder" {
   theme: shadcn
@@ -166,6 +172,7 @@ app "App Builder" {
       page_size: 50
     } attrs (class: "pgapp-cards pgapp-page-cards")
     text "Add Page" attrs (id: "pgapp-add-page-slot")
+    text "App Settings" attrs (id: "pgapp-app-settings-link-slot")
     text "Advanced" attrs (id: "pgapp-advanced-source-slot")
   }
 
@@ -177,6 +184,28 @@ app "App Builder" {
       columns: id, kind, ordinal
     } attrs (class: "pgapp-draggable-rows")
     text "Add Component" attrs (id: "pgapp-add-component-slot")
+  }
+
+  # Everything that's app-wide rather than page-scoped: the data model
+  # (entities/fields), named queries, the nav menu, and the theme/
+  # icons/chart_lib/auth toggle — the App Builder's counterpart to
+  # APEX's own "Data" tab, "Shared Components", and "Edit Application
+  # Properties", plus the two teardown panels (delete this app / delete
+  # this whole workspace). Every placeholder here is filled in by
+  # runtime.js (bindEntitiesPanel/bindQueriesPanel/bindNavPanel/
+  # bindAppSettingsForm/bindDestroyAppPanel/bindDestroyWorkspacePanel) —
+  # each fetches its own current state fresh from the target app's admin
+  # routes rather than trusting anything server-rendered here, since
+  # this page itself never touches the target app's data.
+  page "AppSettings" {
+    text "Editing:" attrs (id: "pgapp-context-slot")
+    text "Everything about this app that isn't a page: its data model, named queries, navigation menu, and instance-wide settings — plus, at the bottom, ways to delete this app or its whole workspace outright."
+    text "Data Model" attrs (id: "pgapp-entities-slot")
+    text "Queries" attrs (id: "pgapp-queries-slot")
+    text "Navigation" attrs (id: "pgapp-nav-slot")
+    text "App Settings" attrs (id: "pgapp-app-settings-slot")
+    text "Danger zone" attrs (id: "pgapp-destroy-app-slot", class: "pgapp-danger-zone")
+    text "Danger zone" attrs (id: "pgapp-destroy-workspace-slot", class: "pgapp-danger-zone")
   }
 
   # The history report below reads through a *separate*, query-backed

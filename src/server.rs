@@ -41,7 +41,9 @@ use tower::limit::ConcurrencyLimitLayer;
 use auth::AuthCtx;
 
 use crate::actions::{self, ActionContext};
+use crate::app_editor;
 use crate::chart_lib::ChartLib;
+use crate::control;
 use crate::html::url_encode;
 use crate::icons::Icons;
 use crate::instance;
@@ -192,6 +194,19 @@ impl AppState {
     pub fn register_app(&self, key: String, entry: AppEntry) {
         self.apps.write().unwrap().insert(key, Arc::new(entry));
     }
+
+    /// Removes one app from the live registry outright — the hard-
+    /// delete counterpart to `register_app`. A soft delete (disable)
+    /// deliberately does *not* call this: it only flips
+    /// `pgapp_control.apps.enabled`, the same "takes effect on the next
+    /// `pgapp run`, not this already-running process" behavior the CLI
+    /// has always had. A hard delete is different — its tables are
+    /// really gone, so leaving it servable would mean every request
+    /// against it starts failing on missing tables instead of cleanly
+    /// 404ing.
+    pub fn unregister_app(&self, key: &str) {
+        self.apps.write().unwrap().remove(key);
+    }
 }
 
 /// Caps how many requests this process processes at once, across every
@@ -255,6 +270,25 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/:workspace/:app/admin/pages/:page/app-meta", get(admin_app_meta))
         .route("/:workspace/:app/admin/pages/:page/components/:idx/edit", post(admin_edit_component_source))
         .route("/:workspace/:app/admin/pages/:page/components/:idx/delete", post(admin_delete_component))
+        .route("/:workspace/:app/admin/entities-list", get(admin_entities_list))
+        .route("/:workspace/:app/admin/entities/add", post(admin_add_entity))
+        .route("/:workspace/:app/admin/entities/:name/source", get(admin_entity_source))
+        .route("/:workspace/:app/admin/entities/:name/edit", post(admin_edit_entity))
+        .route("/:workspace/:app/admin/entities/:name/delete", post(admin_delete_entity))
+        .route("/:workspace/:app/admin/queries-list", get(admin_queries_list))
+        .route("/:workspace/:app/admin/queries/add", post(admin_add_query))
+        .route("/:workspace/:app/admin/queries/:name/source", get(admin_query_source))
+        .route("/:workspace/:app/admin/queries/:name/edit", post(admin_edit_query))
+        .route("/:workspace/:app/admin/queries/:name/delete", post(admin_delete_query))
+        .route("/:workspace/:app/admin/nav-list", get(admin_nav_list))
+        .route("/:workspace/:app/admin/nav/add", post(admin_add_nav_item))
+        .route("/:workspace/:app/admin/nav/reorder", post(admin_reorder_nav))
+        .route("/:workspace/:app/admin/nav/:idx/source", get(admin_nav_item_source))
+        .route("/:workspace/:app/admin/nav/:idx/edit", post(admin_edit_nav_item))
+        .route("/:workspace/:app/admin/nav/:idx/delete", post(admin_delete_nav_item))
+        .route("/:workspace/:app/admin/settings", get(admin_settings_get).post(admin_settings_set))
+        .route("/:workspace/:app/admin/destroy", post(admin_destroy_app))
+        .route("/:workspace/:app/admin/destroy-workspace", post(admin_destroy_workspace))
         .route("/pgapp/builder/admin/apps/create-pending", post(admin_create_pending_app))
         .route("/:workspace/:app/:page", get(show))
         .route("/:workspace/:app/:page/region/:query", get(region_fragment))
@@ -3219,6 +3253,706 @@ async fn admin_delete_page(
             Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
             Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("deleted, but reload failed: {e:#}")})).into_response()),
         },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// Re-reads and re-parses the target app's markup file fresh — shared
+/// by every entity/query/nav/settings route below, all of which need
+/// the *current on-disk* file rather than `entry.data()`'s already-
+/// synced `RuntimeApp` (an entity/query with no components referencing
+/// it yet still needs to show up here, same reasoning as
+/// `admin_app_meta`).
+async fn read_markup_text(entry: &AppEntry) -> anyhow::Result<String> {
+    if std::path::Path::new(&entry.markup_path).is_dir() {
+        anyhow::bail!("this app's markup is a directory of files — the App Builder only supports single-file apps right now");
+    }
+    tokio::fs::read_to_string(&entry.markup_path)
+        .await
+        .with_context(|| format!("failed to read '{}'", entry.markup_path))
+}
+
+/// GET /:workspace/:app/admin/entities-list — every entity's name,
+/// field list (name/type/required/default), and query/collection
+/// binding, for the App Builder's "Data Model" panel.
+async fn admin_entities_list(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let result: anyhow::Result<serde_json::Value> = async {
+        let markup_text = read_markup_text(&entry).await?;
+        let app_def = markup::parse_app(&markup_text)?;
+        let entities: Vec<serde_json::Value> = app_def
+            .entities
+            .iter()
+            .map(|e| {
+                json!({
+                    "name": e.name,
+                    "source_query": e.source_query,
+                    "source_collection": e.source_collection,
+                    "fields": e.fields.iter().map(|f| json!({
+                        "name": f.name,
+                        "type": f.ty.as_str(),
+                        "required": f.required,
+                        "default": f.default,
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        Ok(json!({"entities": entities, "queries": app_def.queries.iter().map(|q| q.name.clone()).collect::<Vec<_>>()}))
+    }
+    .await;
+
+    match result {
+        Ok(v) => Ok(axum::Json(json!({"ok": true, "meta": v})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// GET /:workspace/:app/admin/entities/:name/source — entity `name`'s
+/// exact current markup text (see `app_editor::entity_source`).
+async fn admin_entity_source(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, name)): Path<(String, String, String)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let result: anyhow::Result<String> = async {
+        let markup_text = read_markup_text(&entry).await?;
+        app_editor::entity_source(&markup_text, &name)
+    }
+    .await;
+
+    match result {
+        Ok(source) => Ok(axum::Json(json!({"ok": true, "source": source})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/entities/add — `source` is the caller's
+/// raw markup for exactly one new `entity "..." { ... }` block (see
+/// `app_editor::add_entity`), either a plain physical entity or a
+/// `from query <name>`/`from collection "..."` one — the App Builder's
+/// structured field-list editor just *generates* this text, it isn't
+/// constrained to a fixed subset. Validated before writing.
+async fn admin_add_entity(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let new_entity = values.get("source").map(|s| s.as_str()).unwrap_or("").to_string();
+
+    let result: anyhow::Result<()> = async {
+        if new_entity.trim().is_empty() {
+            anyhow::bail!("an entity needs some markup text");
+        }
+        let markup_text = read_markup_text(&entry).await?;
+        let updated = app_editor::add_entity(&markup_text, &new_entity)?;
+        validate_markup(&updated)?;
+        tokio::fs::write(&entry.markup_path, updated)
+            .await
+            .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
+            Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+            Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("added, but reload failed: {e:#}")})).into_response()),
+        },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/entities/:name/edit — replaces entity
+/// `name`'s whole block outright with `source` (see
+/// `app_editor::replace_entity`) — the structured field-list editor's
+/// "Save": add/remove/reorder/retype fields all just regenerate this
+/// one block. A field *removed* here is only ever dropped from
+/// `pgapp_meta` at the next sync, never from the physical table (see
+/// `meta::sync_app`'s own "pgapp adds columns but never changes or
+/// drops them" rule); a field whose *type* changed against an
+/// already-existing column fails at sync time with a clear mismatch
+/// error, same validation every other markup edit already gets.
+async fn admin_edit_entity(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, name)): Path<(String, String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let new_entity = values.get("source").map(|s| s.as_str()).unwrap_or("").to_string();
+
+    let result: anyhow::Result<()> = async {
+        if new_entity.trim().is_empty() {
+            anyhow::bail!("an entity needs some markup text");
+        }
+        let markup_text = read_markup_text(&entry).await?;
+        let updated = app_editor::replace_entity(&markup_text, &name, &new_entity)?;
+        validate_markup(&updated)?;
+        tokio::fs::write(&entry.markup_path, updated)
+            .await
+            .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
+            Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+            Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("edited, but reload failed: {e:#}")})).into_response()),
+        },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/entities/:name/delete — removes entity
+/// `name`'s whole block (see `app_editor::delete_entity`); its physical
+/// table, if it has one, is deliberately left in place — see
+/// `meta::sync_app`'s own entity-cleanup pass for why.
+async fn admin_delete_entity(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, name)): Path<(String, String, String)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+
+    let result: anyhow::Result<()> = async {
+        let markup_text = read_markup_text(&entry).await?;
+        let updated = app_editor::delete_entity(&markup_text, &name)?;
+        validate_markup(&updated)?;
+        tokio::fs::write(&entry.markup_path, updated)
+            .await
+            .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
+            Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+            Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("deleted, but reload failed: {e:#}")})).into_response()),
+        },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// GET /:workspace/:app/admin/queries-list — every app-level named
+/// query's name and SQL text, for the App Builder's "Queries" panel.
+async fn admin_queries_list(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let result: anyhow::Result<serde_json::Value> = async {
+        let markup_text = read_markup_text(&entry).await?;
+        let app_def = markup::parse_app(&markup_text)?;
+        let queries: Vec<serde_json::Value> =
+            app_def.queries.iter().map(|q| json!({"name": q.name, "sql": q.sql})).collect();
+        Ok(json!({"queries": queries}))
+    }
+    .await;
+
+    match result {
+        Ok(v) => Ok(axum::Json(json!({"ok": true, "meta": v})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// GET /:workspace/:app/admin/queries/:name/source — query `name`'s
+/// exact current markup text.
+async fn admin_query_source(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, name)): Path<(String, String, String)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let result: anyhow::Result<String> = async {
+        let markup_text = read_markup_text(&entry).await?;
+        app_editor::query_source(&markup_text, &name)
+    }
+    .await;
+
+    match result {
+        Ok(source) => Ok(axum::Json(json!({"ok": true, "source": source})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/queries/add — `source` is the caller's
+/// raw markup for exactly one new `query <name> { sql: "..." }` block.
+async fn admin_add_query(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let new_query = values.get("source").map(|s| s.as_str()).unwrap_or("").to_string();
+
+    let result: anyhow::Result<()> = async {
+        if new_query.trim().is_empty() {
+            anyhow::bail!("a query needs some markup text");
+        }
+        let markup_text = read_markup_text(&entry).await?;
+        let updated = app_editor::add_query(&markup_text, &new_query)?;
+        validate_markup(&updated)?;
+        tokio::fs::write(&entry.markup_path, updated)
+            .await
+            .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
+            Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+            Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("added, but reload failed: {e:#}")})).into_response()),
+        },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/queries/:name/edit — replaces query
+/// `name`'s whole block outright with `source`.
+async fn admin_edit_query(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, name)): Path<(String, String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let new_query = values.get("source").map(|s| s.as_str()).unwrap_or("").to_string();
+
+    let result: anyhow::Result<()> = async {
+        if new_query.trim().is_empty() {
+            anyhow::bail!("a query needs some markup text");
+        }
+        let markup_text = read_markup_text(&entry).await?;
+        let updated = app_editor::replace_query(&markup_text, &name, &new_query)?;
+        validate_markup(&updated)?;
+        tokio::fs::write(&entry.markup_path, updated)
+            .await
+            .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
+            Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+            Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("edited, but reload failed: {e:#}")})).into_response()),
+        },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/queries/:name/delete — removes query
+/// `name`'s whole block. If anything still references it, the write
+/// is rejected by `validate_markup`'s own parse only when the markup
+/// itself becomes malformed; a *dangling reference* (an entity `from
+/// query`, a report/chart/region bound to it) instead surfaces at the
+/// next sync's own validation, same as deleting a still-referenced
+/// page or entity would.
+async fn admin_delete_query(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, name)): Path<(String, String, String)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+
+    let result: anyhow::Result<()> = async {
+        let markup_text = read_markup_text(&entry).await?;
+        let updated = app_editor::delete_query(&markup_text, &name)?;
+        validate_markup(&updated)?;
+        tokio::fs::write(&entry.markup_path, updated)
+            .await
+            .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
+            Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+            Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("deleted, but reload failed: {e:#}")})).into_response()),
+        },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// GET /:workspace/:app/admin/nav-list — every top-level nav item
+/// (label, target page if a plain link, or a `submenu: true` flag if
+/// it's a nested group — a submenu's own children aren't individually
+/// listed here, same "opaque chunk" treatment as everywhere else in
+/// `app_editor`'s nav functions), for the App Builder's "Navigation"
+/// panel.
+async fn admin_nav_list(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let result: anyhow::Result<serde_json::Value> = async {
+        let markup_text = read_markup_text(&entry).await?;
+        let app_def = markup::parse_app(&markup_text)?;
+        let items: Vec<serde_json::Value> = app_def
+            .nav
+            .iter()
+            .map(|item| {
+                json!({
+                    "label": item.label,
+                    "target_page": item.target_page,
+                    "submenu": !item.children.is_empty(),
+                })
+            })
+            .collect();
+        let page_names: Vec<&str> = app_def.pages.iter().map(|p| p.name.as_str()).collect();
+        Ok(json!({"items": items, "pages": page_names}))
+    }
+    .await;
+
+    match result {
+        Ok(v) => Ok(axum::Json(json!({"ok": true, "meta": v})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// GET /:workspace/:app/admin/nav/:idx/source — top-level nav item
+/// `idx`'s exact current markup text (a submenu's nested children come
+/// along as part of this same chunk — see `app_editor::nav_item_source`).
+async fn admin_nav_item_source(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, idx)): Path<(String, String, usize)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let result: anyhow::Result<String> = async {
+        let markup_text = read_markup_text(&entry).await?;
+        app_editor::nav_item_source(&markup_text, idx)
+    }
+    .await;
+
+    match result {
+        Ok(source) => Ok(axum::Json(json!({"ok": true, "source": source})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/nav/add — `source` is the caller's raw
+/// markup for exactly one new top-level `item "..." -> page <Name>`
+/// (or a submenu block) — creates the app's `nav { }` block itself if
+/// it doesn't have one yet (see `app_editor::add_nav_item`).
+async fn admin_add_nav_item(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let new_item = values.get("source").map(|s| s.as_str()).unwrap_or("").to_string();
+
+    let result: anyhow::Result<()> = async {
+        if new_item.trim().is_empty() {
+            anyhow::bail!("a nav item needs some markup text");
+        }
+        let markup_text = read_markup_text(&entry).await?;
+        let updated = app_editor::add_nav_item(&markup_text, &new_item)?;
+        validate_markup(&updated)?;
+        tokio::fs::write(&entry.markup_path, updated)
+            .await
+            .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
+            Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+            Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("added, but reload failed: {e:#}")})).into_response()),
+        },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/nav/:idx/edit — replaces top-level nav
+/// item `idx` outright with `source`.
+async fn admin_edit_nav_item(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, idx)): Path<(String, String, usize)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let new_item = values.get("source").map(|s| s.as_str()).unwrap_or("").to_string();
+
+    let result: anyhow::Result<()> = async {
+        if new_item.trim().is_empty() {
+            anyhow::bail!("a nav item needs some markup text");
+        }
+        let markup_text = read_markup_text(&entry).await?;
+        let updated = app_editor::replace_nav_item(&markup_text, idx, &new_item)?;
+        validate_markup(&updated)?;
+        tokio::fs::write(&entry.markup_path, updated)
+            .await
+            .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
+            Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+            Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("edited, but reload failed: {e:#}")})).into_response()),
+        },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/nav/:idx/delete — removes top-level nav
+/// item `idx` outright.
+async fn admin_delete_nav_item(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, idx)): Path<(String, String, usize)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+
+    let result: anyhow::Result<()> = async {
+        let markup_text = read_markup_text(&entry).await?;
+        let updated = app_editor::delete_nav_item(&markup_text, idx)?;
+        tokio::fs::write(&entry.markup_path, updated)
+            .await
+            .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
+            Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+            Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("deleted, but reload failed: {e:#}")})).into_response()),
+        },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/nav/reorder — `order` is a
+/// comma-separated permutation of `0..n` (same shape/semantics as
+/// `admin_reorder_page`'s component reorder, applied to the nav's
+/// top-level items instead — see `app_editor::reorder_nav_items`).
+async fn admin_reorder_nav(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let order_str = values.get("order").map(|s| s.as_str()).unwrap_or("");
+
+    let result: anyhow::Result<()> = async {
+        let new_order: Vec<usize> = if order_str.is_empty() {
+            Vec::new()
+        } else {
+            order_str
+                .split(',')
+                .map(|s| s.trim().parse::<usize>().context("bad index in 'order'"))
+                .collect::<anyhow::Result<Vec<usize>>>()?
+        };
+        let markup_text = read_markup_text(&entry).await?;
+        let updated = app_editor::reorder_nav_items(&markup_text, &new_order)?;
+        tokio::fs::write(&entry.markup_path, updated)
+            .await
+            .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
+            Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+            Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("reordered, but reload failed: {e:#}")})).into_response()),
+        },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// GET /:workspace/:app/admin/settings — the app's current
+/// theme/icons/chart_lib/auth-enabled, for the App Builder's "App
+/// Settings" form.
+async fn admin_settings_get(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let result: anyhow::Result<serde_json::Value> = async {
+        let markup_text = read_markup_text(&entry).await?;
+        let app_def = markup::parse_app(&markup_text)?;
+        Ok(json!({
+            "theme": app_def.theme.unwrap_or_else(|| "plain".to_string()),
+            "icons": app_def.icons.unwrap_or_else(|| "builtin".to_string()),
+            "chart_lib": app_def.chart_lib.unwrap_or_else(|| "inline".to_string()),
+            "auth_enabled": app_def.auth,
+        }))
+    }
+    .await;
+
+    match result {
+        Ok(v) => Ok(axum::Json(json!({"ok": true, "meta": v})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/settings — sets theme/icons/chart_lib
+/// and toggles the bare `auth { }` block on or off (see
+/// `app_editor::set_app_settings`) — the App Builder's "Edit
+/// Application Properties" equivalent. Scoped deliberately: an
+/// `auth_scheme`'s own role list, and anything about *which* pages
+/// require which role, both stay Advanced-editor-only — this is just
+/// the instance-wide theme/icons/chart-library pick plus the
+/// authentication on/off switch.
+async fn admin_settings_set(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let theme = values.get("theme").map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or("plain").to_string();
+    let icons = values.get("icons").map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or("builtin").to_string();
+    let chart_lib = values.get("chart_lib").map(|s| s.trim()).filter(|s| !s.is_empty()).unwrap_or("inline").to_string();
+    let auth_enabled = values.get("auth_enabled").map(|s| s == "true" || s == "on").unwrap_or(false);
+
+    let result: anyhow::Result<()> = async {
+        let markup_text = read_markup_text(&entry).await?;
+        let updated = app_editor::set_app_settings(&markup_text, &theme, &icons, &chart_lib, auth_enabled)?;
+        validate_markup(&updated)?;
+        tokio::fs::write(&entry.markup_path, updated)
+            .await
+            .with_context(|| format!("failed to write '{}'", entry.markup_path))?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => match entry.reload(&state.pool, &state.item_types, &state.actions).await {
+            Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+            Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("saved, but reload failed: {e:#}")})).into_response()),
+        },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/destroy — the App Builder's "Delete
+/// App": `mode` is `soft` (disable — reversible, tables/rows
+/// untouched, takes effect on the next `pgapp run`, not this
+/// already-running process — same semantics as `pgapp app destroy
+/// --soft`) or `hard` (permanent — drops its own data tables, needs
+/// `confirm` to equal the app's own slug, mirroring the CLI's
+/// type-the-name confirmation). A hard delete also drops it from the
+/// live registry immediately (`AppState::unregister_app`) so it starts
+/// 404ing right away instead of erroring against now-missing tables.
+/// No superuser connection needed either way — see
+/// `control::hard_delete_app`'s own doc.
+async fn admin_destroy_app(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let hard = values.get("mode").map(|s| s.as_str()) == Some("hard");
+    let confirm = values.get("confirm").map(|s| s.trim()).unwrap_or("");
+
+    let result: anyhow::Result<()> = async {
+        let app_row = control::find_app(&state.pool, &app, Some(&workspace))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no app '{app}' registered in workspace '{workspace}'"))?;
+        if !hard {
+            control::disable(&state.pool, app_row.id).await?;
+            return Ok(());
+        }
+        if confirm != app {
+            anyhow::bail!("type '{app}' to confirm permanently dropping its data tables");
+        }
+        control::hard_delete_app(&state.pool, &app_row).await?;
+        state.unregister_app(&format!("{workspace}/{app}"));
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => Ok(axum::Json(json!({"ok": true, "hard": hard})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/destroy-workspace — the App Builder's
+/// "Delete Workspace": `mode` is `soft` (disable, reversible) or `hard`
+/// (permanent — drops the schema/role, needs `confirm` to equal the
+/// workspace's own slug plus a superuser-capable `grantor_conn`, used
+/// once and never persisted — see `control::hard_delete_workspace`'s
+/// own doc, same contract as "New Workspace"'s existing-schema attach).
+/// `:app` names whichever app is currently on-screen when this is
+/// clicked (the App Builder's own `AppSettings` page) — not because the
+/// *operation* is scoped to that app (it tears down the whole
+/// workspace, every app in it included), but because the global
+/// `auth::require_login` middleware resolves every request's auth
+/// context from exactly this `/{workspace}/{app}/...` shape before any
+/// route handler runs, so a workspace-wide route still needs *some*
+/// registered app in the URL to borrow that context from — same
+/// "everyone's an admin" fallback as every other admin route here.
+/// `admin_edit_guard` both runs that check and refuses outright if
+/// `:app` is the App Builder itself; the explicit workspace-slug check
+/// below is belt-and-suspenders against tearing down the App Builder's
+/// *own* reserved workspace by any other app slug that might ever end
+/// up registered into it.
+async fn admin_destroy_workspace(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    if workspace == instance::APP_BUILDER_WORKSPACE_SLUG {
+        return Err((StatusCode::FORBIDDEN, "the App Builder's own workspace can't be torn down".to_string()));
+    }
+    let hard = values.get("mode").map(|s| s.as_str()) == Some("hard");
+    let confirm = values.get("confirm").map(|s| s.trim()).unwrap_or("");
+    let grantor_conn = values.get("grantor_conn").map(|s| s.as_str()).unwrap_or("");
+
+    let result: anyhow::Result<()> = async {
+        let ws = control::find_workspace(&state.pool, &workspace)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("no workspace '{workspace}' registered"))?;
+        if !hard {
+            control::disable_workspace(&state.pool, &workspace).await?;
+            return Ok(());
+        }
+        if confirm != workspace {
+            anyhow::bail!("type '{workspace}' to confirm permanently destroying this workspace");
+        }
+        if grantor_conn.is_empty() {
+            anyhow::bail!("a superuser-capable connection string is required to drop the schema/role");
+        }
+        let apps = control::list_all(&state.pool).await?;
+        control::hard_delete_workspace(&state.pool, &ws, grantor_conn).await?;
+        for a in apps.iter().filter(|a| a.workspace_slug.as_deref() == Some(workspace.as_str())) {
+            state.unregister_app(&format!("{workspace}/{}", a.slug));
+        }
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => Ok(axum::Json(json!({"ok": true, "hard": hard})).into_response()),
         Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
     }
 }

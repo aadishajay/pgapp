@@ -55,7 +55,7 @@ fn component_bounds(source: &str, page_name: &str) -> Result<(Vec<(usize, usize)
     Ok((bounds, end_of_page_body))
 }
 
-fn join_lines(lines: &[&str], source_ended_in_newline: bool) -> String {
+pub(crate) fn join_lines(lines: &[&str], source_ended_in_newline: bool) -> String {
     let mut out = lines.join("\n");
     if source_ended_in_newline {
         out.push('\n');

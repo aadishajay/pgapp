@@ -7,6 +7,7 @@
 //! server itself runs on startup.
 
 pub mod actions;
+pub mod app_editor;
 pub mod chart_lib;
 pub mod control;
 pub mod dateutil;

@@ -556,18 +556,7 @@ async fn workspace_destroy(slug: &str, hard: bool, soft: bool) -> anyhow::Result
         "Superuser-capable connection string to drop the schema/role (never stored)",
         &format!("postgres://postgres:postgres@{}:{}/{}", inst.host, inst.port, inst.dbname),
     )?;
-    let opts: PgConnectOptions = conn.parse().context("not a valid Postgres connection string")?;
-    let admin_pool = PgPoolOptions::new()
-        .max_connections(2)
-        .connect_with(opts)
-        .await
-        .context("failed to connect with the given credentials")?;
-
-    try_drop(&admin_pool, &format!("drop schema if exists {} cascade", ws.schema_name), &format!("schema '{}'", ws.schema_name)).await;
-    if let Some(role) = &ws.owner_role {
-        try_drop(&admin_pool, &format!("drop role if exists {role}"), &format!("role '{role}'")).await;
-    }
-    control::delete_workspace_row(&pool, slug).await?;
+    control::hard_delete_workspace(&pool, &ws, &conn).await?;
     println!("Workspace '{slug}' destroyed.");
     Ok(())
 }
@@ -849,31 +838,7 @@ async fn app_destroy(slug: &str, workspace_arg: Option<String>, hard: bool, soft
         anyhow::bail!("confirmation did not match — aborted");
     }
 
-    // pgapp_control.apps is keyed by slug; pgapp_meta.apps is keyed by
-    // the app's declared name (app_name, stored at registration time)
-    // — that's the join needed to find its entity table names.
-    let app_id: Option<i32> = sqlx::query_scalar("select id from pgapp_meta.apps where name = $1")
-        .bind(&app.app_name)
-        .fetch_optional(&pool)
-        .await?;
-    if let Some(app_id) = app_id {
-        let tables: Vec<String> = sqlx::query_scalar(
-            "select table_name from pgapp_meta.entities where app_id = $1 and source_query is null",
-        )
-        .bind(app_id)
-        .fetch_all(&pool)
-        .await?;
-        for table in tables {
-            try_drop(
-                &pool,
-                &format!("drop table if exists {}.{table} cascade", app.data_schema),
-                &format!("table '{}.{table}'", app.data_schema),
-            )
-            .await;
-        }
-        sqlx::query("delete from pgapp_meta.apps where id = $1").bind(app_id).execute(&pool).await?;
-    }
-    control::delete_app_row(&pool, app.id).await?;
+    control::hard_delete_app(&pool, &app).await?;
     println!("App '{slug}' destroyed — its data tables are gone.");
     Ok(())
 }
