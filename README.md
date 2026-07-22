@@ -1011,19 +1011,19 @@ still Rust code — those need `cargo build` + restart. Markup changes
 `examples/app_builder.pgapp` is a pgapp app, like any other, that lists
 every app registered across every workspace in the instance and lets
 you drag-and-drop reorder a page's components, add a component of any
-of the 9 kinds through a real per-attribute property form (title/
+of the 13 kinds through a real per-attribute property form (title/
 entity/columns/computed columns/format masks/item types/dynamic-action
 ops/requires/attrs — whatever that kind supports, as typed fields and
 add/remove/reorder row lists, not a raw markup blob), delete it, add/
-rename/delete whole pages, jump straight to a live preview, and
-scaffold brand-new apps — an Oracle-APEX-Page-Designer-flavored way to
-build without hand-editing markup over SSH. Anything structural this
-picker doesn't have a dedicated control for yet (entities, queries,
-nav, header/footer, app-level settings) is still one click away via
-its "Advanced" link into the full-file raw editor every app already
-has; each component's raw markup text is also still reachable one
-click deeper, via its own "Edit as raw markup" fallback next to the
-structured editor.
+rename/delete whole pages, jump straight to a live preview, scaffold
+brand-new apps, and stand up a brand-new workspace from scratch — an
+Oracle-APEX-Page-Designer-flavored way to build without hand-editing
+markup over SSH. Anything structural this picker doesn't have a
+dedicated control for yet (entities, queries, nav, header/footer,
+app-level settings) is still one click away via its "Advanced" link
+into the full-file raw editor every app already has; each component's
+raw markup text is also still reachable one click deeper, via its own
+"Edit as raw markup" fallback next to the structured editor.
 
 **Available by default, no setup needed.** Every instance auto-provisions
 it — at `pgapp instance init` for a new instance, and again (idempotently)
@@ -1064,9 +1064,10 @@ in place — no restart:
   components — see `page_reorder::rename_page`), so nothing dangles.
 - **Delete page**: per-card ✕ button (with a confirm dialog) on the
   Pages screen — POSTs to `.../pages/:page/delete`.
-- **Add component**: pick a kind (all 9: `text`/`report`/`form`/
-  `editable_table`/`chart`/`region`/`action`/`button`/`link` —
-  `dynamic_action` too, via the structured picker only) to open a blank
+- **Add component**: pick a kind (all 13: `text`/`report`/`form`/
+  `editable_table`/`chart`/`region`/`action`/`button`/`link`/
+  `dynamic_content`/`calendar`/`map`/`faceted_search` — `dynamic_action`
+  too, via the structured picker only) to open a blank
   structured form for it (`pgappStructuredEditor` in `runtime.js`) —
   every attribute that kind supports as a real field: scalar text/
   number/select inputs for things like title/entity/query/chart type,
@@ -1191,6 +1192,39 @@ a dedicated route instead. Errors (bad theme, unknown/disabled
 workspace, a slug collision) land in that same row's `status`/`result`
 columns rather than a page-level warning banner, so they stay visible
 on every later load too, not just the one right after submission.
+
+### Creating a brand-new workspace
+
+The "New Workspace" page gives the one remaining piece of `pgapp
+workspace create` a web equivalent: schema name, an optional slug
+(defaults to the schema name), and a choice of either provisioning a
+fresh schema + owning role (a password you set) or attaching to a
+schema that already exists elsewhere in this database (a
+superuser-capable Postgres connection string, pasted in and used
+exactly once to run the grant). Submit and the Workspaces report below
+confirms it landed.
+
+This is `src/actions/create_workspace.rs`'s two action modules, not an
+entity `Form` — deliberately. A plain `action` component only ever
+renders a bare button (`render::action_html`), with nowhere to put
+typed fields, so `NewWorkspaceForm` is a `dynamic_content` module that
+renders a real `<form>` instead, posting to a sibling hidden `action
+... calls create_workspace` component (`attrs (style: "display:
+none")` — it exists only to be that POST target). And unlike "New
+App"'s pending-request-row pattern, `CreateWorkspace` never writes a
+row at all: workspace creation needs no `AppState` hot-registration (a
+workspace isn't itself "served," an app inside one is), so there's no
+architectural reason to persist anything, which matters here
+specifically because the "attach to an existing schema" connection
+string is a superuser-capable secret typed into a web form — it lives
+only in that one request's in-memory parameter map and is never
+written to a database row, logged, or echoed into an error message
+(every `control::create_workspace_*` error wraps the underlying cause
+in a static `.context(...)` rather than interpolating it, and
+`anyhow::Error`'s `Display` only ever shows that outermost message).
+`ensure_role`/`grant_admin_on_schema` (in `src/control.rs`) are the
+same DDL `pgapp workspace create` itself runs, shared by both so the
+CLI and this web form can't drift.
 
 ### Migrating from Oracle APEX
 

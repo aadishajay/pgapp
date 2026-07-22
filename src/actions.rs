@@ -27,6 +27,7 @@ mod clear_session_state;
 /// dedicated create-app route can call it directly, `AppState` access
 /// an action module doesn't have.
 pub mod create_app;
+mod create_workspace;
 mod http_request;
 mod log_values;
 mod run_query;
@@ -93,6 +94,8 @@ pub fn registry() -> Registry {
         Box::new(send_email::SendEmail),
         Box::new(set_session_state::SetSessionState),
         Box::new(clear_session_state::ClearSessionState),
+        Box::new(create_workspace::NewWorkspaceForm),
+        Box::new(create_workspace::CreateWorkspace),
     ];
     modules.into_iter().map(|m| (m.name(), m)).collect()
 }

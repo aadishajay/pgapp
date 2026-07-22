@@ -2606,6 +2606,16 @@ async fn admin_reload_page(
     Path((workspace, app)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
 ) -> Result<Html<String>, AppError> {
+    // Same belt-and-suspenders reasoning as `admin_edit_guard`/
+    // `admin_reorder_page`: this route predates the App Builder and
+    // has no auth of its own when the target app declares no `auth {
+    // }` block (see `require_reload_access`) — the App Builder itself
+    // declares none, so without this check anyone who knows/guesses
+    // this URL could view and overwrite its markup file directly,
+    // bypassing every other App-Builder-specific guard.
+    if workspace == instance::APP_BUILDER_WORKSPACE_SLUG && app == instance::APP_BUILDER_APP_SLUG {
+        return Err((StatusCode::FORBIDDEN, "the App Builder can't edit itself".to_string()));
+    }
     let app = format!("{workspace}/{app}");
     let entry = state.app_or_404(&app)?;
     let data = entry.data();
@@ -2645,6 +2655,10 @@ async fn admin_reload(
     Path((workspace, app)): Path<(String, String)>,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    // See `admin_reload_page`'s identical check just above it.
+    if workspace == instance::APP_BUILDER_WORKSPACE_SLUG && app == instance::APP_BUILDER_APP_SLUG {
+        return Err((StatusCode::FORBIDDEN, "the App Builder can't edit itself".to_string()));
+    }
     let app = format!("{workspace}/{app}");
     let entry = state.app_or_404(&app)?;
     {

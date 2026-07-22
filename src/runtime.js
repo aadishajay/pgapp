@@ -742,6 +742,10 @@ window.pgapp = (function () {
     link: '    link "Go" -> page <PageName>',
     button: '    button "Go" -> page <PageName>',
     dynamic_action: '    on change of <item> {\n      show <other_item>\n    }',
+    dynamic_content: '    dynamic_content "New Dynamic Content" calls <action_name>',
+    calendar: '    calendar "New Calendar" of <entity_name> {\n      date: <date_field>\n      title: <title_field>\n    }',
+    map: '    map "New Map" of <entity_name> {\n      lat: <lat_field>\n      lng: <lng_field>\n      title: <title_field>\n    }',
+    faceted_search: '    faceted_search "New Faceted Search" of <entity_name> {\n      facet <column> as checkbox_list\n    }',
   };
 
   // The App Builder's "Add Component" panel: a `text ... attrs (id:
@@ -1797,6 +1801,130 @@ window.pgapp = (function () {
             else if (r.opSel.value === "set") lines.push("      set " + target + " to " + pgappMarkupStr(r.extraInput.value));
           });
           lines.push("    }");
+          return lines.join("\n");
+        },
+      };
+    },
+
+    dynamic_content: function (container, data, meta) {
+      var labelInput = pgappTextInput(data.label);
+      pgappFieldRow(container, "Label", labelInput);
+      var nameSel = pgappSelect(meta.actions, data.name);
+      pgappFieldRow(container, "Calls", nameSel);
+      var configGen = pgappConfigEditor(container, data.config || {});
+      var requiresGen = pgappRequiresEditor(container, data.requires, meta.auth_schemes);
+      var attrsGen = pgappAttrsEditor(container, data.html);
+      return {
+        generate: function () {
+          return (
+            "    dynamic_content " +
+            pgappMarkupStr(labelInput.value) +
+            " calls " +
+            nameSel.value +
+            configGen() +
+            requiresGen() +
+            attrsGen()
+          );
+        },
+      };
+    },
+
+    calendar: function (container, data, meta) {
+      var titleInput = pgappTextInput(data.title);
+      pgappFieldRow(container, "Title", titleInput);
+      var entitySel = pgappSelect(pgappEntityNames(meta), data.entity);
+      pgappFieldRow(container, "Of entity", entitySel);
+      var entityFields = data.entity_fields && data.entity_fields.length > 0 ? data.entity_fields : pgappEntityFields(meta, entitySel.value);
+      var fieldNames = entityFields.map(function (f) {
+        return f.name;
+      });
+      var dateSel = pgappSelect(fieldNames, data.date_field);
+      pgappFieldRow(container, "Date field", dateSel);
+      var titleFieldSel = pgappSelect(fieldNames, data.title_field);
+      pgappFieldRow(container, "Title field", titleFieldSel);
+      var linkPageSel = pgappSelect(["(none)"].concat(meta.pages || []), data.link_page || "(none)");
+      pgappFieldRow(container, "Link to page (optional)", linkPageSel);
+      var requiresGen = pgappRequiresEditor(container, data.requires, meta.auth_schemes);
+      var attrsGen = pgappAttrsEditor(container, data.html);
+      return {
+        generate: function () {
+          var lines = [];
+          lines.push("    calendar " + pgappMarkupStr(titleInput.value) + " of " + entitySel.value + " {");
+          lines.push("      date: " + dateSel.value);
+          lines.push("      title: " + titleFieldSel.value);
+          if (linkPageSel.value !== "(none)") lines.push("      link: page " + linkPageSel.value);
+          lines.push("    }" + requiresGen() + attrsGen());
+          return lines.join("\n");
+        },
+      };
+    },
+
+    map: function (container, data, meta) {
+      var titleInput = pgappTextInput(data.title);
+      pgappFieldRow(container, "Title", titleInput);
+      var entitySel = pgappSelect(pgappEntityNames(meta), data.entity);
+      pgappFieldRow(container, "Of entity", entitySel);
+      var entityFields = data.entity_fields && data.entity_fields.length > 0 ? data.entity_fields : pgappEntityFields(meta, entitySel.value);
+      var fieldNames = entityFields.map(function (f) {
+        return f.name;
+      });
+      var latSel = pgappSelect(fieldNames, data.lat_field);
+      pgappFieldRow(container, "Latitude field", latSel);
+      var lngSel = pgappSelect(fieldNames, data.lng_field);
+      pgappFieldRow(container, "Longitude field", lngSel);
+      var titleFieldSel = pgappSelect(fieldNames, data.title_field);
+      pgappFieldRow(container, "Title field", titleFieldSel);
+      var linkPageSel = pgappSelect(["(none)"].concat(meta.pages || []), data.link_page || "(none)");
+      pgappFieldRow(container, "Link to page (optional)", linkPageSel);
+      var requiresGen = pgappRequiresEditor(container, data.requires, meta.auth_schemes);
+      var attrsGen = pgappAttrsEditor(container, data.html);
+      return {
+        generate: function () {
+          var lines = [];
+          lines.push("    map " + pgappMarkupStr(titleInput.value) + " of " + entitySel.value + " {");
+          lines.push("      lat: " + latSel.value);
+          lines.push("      lng: " + lngSel.value);
+          lines.push("      title: " + titleFieldSel.value);
+          if (linkPageSel.value !== "(none)") lines.push("      link: page " + linkPageSel.value);
+          lines.push("    }" + requiresGen() + attrsGen());
+          return lines.join("\n");
+        },
+      };
+    },
+
+    faceted_search: function (container, data, meta) {
+      var titleInput = pgappTextInput(data.title);
+      pgappFieldRow(container, "Title", titleInput);
+      var entitySel = pgappSelect(pgappEntityNames(meta), data.entity);
+      pgappFieldRow(container, "Of entity", entitySel);
+      var entityFields = data.entity_fields && data.entity_fields.length > 0 ? data.entity_fields : pgappEntityFields(meta, entitySel.value);
+      var fieldNames = entityFields.map(function (f) {
+        return f.name;
+      });
+
+      pgappSectionTitle(container, "Facets (the sibling Report bound to the same entity gets filtered by these)");
+      var facetsList = pgappRowList(
+        [
+          { key: "column", label: "Column", type: "select", options: fieldNames },
+          { key: "kind", label: "Kind", type: "select", options: ["checkbox_list", "range", "date_range"] },
+        ],
+        (data.facets || []).map(function (f) {
+          return { column: f.column, kind: f.kind };
+        })
+      );
+      container.appendChild(facetsList.el);
+
+      var requiresGen = pgappRequiresEditor(container, data.requires, meta.auth_schemes);
+      var attrsGen = pgappAttrsEditor(container, data.html);
+      return {
+        generate: function () {
+          var lines = [];
+          lines.push("    faceted_search " + pgappMarkupStr(titleInput.value) + " of " + entitySel.value + " {");
+          facetsList.getRows().forEach(function (r) {
+            if (!r.column || !r.column.trim()) return;
+            lines.push("      facet " + r.column.trim() + " as " + r.kind);
+          });
+          lines.push("    }" + requiresGen() + attrsGen());
           return lines.join("\n");
         },
       };

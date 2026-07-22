@@ -171,62 +171,9 @@ async fn try_drop(pool: &PgPool, sql: &str, what: &str) {
     }
 }
 
-/// Creates (or, if it already exists, re-passwords) a Postgres login
-/// role — used both for `pgapp_admin` itself and for a new workspace's
-/// own schema-owning role. `role` must already be validated (see
-/// `instance::valid_identifier`); Postgres has no bind-parameter form
-/// for identifiers or for the PASSWORD clause's literal.
-async fn ensure_role(pool: &PgPool, role: &str, password: &str) -> anyhow::Result<()> {
-    if !instance::valid_identifier(role) {
-        anyhow::bail!("'{role}' is not a valid role name");
-    }
-    let exists: bool = sqlx::query_scalar("select exists(select 1 from pg_roles where rolname = $1)")
-        .bind(role)
-        .fetch_one(pool)
-        .await?;
-    let escaped = password.replace('\'', "''");
-    if exists {
-        sqlx::raw_sql(&format!("alter role {role} password '{escaped}'"))
-            .execute(pool)
-            .await
-            .with_context(|| format!("failed to update role '{role}'"))?;
-    } else {
-        sqlx::raw_sql(&format!("create role {role} login password '{escaped}'"))
-            .execute(pool)
-            .await
-            .with_context(|| format!("failed to create role '{role}'"))?;
-    }
-    Ok(())
-}
-
-/// Grants pgapp_admin everything it needs to operate inside `schema`:
-/// USAGE/CREATE on the schema itself, plus full privileges on whatever
-/// tables/sequences already live there — schema-level GRANT alone
-/// doesn't reach pre-existing objects (e.g. the pgapp_meta/pgapp_control
-/// tables `ensure_schema` just created as the bootstrap role, or
-/// whatever an "existing schema" workspace already had). The default-
-/// privileges line covers the bootstrap role creating more tables here
-/// later (a future `ensure_schema` migration) without needing another
-/// manual grant.
-async fn grant_admin_on_schema(pool: &PgPool, schema: &str) -> anyhow::Result<()> {
-    if !instance::valid_identifier(schema) {
-        anyhow::bail!("'{schema}' is not a valid schema name");
-    }
-    let role = instance::ADMIN_ROLE;
-    for sql in [
-        format!("grant usage, create on schema {schema} to {role}"),
-        format!("grant all privileges on all tables in schema {schema} to {role}"),
-        format!("grant all privileges on all sequences in schema {schema} to {role}"),
-        format!("alter default privileges in schema {schema} grant all on tables to {role}"),
-        format!("alter default privileges in schema {schema} grant all on sequences to {role}"),
-    ] {
-        sqlx::raw_sql(&sql)
-            .execute(pool)
-            .await
-            .with_context(|| format!("failed to grant {role} access to schema '{schema}'"))?;
-    }
-    Ok(())
-}
+// `ensure_role`/`grant_admin_on_schema` live in `control.rs` now,
+// shared with the App Builder's "New Workspace" web form
+// (`actions::create_workspace`) — see their doc comments there.
 
 /// Connects `opts` and, if the target database doesn't exist yet
 /// (Postgres error 3D000), creates it via the same host/credentials
@@ -297,7 +244,7 @@ async fn provision_app_builder(pool: &PgPool) -> anyhow::Result<()> {
         .execute(pool)
         .await
         .with_context(|| format!("failed to create '{APP_BUILDER_SCHEMA}' schema"))?;
-    grant_admin_on_schema(pool, APP_BUILDER_SCHEMA).await?;
+    control::grant_admin_on_schema(pool, APP_BUILDER_SCHEMA).await?;
 
     let ws_id = control::register_workspace(pool, instance::APP_BUILDER_WORKSPACE_SLUG, APP_BUILDER_SCHEMA, None)
         .await
@@ -345,7 +292,7 @@ async fn instance_init() -> anyhow::Result<()> {
     let pool = connect_with_auto_create(opts.clone()).await?;
 
     let admin_password = scaffold::prompt_required(&format!("Password to set for the new '{}' Postgres role", instance::ADMIN_ROLE))?;
-    ensure_role(&pool, instance::ADMIN_ROLE, &admin_password).await?;
+    control::ensure_role(&pool, instance::ADMIN_ROLE, &admin_password).await?;
     // CREATEROLE so `pgapp workspace create`'s "new schema" path can
     // provision that workspace's own owning role day-to-day, without
     // needing a fresh superuser connection for a perfectly routine
@@ -370,7 +317,7 @@ async fn instance_init() -> anyhow::Result<()> {
     // own schema (`pgapp workspace create`) — there's no workspace-less
     // global schema to grant access to.
     for schema in ["pgapp_meta", "pgapp_control"] {
-        grant_admin_on_schema(&pool, schema).await?;
+        control::grant_admin_on_schema(&pool, schema).await?;
     }
 
     let cli_password = scaffold::prompt_required("Set a local pgapp CLI admin password (gates future instance/workspace/app commands)")?;
@@ -527,9 +474,6 @@ async fn workspace_create(schema_arg: Option<String>, slug_arg: Option<String>, 
     if !instance::valid_identifier(&slug) {
         anyhow::bail!("'{slug}' must start with a letter/underscore and contain only letters, digits, underscores");
     }
-    if control::find_workspace(&pool, &slug).await?.is_some() {
-        anyhow::bail!("workspace '{slug}' already exists");
-    }
 
     // pg_namespace, not information_schema.schemata: the latter only
     // lists schemas the connecting role already has some privilege
@@ -549,41 +493,28 @@ async fn workspace_create(schema_arg: Option<String>, slug_arg: Option<String>, 
             // pgapp_admin has no privileges of its own on a schema it
             // didn't create — granting them requires whoever *does*
             // own/administer that schema, supplied fresh here (never
-            // stored), the same as every other elevated operation.
+            // stored), the same as every other elevated operation. See
+            // `control::create_workspace_existing_schema`'s doc for the
+            // shared implementation (also used by the App Builder's
+            // "New Workspace" web form).
             let conn = scaffold::prompt(
                 &format!("A connection that can GRANT on schema '{schema_name}' (never stored)"),
                 &format!("postgres://postgres:postgres@{}:{}/{}", inst.host, inst.port, inst.dbname),
             )?;
-            let opts: PgConnectOptions = conn.parse().context("not a valid Postgres connection string")?;
-            let grantor_pool = PgPoolOptions::new()
-                .max_connections(2)
-                .connect_with(opts)
-                .await
-                .context("failed to connect with the given credentials")?;
-            grant_admin_on_schema(&grantor_pool, &schema_name).await?;
+            control::create_workspace_existing_schema(&pool, &slug, &schema_name, &conn).await?;
+        } else {
+            if control::find_workspace(&pool, &slug).await?.is_some() {
+                anyhow::bail!("workspace '{slug}' already exists");
+            }
+            control::register_workspace(&pool, &slug, &schema_name, None).await?;
         }
-        control::register_workspace(&pool, &slug, &schema_name, None).await?;
         println!("Workspace '{slug}' registered against existing schema '{schema_name}'.");
     } else {
         let password = match password_arg {
             Some(p) => p,
             None => scaffold::prompt_required(&format!("Password for the new schema-owning role '{schema_name}'"))?,
         };
-        ensure_role(&pool, &schema_name, &password).await?;
-        // CREATE SCHEMA ... AUTHORIZATION <role> requires being able to
-        // SET ROLE to it (Postgres won't let you authorize a schema to
-        // a role you aren't a member of) — pgapp_admin needs membership
-        // in the workspace role it just created before it can do this.
-        sqlx::raw_sql(&format!("grant {schema_name} to {}", instance::ADMIN_ROLE))
-            .execute(&pool)
-            .await
-            .with_context(|| format!("failed to grant membership in '{schema_name}' to {}", instance::ADMIN_ROLE))?;
-        sqlx::raw_sql(&format!("create schema if not exists {schema_name} authorization {schema_name}"))
-            .execute(&pool)
-            .await
-            .with_context(|| format!("failed to create schema '{schema_name}'"))?;
-        grant_admin_on_schema(&pool, &schema_name).await?;
-        control::register_workspace(&pool, &slug, &schema_name, Some(&schema_name)).await?;
+        control::create_workspace_new_schema(&pool, &slug, &schema_name, &password).await?;
         println!("Workspace '{slug}' created with new schema '{schema_name}' and its own owning role.");
     }
     Ok(())

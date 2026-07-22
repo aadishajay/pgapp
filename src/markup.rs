@@ -1836,9 +1836,9 @@ app "Demo" {
         let src = include_str!("../examples/app_builder.pgapp");
         let app = parse_app(src).unwrap();
         assert_eq!(app.name, "App Builder");
-        assert_eq!(app.queries.len(), 5);
-        assert_eq!(app.entities.len(), 4);
-        assert_eq!(app.pages.len(), 4);
+        assert_eq!(app.queries.len(), 6);
+        assert_eq!(app.entities.len(), 5);
+        assert_eq!(app.pages.len(), 5);
 
         let edit_page = app.pages.iter().find(|p| p.name == "EditPage").unwrap();
         assert_eq!(edit_page.components.len(), 5); // text (context), text (preview), text, region, text (add-component)

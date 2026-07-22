@@ -14,7 +14,12 @@
 # structural this picker doesn't have a dedicated control for yet
 # (entities, queries, nav, header/footer, app-level settings) — an
 # Oracle-APEX-Page-Designer-flavored editor, without hand-editing markup
-# over SSH. Every entity here reading pgapp_control.*/pgapp_meta.* is
+# over SSH. Also lets you stand up a brand-new workspace from scratch
+# (either a fresh schema+role or an existing schema handed a grant via a
+# one-time superuser connection string — see actions/create_workspace.rs
+# for why that's two action modules, not an entity Form) — the one thing
+# that previously still required the CLI's `pgapp workspace create`.
+# Every entity here reading pgapp_control.*/pgapp_meta.* is
 # query-backed — no core framework changes were needed for that read
 # side: a named query can reference any schema this connection can see,
 # and the shared pgapp_admin pool this app runs through already can. Its
@@ -48,6 +53,7 @@ app "App Builder" {
   nav {
     item "Apps" -> page Apps
     item "New App" -> page NewApp
+    item "New Workspace" -> page NewWorkspace
   }
 
   # Excludes itself (workspace slug "pgapp", app slug "builder") — the
@@ -126,6 +132,22 @@ app "App Builder" {
     sql: "select id, kind, ordinal from pgapp_meta.components where page_id = :id order by ordinal"
   }
 
+  # Excludes the App Builder's own reserved workspace, same rule as
+  # workspaces_lov above — read-only, just for at-a-glance confirmation
+  # after a create_workspace call.
+  query workspaces_list {
+    sql: "select slug, schema_name, coalesce(owner_role, '(none)') as owner_role
+            from pgapp_control.workspaces
+           where enabled and slug <> 'pgapp'
+           order by slug"
+  }
+
+  entity "workspaces_list" from query workspaces_list {
+    field slug: text
+    field schema_name: text
+    field owner_role: text
+  }
+
   page "Apps" {
     text "Every app registered in this instance. Pick one to edit its pages."
     report "Apps" of apps_list {
@@ -192,5 +214,24 @@ app "App Builder" {
       columns: app_name, workspace_slug, theme, status, result
       page_size: 10
     } attrs (id: "pgapp-new-app-requests")
+  }
+
+  # The form and its submit target are two separate components on
+  # purpose (see actions/create_workspace.rs's own doc): a dynamic_content
+  # module renders the real HTML form here (index 1) since only
+  # dynamic_content — not action — can carry typed inputs, and it POSTs
+  # to the hidden action component (index 2), which is what actually
+  # calls create_workspace_new_schema/create_workspace_existing_schema.
+  # The connection string typed into the "attach to an existing schema"
+  # field is used exactly once, in-memory, to run the grant, and is never
+  # written to any row — see control.rs's create_workspace_existing_schema.
+  page "NewWorkspace" {
+    text "Stand up a brand-new workspace: either provision a fresh schema and owning role, or attach to a schema that already exists elsewhere in this database. Attaching requires a superuser-capable Postgres connection string, used once to grant access and never stored. Submit and check Workspaces below to confirm."
+    dynamic_content "New Workspace" calls new_workspace_form (action_idx: 2)
+    action "Create Workspace" calls create_workspace attrs (style: "display: none")
+    report "Workspaces" of workspaces_list {
+      columns: slug, schema_name, owner_role
+      page_size: 20
+    }
   }
 }

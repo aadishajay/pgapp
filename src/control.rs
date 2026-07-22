@@ -13,6 +13,7 @@
 //! workspace's schema/owning role get set up.
 
 use anyhow::{Context, Result};
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 
 pub async fn ensure_schema(pool: &PgPool) -> Result<()> {
@@ -276,6 +277,148 @@ pub async fn delete_workspace_row(pool: &PgPool, slug: &str) -> Result<bool> {
         .await
         .context("failed to delete workspace row")?;
     Ok(result.rows_affected() > 0)
+}
+
+// ---- workspace provisioning ----
+//
+// The shared implementation behind `pgapp workspace create` (CLI,
+// interactive) and the App Builder's "New Workspace" web form (see
+// `actions::create_workspace`) — moved here from `main.rs` so both can
+// call the exact same DDL rather than keeping two copies in sync.
+
+/// Creates (or, if it already exists, re-passwords) a Postgres login
+/// role — used both for `pgapp_admin` itself (see `instance.rs`) and
+/// for a new workspace's own schema-owning role. `role` must already
+/// be validated (see `instance::valid_identifier`); Postgres has no
+/// bind-parameter form for identifiers or for the PASSWORD clause's
+/// literal.
+pub async fn ensure_role(pool: &PgPool, role: &str, password: &str) -> Result<()> {
+    if !crate::instance::valid_identifier(role) {
+        anyhow::bail!("'{role}' is not a valid role name");
+    }
+    let exists: bool = sqlx::query_scalar("select exists(select 1 from pg_roles where rolname = $1)")
+        .bind(role)
+        .fetch_one(pool)
+        .await?;
+    let escaped = password.replace('\'', "''");
+    if exists {
+        sqlx::raw_sql(&format!("alter role {role} password '{escaped}'"))
+            .execute(pool)
+            .await
+            .with_context(|| format!("failed to update role '{role}'"))?;
+    } else {
+        sqlx::raw_sql(&format!("create role {role} login password '{escaped}'"))
+            .execute(pool)
+            .await
+            .with_context(|| format!("failed to create role '{role}'"))?;
+    }
+    Ok(())
+}
+
+/// Grants pgapp_admin everything it needs to operate inside `schema`:
+/// USAGE/CREATE on the schema itself, plus full privileges on whatever
+/// tables/sequences already live there — schema-level GRANT alone
+/// doesn't reach pre-existing objects. The default-privileges lines
+/// cover the bootstrap role creating more tables here later without
+/// needing another manual grant.
+pub async fn grant_admin_on_schema(pool: &PgPool, schema: &str) -> Result<()> {
+    if !crate::instance::valid_identifier(schema) {
+        anyhow::bail!("'{schema}' is not a valid schema name");
+    }
+    let role = crate::instance::ADMIN_ROLE;
+    for sql in [
+        format!("grant usage, create on schema {schema} to {role}"),
+        format!("grant all privileges on all tables in schema {schema} to {role}"),
+        format!("grant all privileges on all sequences in schema {schema} to {role}"),
+        format!("alter default privileges in schema {schema} grant all on tables to {role}"),
+        format!("alter default privileges in schema {schema} grant all on sequences to {role}"),
+    ] {
+        sqlx::raw_sql(&sql)
+            .execute(pool)
+            .await
+            .with_context(|| format!("failed to grant {role} access to schema '{schema}'"))?;
+    }
+    Ok(())
+}
+
+async fn schema_exists(pool: &PgPool, schema_name: &str) -> Result<bool> {
+    // pg_namespace, not information_schema.schemata: the latter only
+    // lists schemas the connecting role already has some privilege on,
+    // which pgapp_admin by definition doesn't yet for a schema it's
+    // about to ask permission to use.
+    sqlx::query_scalar("select exists(select 1 from pg_catalog.pg_namespace where nspname = $1)")
+        .bind(schema_name)
+        .fetch_one(pool)
+        .await
+        .context("failed to check whether the schema already exists")
+}
+
+fn validate_new_workspace_names(schema_name: &str, slug: &str) -> Result<()> {
+    if !crate::instance::valid_identifier(schema_name) {
+        anyhow::bail!("'{schema_name}' must start with a letter/underscore and contain only letters, digits, underscores");
+    }
+    if !crate::instance::valid_identifier(slug) {
+        anyhow::bail!("'{slug}' must start with a letter/underscore and contain only letters, digits, underscores");
+    }
+    Ok(())
+}
+
+/// The "brand new schema" half of workspace creation: creates a
+/// dedicated login role + a schema it owns, grants `pgapp_admin`
+/// access, and registers the workspace.
+pub async fn create_workspace_new_schema(pool: &PgPool, slug: &str, schema_name: &str, password: &str) -> Result<()> {
+    validate_new_workspace_names(schema_name, slug)?;
+    if find_workspace(pool, slug).await?.is_some() {
+        anyhow::bail!("workspace '{slug}' already exists");
+    }
+    if schema_exists(pool, schema_name).await? {
+        anyhow::bail!("schema '{schema_name}' already exists — use \"attach to an existing schema\" instead");
+    }
+    ensure_role(pool, schema_name, password).await?;
+    // CREATE SCHEMA ... AUTHORIZATION <role> requires being able to SET
+    // ROLE to it (Postgres won't let you authorize a schema to a role
+    // you aren't a member of) — pgapp_admin needs membership in the
+    // workspace role it just created before it can do this.
+    sqlx::raw_sql(&format!("grant {schema_name} to {}", crate::instance::ADMIN_ROLE))
+        .execute(pool)
+        .await
+        .with_context(|| format!("failed to grant membership in '{schema_name}' to {}", crate::instance::ADMIN_ROLE))?;
+    sqlx::raw_sql(&format!("create schema if not exists {schema_name} authorization {schema_name}"))
+        .execute(pool)
+        .await
+        .with_context(|| format!("failed to create schema '{schema_name}'"))?;
+    grant_admin_on_schema(pool, schema_name).await?;
+    register_workspace(pool, slug, schema_name, Some(schema_name)).await?;
+    Ok(())
+}
+
+/// The "attach to an already-existing schema" half: connects with a
+/// caller-supplied, superuser-capable connection string just long
+/// enough to grant `pgapp_admin` access, then closes that connection.
+/// The string itself is never written anywhere by this function — not
+/// to a table, and (since every error here is a plain `anyhow::bail!`/
+/// `.context(...)`, never the connection error's own possibly-detailed
+/// source) not into any message this function can return either. See
+/// `actions::create_workspace`'s doc for why that matters.
+pub async fn create_workspace_existing_schema(pool: &PgPool, slug: &str, schema_name: &str, grantor_conn: &str) -> Result<()> {
+    validate_new_workspace_names(schema_name, slug)?;
+    if find_workspace(pool, slug).await?.is_some() {
+        anyhow::bail!("workspace '{slug}' already exists");
+    }
+    if !schema_exists(pool, schema_name).await? {
+        anyhow::bail!("schema '{schema_name}' does not exist — use \"create a new schema\" instead");
+    }
+    let opts: PgConnectOptions = grantor_conn.parse().context("not a valid Postgres connection string")?;
+    let grantor_pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect_with(opts)
+        .await
+        .context("failed to connect with the given connection string")?;
+    let result = grant_admin_on_schema(&grantor_pool, schema_name).await;
+    grantor_pool.close().await;
+    result?;
+    register_workspace(pool, slug, schema_name, None).await?;
+    Ok(())
 }
 
 #[cfg(test)]
