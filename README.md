@@ -967,11 +967,20 @@ re-registered into a different workspace — its tables move, but a
 hardcoded schema prefix doesn't.
 
 Since the table name is just the entity's slug, two different apps
-that share a `data_schema` (a workspace can hold more than one app)
-collide if they declare same-named entities — `sync_app` catches this
-at sync time (a clear error naming both apps and the schema) rather
-than one app silently adopting the other's table. Apps in different
-workspaces never collide, since each workspace is its own schema.
+that share a `data_schema` (a workspace can hold more than one app) can
+end up naming the same table. That's not automatically an error —
+`sync_app` checks the table's actual *structure*, not which app got
+there first: a same-named entity whose declared fields don't conflict
+in type with any existing column is just used as-is (including a field
+one app declares that the other doesn't — that column gets added,
+same as any normal schema evolution, since two entities intentionally
+or coincidentally sharing a compatible table is exactly what a [`from
+table`](#binding-an-entity-to-an-existing-table) binding exists to
+support one step further). Only an actual conflict — the same column
+name declared with two different types — is a sync-time error, naming
+both the conflicting columns and, when it can identify one, the other
+app already using that table. Apps in different workspaces never
+interact this way at all, since each workspace is its own schema.
 
 ## Authentication & authorization
 

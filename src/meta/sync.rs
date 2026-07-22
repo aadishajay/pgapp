@@ -162,24 +162,22 @@ pub async fn sync_app(
         }
 
         if entity.source_query.is_none() && entity.source_collection.is_none() {
+            let exists: bool = sqlx::query_scalar(
+                "select exists (select 1 from information_schema.tables where table_schema = $1 and table_name = $2)",
+            )
+            .bind(data_schema)
+            .bind(&table_name)
+            .fetch_one(pool)
+            .await?;
+
             if entity.source_table.is_some() {
                 // A `from table` entity binds to a table that must
                 // already exist — pgapp never creates or owns it, so
-                // there's no `ensure_data_table` step and no collision
-                // guard (deliberately pointing two entities, even two
-                // apps, at the same existing table is the whole point
-                // of this feature, not a mistake to catch). Checked
-                // explicitly here, before `verify_data_table`, for a
-                // clear "doesn't exist" message rather than that
-                // function's per-column "missing" list, which is
-                // phrased for a table pgapp itself half-manages.
-                let exists: bool = sqlx::query_scalar(
-                    "select exists (select 1 from information_schema.tables where table_schema = $1 and table_name = $2)",
-                )
-                .bind(data_schema)
-                .bind(&table_name)
-                .fetch_one(pool)
-                .await?;
+                // there's no `ensure_data_table` step below. Checked
+                // explicitly here for a clear "doesn't exist" message
+                // rather than `verify_data_table`'s per-column "missing"
+                // list, which is phrased for a table pgapp itself
+                // half-manages.
                 if !exists {
                     anyhow::bail!(
                         "entity '{}' is bound to table '{data_schema}.{table_name}' via `from table`, \
@@ -188,35 +186,50 @@ pub async fn sync_app(
                         entity.name
                     );
                 }
-            } else {
+            } else if exists {
                 // The table name is now just the entity's own slug (no
-                // more app-name prefix — see slug() above), so two
-                // different apps sharing a data_schema (a workspace can
-                // hold more than one) can collide on it where the old
-                // `<app>_<entity>` naming never did. Catch that at
-                // sync time with a clear message rather than letting
-                // ensure_data_table's `create table if not exists`
-                // silently adopt (and potentially misinterpret the
-                // columns of) the other app's table.
-                if let Some(other_app_name) = sqlx::query_scalar::<_, String>(
-                    "select a.name from pgapp_meta.entities e
-                     join pgapp_meta.apps a on a.id = e.app_id
-                     where e.table_name = $1 and a.data_schema = $2 and e.app_id != $3
-                     limit 1",
-                )
-                .bind(&table_name)
-                .bind(data_schema)
-                .bind(app_id)
-                .fetch_optional(pool)
-                .await?
-                {
+                // more app-name prefix), so two different apps sharing a
+                // data_schema (a workspace can hold more than one) can
+                // both end up naming the same table where the old
+                // `<app>_<entity>` naming never let that happen. That's
+                // not automatically a mistake — a coincidentally (or
+                // deliberately) identical shape is exactly what `from
+                // table` exists to support one step further — so this
+                // only rejects an actual *conflict*: a column both
+                // sides declare with two different types. A same-named
+                // table with no such conflict (including this app's own
+                // table from a previous sync) is used as-is;
+                // `ensure_data_table` below still only ever adds columns,
+                // never alters or drops one, so it's safe to let it run
+                // even against a table some other app created.
+                let actual = fetch_actual_columns(pool, data_schema, &table_name).await?;
+                let conflicts = type_conflicts(&actual, entity);
+                if !conflicts.is_empty() {
+                    let other_app_name: Option<String> = sqlx::query_scalar(
+                        "select a.name from pgapp_meta.entities e
+                         join pgapp_meta.apps a on a.id = e.app_id
+                         where e.table_name = $1 and a.data_schema = $2 and e.app_id != $3
+                         limit 1",
+                    )
+                    .bind(&table_name)
+                    .bind(data_schema)
+                    .bind(app_id)
+                    .fetch_optional(pool)
+                    .await?;
+                    let owner_note = match &other_app_name {
+                        Some(name) => format!(" — already used by app '{name}'"),
+                        None => String::new(),
+                    };
                     anyhow::bail!(
-                        "entity '{}' would use physical table '{table_name}' in schema '{data_schema}', \
-                         but that table is already used by app '{other_app_name}' in the same schema — \
-                         rename one of the two entities to avoid a collision",
-                        entity.name
+                        "entity '{}' conflicts with the existing table '{data_schema}.{table_name}'{owner_note}:\n  - {}\n\
+                         Rename the entity, or make the column types match.",
+                        entity.name,
+                        conflicts.join("\n  - "),
                     );
                 }
+            }
+
+            if entity.source_table.is_none() {
                 ensure_data_table(pool, data_schema, &table_name, entity).await?;
             }
             verify_data_table(pool, data_schema, &table_name, entity).await?;
@@ -1266,8 +1279,46 @@ async fn ensure_data_table(pool: &PgPool, data_schema: &str, table_name: &str, e
 /// present in the table but absent from the entity (removed fields,
 /// manual additions) are only warned about: they hold real data pgapp
 /// shouldn't judge.
-async fn verify_data_table(pool: &PgPool, data_schema: &str, table_name: &str, entity: &EntityDef) -> Result<()> {
-    let actual: Vec<(String, String)> = sqlx::query_as(
+fn expected_udt(ty: FieldType) -> &'static str {
+    match ty {
+        FieldType::Id | FieldType::Integer => "int4",
+        FieldType::Text => "text",
+        FieldType::Boolean => "bool",
+        FieldType::Timestamp => "timestamptz",
+    }
+}
+
+/// Type-only conflicts between `entity`'s declared fields and a table's
+/// *actual* columns — a column the entity declares that isn't in the
+/// table at all is never a conflict here (it's just missing, and
+/// `ensure_data_table`'s `alter table add column if not exists` adds it
+/// next), only a same-named column whose type disagrees is. Used
+/// before `ensure_data_table` runs, to decide whether it's actually
+/// safe to let it touch a table that already exists — see the entity
+/// sync loop in `sync_app`.
+fn type_conflicts(actual: &HashMap<String, String>, entity: &EntityDef) -> Vec<String> {
+    entity
+        .fields
+        .iter()
+        .filter_map(|field| {
+            actual.get(&field.name).and_then(|udt| {
+                if udt != expected_udt(field.ty) {
+                    Some(format!(
+                        "column '{}' is {udt} but the entity declares {} (expected {})",
+                        field.name,
+                        field.ty.as_str(),
+                        expected_udt(field.ty),
+                    ))
+                } else {
+                    None
+                }
+            })
+        })
+        .collect()
+}
+
+async fn fetch_actual_columns(pool: &PgPool, data_schema: &str, table_name: &str) -> Result<HashMap<String, String>> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
         "select column_name, udt_name from information_schema.columns
           where table_schema = $1 and table_name = $2",
     )
@@ -1275,14 +1326,11 @@ async fn verify_data_table(pool: &PgPool, data_schema: &str, table_name: &str, e
     .bind(table_name)
     .fetch_all(pool)
     .await?;
-    let actual: HashMap<String, String> = actual.into_iter().collect();
+    Ok(rows.into_iter().collect())
+}
 
-    let expected_udt = |ty: FieldType| match ty {
-        FieldType::Id | FieldType::Integer => "int4",
-        FieldType::Text => "text",
-        FieldType::Boolean => "bool",
-        FieldType::Timestamp => "timestamptz",
-    };
+async fn verify_data_table(pool: &PgPool, data_schema: &str, table_name: &str, entity: &EntityDef) -> Result<()> {
+    let actual = fetch_actual_columns(pool, data_schema, table_name).await?;
 
     let mut mismatches = Vec::new();
     for field in &entity.fields {
