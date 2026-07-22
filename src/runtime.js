@@ -279,6 +279,8 @@ window.pgapp = (function () {
     var btn = document.createElement("button");
     btn.type = "button";
     btn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
+    btn.title = "Remove";
+    btn.setAttribute("aria-label", "Remove " + value);
     btn.textContent = "✕";
     btn.addEventListener("click", function () {
       removeListManagerItem(btn);
@@ -1001,6 +1003,7 @@ window.pgapp = (function () {
         editBtn.type = "button";
         editBtn.className = "pgapp-icon-btn";
         editBtn.title = "Edit";
+        editBtn.setAttribute("aria-label", "Edit entity " + e.name);
         editBtn.textContent = "✎";
         editBtn.addEventListener("click", function () {
           openEditor("Edit entity", e);
@@ -1009,6 +1012,7 @@ window.pgapp = (function () {
         delBtn.type = "button";
         delBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
         delBtn.title = "Delete";
+        delBtn.setAttribute("aria-label", "Delete entity " + e.name);
         delBtn.textContent = "✕";
         delBtn.addEventListener("click", function () {
           pgappConfirm('Delete entity "' + e.name + '"? Its physical table (if any) is left in place.').then(function (ok) {
@@ -1176,6 +1180,7 @@ window.pgapp = (function () {
           editBtn.type = "button";
           editBtn.className = "pgapp-icon-btn";
           editBtn.title = "Edit";
+          editBtn.setAttribute("aria-label", "Edit query " + q.name);
           editBtn.textContent = "✎";
           editBtn.addEventListener("click", function () {
             openEditor("Edit query", q);
@@ -1184,6 +1189,7 @@ window.pgapp = (function () {
           delBtn.type = "button";
           delBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
           delBtn.title = "Delete";
+          delBtn.setAttribute("aria-label", "Delete query " + q.name);
           delBtn.textContent = "✕";
           delBtn.addEventListener("click", function () {
             pgappConfirm('Delete query "' + q.name + '"?').then(function (ok) {
@@ -1313,6 +1319,7 @@ window.pgapp = (function () {
             upBtn.type = "button";
             upBtn.className = "pgapp-icon-btn";
             upBtn.title = "Move up";
+            upBtn.setAttribute("aria-label", "Move nav item " + item.label + " up");
             upBtn.textContent = "▲";
             upBtn.addEventListener("click", function () { reorder(items, idx, idx - 1); });
             btns.appendChild(upBtn);
@@ -1322,6 +1329,7 @@ window.pgapp = (function () {
             downBtn.type = "button";
             downBtn.className = "pgapp-icon-btn";
             downBtn.title = "Move down";
+            downBtn.setAttribute("aria-label", "Move nav item " + item.label + " down");
             downBtn.textContent = "▼";
             downBtn.addEventListener("click", function () { reorder(items, idx, idx + 1); });
             btns.appendChild(downBtn);
@@ -1331,6 +1339,7 @@ window.pgapp = (function () {
             editBtn.type = "button";
             editBtn.className = "pgapp-icon-btn";
             editBtn.title = "Edit";
+            editBtn.setAttribute("aria-label", "Edit nav item " + item.label);
             editBtn.textContent = "✎";
             editBtn.addEventListener("click", function () {
               openEditor("Edit nav item", idx, item, pages);
@@ -1341,6 +1350,7 @@ window.pgapp = (function () {
           delBtn.type = "button";
           delBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
           delBtn.title = "Delete";
+          delBtn.setAttribute("aria-label", "Delete nav item " + item.label);
           delBtn.textContent = "✕";
           delBtn.addEventListener("click", function () {
             pgappConfirm('Delete nav item "' + item.label + '"?').then(function (ok) {
@@ -1486,6 +1496,7 @@ window.pgapp = (function () {
             delBtn.type = "button";
             delBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
             delBtn.title = "Delete";
+            delBtn.setAttribute("aria-label", "Delete secret " + name);
             delBtn.textContent = "✕";
             delBtn.addEventListener("click", function () {
               pgappConfirm(
@@ -2171,6 +2182,7 @@ window.pgapp = (function () {
       upBtn.type = "button";
       upBtn.className = "pgapp-icon-btn";
       upBtn.title = "Move up";
+      upBtn.setAttribute("aria-label", "Move row up");
       upBtn.textContent = "▲";
       upBtn.addEventListener("click", function () {
         var prev = tr.previousElementSibling;
@@ -2180,6 +2192,7 @@ window.pgapp = (function () {
       downBtn.type = "button";
       downBtn.className = "pgapp-icon-btn";
       downBtn.title = "Move down";
+      downBtn.setAttribute("aria-label", "Move row down");
       downBtn.textContent = "▼";
       downBtn.addEventListener("click", function () {
         var next = tr.nextElementSibling;
@@ -2189,6 +2202,7 @@ window.pgapp = (function () {
       delBtn.type = "button";
       delBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
       delBtn.title = "Remove row";
+      delBtn.setAttribute("aria-label", "Remove row");
       delBtn.textContent = "✕";
       delBtn.addEventListener("click", function () {
         tr.remove();
@@ -2976,6 +2990,8 @@ window.pgapp = (function () {
         var delBtn = document.createElement("button");
         delBtn.type = "button";
         delBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
+        delBtn.title = "Remove operation";
+        delBtn.setAttribute("aria-label", "Remove operation");
         delBtn.textContent = "✕";
         delBtn.addEventListener("click", function () {
           row.remove();
@@ -3680,6 +3696,7 @@ window.pgapp = (function () {
           removeBtn.type = "button";
           removeBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
           removeBtn.title = "Remove parameter";
+          removeBtn.setAttribute("aria-label", "Remove parameter");
           removeBtn.textContent = "✕";
           columnInput.addEventListener("input", function () {
             row.rowColumn = columnInput.value;
