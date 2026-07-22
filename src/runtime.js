@@ -2537,10 +2537,8 @@ window.pgapp = (function () {
       var entitySel = pgappSelect(pgappEntityNames(meta), data.entity);
       pgappFieldRow(container, "Of entity", entitySel);
       var entityFields = data.entity_fields && data.entity_fields.length > 0 ? data.entity_fields : pgappEntityFields(meta, entitySel.value);
-
-      pgappSectionTitle(container, "Columns");
-      var colsList = pgappFieldPickerList(entityFields, data.columns);
-      container.appendChild(colsList.el);
+      var displaySel = pgappSelect(["table", "cards", "list"], data.display || "table");
+      pgappFieldRow(container, "Display mode", displaySel);
 
       pgappSectionTitle(container, "Read-only computed columns (name: SQL expression)");
       var computedList = pgappRowList(
@@ -2553,6 +2551,21 @@ window.pgapp = (function () {
         })
       );
       container.appendChild(computedList.el);
+
+      // A computed column is just another name the Columns picker can
+      // place anywhere among the physical fields — `columns:` accepts
+      // either kind interchangeably (see meta/sync.rs's validation), so
+      // this is the only way to control a computed column's actual
+      // render position (there's no separate "order" on the computed
+      // list itself). Seeded from whatever's defined above at the time
+      // this panel opened; a computed column added after that isn't
+      // selectable here until the panel is reopened.
+      pgappSectionTitle(container, "Columns (drag any field or computed column into place)");
+      var colsList = pgappFieldPickerList(
+        entityFields.concat(computedNamesPlaceholder(computedList).map(function (n) { return { name: n }; })),
+        data.columns
+      );
+      container.appendChild(colsList.el);
 
       pgappSectionTitle(container, "Display format masks");
       var formatsList = pgappRowList(
@@ -2588,6 +2601,44 @@ window.pgapp = (function () {
           })
       );
       container.appendChild(headingsList.el);
+
+      pgappSectionTitle(container, "Aggregates (footer sum/avg/count/min/max per column)");
+      var aggregatesList = pgappRowList(
+        [
+          {
+            key: "field",
+            label: "Column",
+            type: "select",
+            options: entityFields.map(function (f) { return f.name; }).concat(computedNamesPlaceholder(computedList)),
+          },
+          { key: "fn", label: "Function", type: "select", options: ["sum", "avg", "count", "min", "max"] },
+        ],
+        (data.aggregates || []).map(function (a) {
+          return { field: a.field, fn: a.fn };
+        })
+      );
+      container.appendChild(aggregatesList.el);
+
+      pgappSectionTitle(container, "Control break (group consecutive rows by this column)");
+      var breakOnWrap = document.createElement("div");
+      var breakOnSel = pgappSelect(
+        ["(none)"].concat(entityFields.map(function (f) { return f.name; }), computedNamesPlaceholder(computedList)),
+        data.break_on || "(none)"
+      );
+      pgappFieldRow(breakOnWrap, "Break on", breakOnSel);
+      container.appendChild(breakOnWrap);
+
+      pgappSectionTitle(container, "Row highlight rules (first match wins, table display mode only)");
+      var highlightsList = pgappRowList(
+        [
+          { key: "when", label: "When (SQL boolean expression)", type: "text" },
+          { key: "color", label: "Color", type: "text" },
+        ],
+        (data.highlights || []).map(function (h) {
+          return { when: h.when, color: h.color };
+        })
+      );
+      container.appendChild(highlightsList.el);
 
       pgappSectionTitle(container, "Link a column to another page");
       var linkWrap = document.createElement("div");
@@ -2625,6 +2676,9 @@ window.pgapp = (function () {
         generate: function () {
           var lines = [];
           lines.push("    report " + pgappMarkupStr(titleInput.value) + " of " + entitySel.value + " {");
+          if (displaySel.value !== "table") {
+            lines.push("      display: " + displaySel.value);
+          }
           lines.push("      columns: " + pgappFieldPickerText(colsList));
           if (linkPageSel.value !== "(none)") {
             var params = linkParamsList.getRows().filter(function (r) {
@@ -2656,6 +2710,17 @@ window.pgapp = (function () {
             if (r.align && r.align !== "left") {
               lines.push("      align " + r.field.trim() + ": " + r.align);
             }
+          });
+          aggregatesList.getRows().forEach(function (r) {
+            if (!r.field || !r.field.trim()) return;
+            lines.push("      aggregate " + r.field.trim() + ": " + r.fn);
+          });
+          if (breakOnSel.value !== "(none)") {
+            lines.push("      break_on: " + breakOnSel.value);
+          }
+          highlightsList.getRows().forEach(function (r) {
+            if (!r.when || !r.when.trim()) return;
+            lines.push("      highlight (when: " + pgappMarkupStr(r.when) + ", color: " + pgappMarkupStr(r.color || "") + ")");
           });
           lines.push("    }" + requiresGen() + attrsGen());
           return lines.join("\n");

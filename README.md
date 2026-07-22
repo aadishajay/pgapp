@@ -1197,6 +1197,44 @@ baked into the markup — forwarded page-to-page the same way any other
 cross-page parameter is (a report's `link: <field> -> page <Name>
 (<row column>: <param name>)`).
 
+**A structured editor's `generate()` must cover every attribute the kind
+supports, or Save silently drops whatever it doesn't** — since it
+*regenerates the whole component's markup from the form's current
+state*, any attribute the form has no field for (rather than a field
+the user just left blank) never makes it into the new markup, even
+though the old value was there a moment ago. The Report editor learned
+this the hard way: its `aggregate`/`break_on`/`highlight`/`display`
+properties were readable (the structured GET already returned them)
+but had no corresponding form fields, so opening a Report that used any
+of them and clicking Save quietly deleted them from the markup — a
+correctly-generated, `validate_markup`-passing file that just no longer
+had what you started with. All four now have fields (a repeatable
+Aggregates row list, a Break-on dropdown, a repeatable highlight
+when/color row list, and a Display-mode select), so round-tripping an
+existing Report through the editor with no changes reproduces every
+property unchanged (a `format`/`heading`/`align` targeting the default
+still gets normalized away — `align: left`, `page_size: 20` — but
+nothing with a non-default value disappears).
+
+**A computed column is just another name the Columns picker can place
+anywhere** — `columns:` accepts a `computed`-defined name exactly like
+a real entity field (see `meta::sync::build_component_config`'s
+membership check), and rendering (`render::report_html`) walks
+`columns` in that literal order for headers/cells/footer, so a computed
+column's position in the final table is entirely decided by where its
+name sits in `columns:`. The Columns picker used to only offer entity
+field names, though, so a computed column already placed among regular
+columns (by hand-editing markup, or via "Edit as raw markup") got
+silently reassigned to some entity field the moment you saved through
+the structured editor — the picker had nowhere to put the name it
+couldn't represent. The picker's options now include every currently-
+defined computed column too, so it can be dragged into any position
+among the regular fields with the exact same ▲▼ controls, "computed"
+and "physical" treated identically for ordering purposes. (A brand-new
+computed column added in the same editing session isn't in that list
+until the panel is reopened — the picker's options are seeded once,
+from what was already defined, when the panel first loads.)
+
 ### Creating a brand-new app
 
 The "New App" page scaffolds a fresh single-file app (a starter
