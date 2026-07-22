@@ -456,7 +456,7 @@ window.pgapp = (function () {
       if (firstCell) ids.push(firstCell.textContent.trim());
     }
     var url = pgappAdminPagesUrl(target, "/reorder");
-    fetch(url, {
+    return fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: "order=" + encodeURIComponent(ids.join(",")),
@@ -466,6 +466,7 @@ window.pgapp = (function () {
       })
       .then(function (data) {
         if (!data.ok) console.error("pgapp: reorder failed:", data.error);
+        return data;
       })
       .catch(function (e) {
         console.error("pgapp:", e);
@@ -3344,7 +3345,7 @@ window.pgapp = (function () {
       loadPropertyPanel(target, idx, kind, propsSlot);
     }
 
-    allRows.forEach(function (row) {
+    allRows.forEach(function (row, rowIndex) {
       var cells = row.querySelectorAll("td");
       if (cells.length < 3) return;
       var kind = cells[1].textContent.trim();
@@ -3370,6 +3371,39 @@ window.pgapp = (function () {
 
       var actionsTd = document.createElement("td");
       actionsTd.className = "pgapp-component-actions";
+
+      // Keyboard/screen-reader alternative to the drag-and-drop reorder
+      // above the tree — dragging alone has no non-pointer way to
+      // reorder components, unlike the nav list's own up/down buttons.
+      function moveRow(dir) {
+        var tbody = row.parentNode;
+        var sibling = dir < 0 ? row.previousElementSibling : row.nextElementSibling;
+        if (!sibling) return;
+        if (dir < 0) tbody.insertBefore(row, sibling);
+        else tbody.insertBefore(sibling, row);
+        saveDraggedOrder(tbody).then(function () { location.reload(); });
+      }
+      if (rowIndex > 0) {
+        var upBtn = document.createElement("button");
+        upBtn.type = "button";
+        upBtn.className = "pgapp-icon-btn";
+        upBtn.title = "Move up";
+        upBtn.setAttribute("aria-label", "Move component up");
+        upBtn.textContent = "▲";
+        upBtn.addEventListener("click", function () { moveRow(-1); });
+        actionsTd.appendChild(upBtn);
+      }
+      if (rowIndex < allRows.length - 1) {
+        var downBtn = document.createElement("button");
+        downBtn.type = "button";
+        downBtn.className = "pgapp-icon-btn";
+        downBtn.title = "Move down";
+        downBtn.setAttribute("aria-label", "Move component down");
+        downBtn.textContent = "▼";
+        downBtn.addEventListener("click", function () { moveRow(1); });
+        actionsTd.appendChild(downBtn);
+      }
+
       var deleteBtn = document.createElement("button");
       deleteBtn.type = "button";
       deleteBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
