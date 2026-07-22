@@ -12,7 +12,7 @@
 #   pgapp run examples/showcase.pgapp --workspace <slug>
 #   psql "$DATABASE_URL" -v schema=<workspace_schema> -f examples/showcase_seed.sql
 
-app "pgapp Showcase" {
+app "Showcase" {
   theme: postgres
 
   header {
@@ -209,7 +209,7 @@ app "pgapp Showcase" {
     faceted_search "Filter tasks" of tasks {
       facet status as checkbox_list
       facet priority as checkbox_list
-      facet due_date as date_range
+      facet due_date as checkbox_list
     }
     report "All tasks" of tasks {
       columns: title, status, priority, assignee, due_date, urgent

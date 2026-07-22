@@ -84,6 +84,25 @@ and the `button` component's redirect-with-forwarded-params behavior).
 No functions/seed script needed — `pgapp run examples/venpay.pgapp
 --workspace <slug>` and add data through its own forms.
 
+`examples/showcase.pgapp` is a fourth demo, and the most complete one:
+a single-file tutorial app whose 12 pages exercise every component kind
+this framework has — reports (computed columns placed among physical
+ones, currency/number/date format masks, a per-column aggregate, a
+control break, a row highlight rule, and all three display modes),
+forms (every built-in item type), an editable table, all six chart
+types, a calendar, a map, faceted search, a `dynamic_content` home page
+(the one place raw HTML is allowed), three dynamic actions, and both
+server-side action styles (`run_query`/`call_function`). Its Home page
+links to every other page, so it doubles as a live index. Same
+functions-then-sync-then-seed order as helpdesk:
+
+```bash
+export DATABASE_URL=postgres://user:pass@host:5432/<dbname>
+psql "$DATABASE_URL" -v schema=<workspace_schema> -f examples/showcase_functions.sql
+pgapp run examples/showcase.pgapp --workspace <slug>
+psql "$DATABASE_URL" -v schema=<workspace_schema> -f examples/showcase_seed.sql   # after, once the tables exist
+```
+
 ## Idea
 
 - **In-database metadata**: apps, entities, fields, pages, and
@@ -616,8 +635,14 @@ posting to `/:page/c/:idx/run`, gated by the page's `requires:` role.
 Ships seven modules:
 
 - **`run_query`** — executes a named query raw (may be a plain
-  `UPDATE`/`DELETE`/`INSERT`); binds are still `:name` markers, never
-  interpolation.
+  `UPDATE`/`DELETE`/`INSERT`, with no `RETURNING`); binds are still
+  `:name` markers, never interpolation. A query meant only for this
+  (never a report/region/chart/LOV source) needs no `RETURNING`
+  clause — `meta::compile_named_query`'s own load-time bind-type check
+  describes the *bare* SQL, not the `select to_jsonb(t) from (<sql>) as
+  t` shape `query_engine.rs`/`call_function` execute against (which
+  only works for SELECT-shaped queries; Postgres rejects a bare DML
+  statement inside a `FROM (...) AS t` subquery outright).
 - **`call_function`** — calls a plain PL/pgSQL function (`select
   my_function()` as the query's SQL) and shows back whatever the
   function itself returns; `raise exception '...'` inside it becomes
@@ -1561,7 +1586,20 @@ contain hyphens), `apex_universal` (evokes Oracle APEX's classic
 Universal Theme / Theme 42: white regions, a bold title underlined in
 signature blue, rectangular low-radius buttons, a plain white top nav
 bar, and a light-gray Interactive Report-style table header — no dark
-mode, same as the original; used by `examples/venpay.pgapp`).
+mode, same as the original; used by `examples/venpay.pgapp`), `postgres`
+(a `shadcn` derivative re-skinned around Postgres's own brand blue for
+just the primary/accent/ring tokens — everything else carries over
+unchanged — plus a `.pgapp-brand::before` header icon pointing at
+`assets/pgapp-logo.svg`; used by `examples/showcase.pgapp`).
+
+A theme's header icon is the one place a theme needs an image, not just
+CSS: `.pgapp-brand::before { background-image: url("assets/pgapp-logo.svg"); }`
+— a plain *relative* URL, so it resolves against whatever page it's
+loaded from (`/:workspace/:app/theme.css`) to `/:workspace/:app/assets/pgapp-logo.svg`,
+without theme.css needing to know its own workspace/app slug. That route
+is `server::asset()`, which serves exactly `assets/app.css`, `assets/app.js`,
+and `assets/pgapp-logo.svg` from one shared directory (not per-app) — add
+another filename there (and its content-type) to serve more.
 
 To add another design system: `themes/<name>/theme.css` + `theme:
 <name>` — no Rust changes.

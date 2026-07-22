@@ -7,8 +7,8 @@ use sqlx::{Executor, PgPool, TypeInfo};
 use std::collections::HashMap;
 
 use super::types::{
-    wrap_to_jsonb, ButtonBehavior, LinkColumn, NavNode, RuntimeApp, RuntimeComponent, RuntimeEntity,
-    RuntimeField, RuntimePage, RuntimeQuery,
+    ButtonBehavior, LinkColumn, NavNode, RuntimeApp, RuntimeComponent, RuntimeEntity, RuntimeField, RuntimePage,
+    RuntimeQuery,
 };
 use crate::model::{
     AfterSave, AggregateFn, ComputedColumn, Facet, FacetKind, FieldItem, FieldType, FormatMask, HighlightRule, HtmlAttrs, PreAction,
@@ -95,15 +95,26 @@ fn render_segments(segments: &[Segment], names: &[String], casts: Option<&[Strin
 /// asked directly from Postgres.
 ///
 /// `:project_id` in `where project_id = :project_id` becomes `$1::INT4`
-/// (or whatever `project_id`'s real column type is) automatically: this
-/// runs the exact wrapped shape the query is later executed in (see
-/// `wrap_to_jsonb`) through Postgres's own `Describe`, the same
-/// mechanism the wire protocol already uses to type an unadorned `$1`
-/// — so the result is never a guess and never goes stale. It's asked
-/// fresh every time the app loads (startup, or `/admin/reload`), so a
-/// column changed from `integer` to `bigint` under a query's feet is
-/// picked up on the next reload with no markup change, instead of
-/// silently miscomparing until some request happens to hit it.
+/// (or whatever `project_id`'s real column type is) automatically:
+/// this describes the bare SQL directly through Postgres's own
+/// `Describe`, the same mechanism the wire protocol already uses to
+/// type an unadorned `$1` — so the result is never a guess and never
+/// goes stale. It's asked fresh every time the app loads (startup, or
+/// `/admin/reload`), so a column changed from `integer` to `bigint`
+/// under a query's feet is picked up on the next reload with no markup
+/// change, instead of silently miscomparing until some request happens
+/// to hit it.
+///
+/// Describes the *bare* SQL, not `wrap_to_jsonb`'s `to_jsonb(t) from
+/// (<sql>) as t` shape those other two callers execute against: this
+/// function only ever reads `described.parameters()`, never
+/// `.columns()`, so it doesn't need that wrapping — and a named query
+/// meant for `run_query` (see `actions/run_query.rs`) is commonly a
+/// bare UPDATE/DELETE/INSERT with no `RETURNING`, which Postgres
+/// refuses to accept inside a `FROM (...) AS t` subquery at all. Only
+/// `query_engine.rs`'s report/region fetch and `call_function`'s
+/// `select <fn>(...)` convention are actually SELECT-shaped by
+/// construction and need the wrapped form, at their own call sites.
 ///
 /// A bind whose type genuinely can't be inferred (compared against
 /// nothing, or against two incompatible columns) makes this fail with
@@ -129,7 +140,7 @@ pub async fn compile_named_query(pool: &PgPool, data_schema: &str, sql: &str) ->
     // search_path, which knows nothing about any particular app.
     let mut conn = crate::meta::scoped_conn(pool, data_schema).await?;
     let described = (&mut *conn)
-        .describe(&wrap_to_jsonb(&bare))
+        .describe(&bare)
         .await
         .with_context(|| {
             if names.is_empty() {

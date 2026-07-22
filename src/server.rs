@@ -1271,13 +1271,17 @@ async fn chart_lib_js(State(state): State<Arc<AppState>>, Path((workspace, app))
     }
 }
 
-/// Static app-level asset override (`assets/app.css`/`assets/app.js`),
-/// served from one shared directory regardless of which app asked —
-/// there's no per-app asset directory (yet); only the URL is app-scoped,
-/// to keep every path consistently rooted at `/:workspace/:app`.
+/// Static app-level asset override (`assets/app.css`/`assets/app.js`/
+/// `assets/pgapp-logo.svg`), served from one shared directory regardless
+/// of which app asked — there's no per-app asset directory (yet); only
+/// the URL is app-scoped, to keep every path consistently rooted at
+/// `/:workspace/:app`. `pgapp-logo.svg` exists so a theme's CSS can
+/// reference it with a plain relative `url("assets/pgapp-logo.svg")` —
+/// see `themes/postgres/theme.css` — without needing to know its own
+/// workspace/app slug.
 async fn asset(Path((_workspace, _app, path)): Path<(String, String, String)>) -> Response {
     let safe = path.rsplit('/').next().unwrap_or("");
-    if safe != "app.css" && safe != "app.js" {
+    if safe != "app.css" && safe != "app.js" && safe != "pgapp-logo.svg" {
         return StatusCode::NOT_FOUND.into_response();
     }
     let full = format!("assets/{safe}");
@@ -1285,6 +1289,8 @@ async fn asset(Path((_workspace, _app, path)): Path<(String, String, String)>) -
         Ok(bytes) => {
             let content_type = if safe.ends_with(".css") {
                 "text/css"
+            } else if safe.ends_with(".svg") {
+                "image/svg+xml"
             } else {
                 "application/javascript"
             };
