@@ -246,7 +246,7 @@ app "App Builder" {
     form "New App" of new_app_requests {
       fields: app_name, workspace_slug, theme
       item workspace_slug as popup from query workspaces_lov
-      item theme as radio ("plain", "shadcn", "vivid", "google_m3")
+      item theme as radio ("plain", "shadcn", "postgres", "vivid", "google_m3", "apex_universal")
     }
     report "Recent requests" of new_app_requests_view {
       columns: app_name, workspace_slug, theme, status, result
