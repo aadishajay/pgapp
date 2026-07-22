@@ -19,16 +19,14 @@
 
 const THEMES: [&str; 4] = ["plain", "shadcn", "vivid", "google_m3"];
 
-// `meta::sync_app` always names an entity's physical table
-// `<app-slug>_<entity-slug>` (see meta/sync.rs's own `slug` + its
-// doc), never the bare declared entity name — "new_app_requests" in
-// markup, but this on disk. The App Builder's own app name/entity
-// name, and the reserved schema it's provisioned into (see
+// `meta::sync_app` names an entity's physical table after its own
+// slug (see meta/sync.rs's `slug`) — "new_app_requests" both in markup
+// and on disk. The App Builder's own reserved schema (see
 // `instance::APP_BUILDER_WORKSPACE_SLUG`'s doc / `main.rs`'s
-// `provision_app_builder`), are all fixed, so this never drifts; a
-// generic lookup through pgapp_meta would be needless ceremony for a
-// fact this static.
-pub const REQUESTS_TABLE: &str = "pgapp_builder.app_builder_new_app_requests";
+// `provision_app_builder`) is fixed, so this never drifts; a generic
+// lookup through pgapp_meta would be needless ceremony for a fact this
+// static.
+pub const REQUESTS_TABLE: &str = "pgapp_builder.new_app_requests";
 
 /// What `create_one` needs to hand back so its caller can both update
 /// the request row and hot-register the new app into `AppState`.
@@ -89,7 +87,15 @@ async fn create_one(pool: &sqlx::PgPool, app_name: &str, workspace_slug: &str, t
     // file (see main.rs's `provision_app_builder`).
     let target = crate::instance::home_dir()?.join(format!("{slug}.pgapp"));
     let target = target.to_string_lossy().to_string();
-    crate::scaffold::scaffold_file(&target, app_name, theme)?;
+    // A retry of a request that scaffolded this file but failed at a
+    // later step (sync, register, ...) shouldn't have to fight
+    // `scaffold_file`'s own clobber guard — the file it already wrote
+    // is exactly what a fresh scaffold would write again, so just load
+    // it instead of bailing with "already exists" on every subsequent
+    // attempt.
+    if !std::path::Path::new(&target).exists() {
+        crate::scaffold::scaffold_file(&target, app_name, theme)?;
+    }
 
     let app_def = crate::source::load(&target)?;
     let item_types = crate::item_types::registry();
