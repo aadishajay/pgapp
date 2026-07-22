@@ -862,9 +862,16 @@ window.pgapp = (function () {
         if (sourceSel.value !== "physical table") {
           fromClause = " from query " + sourceSel.value.replace(/^from query /, "");
         }
+        var rows = fieldsList.getRows().filter(function (r) { return r.name && r.name.trim(); });
+        // Each "id"-typed field compiles to its own `serial primary
+        // key` column — a second one fails at sync time with a raw
+        // Postgres "multiple primary keys" error; caught here instead.
+        var idFields = rows.filter(function (r) { return r.type === "id"; }).map(function (r) { return r.name.trim(); });
+        if (idFields.length > 1) {
+          throw "an entity can have only one 'id'-typed field (found: " + idFields.join(", ") + ")";
+        }
         var lines = ["  entity " + pgappMarkupStr(name) + fromClause + " {"];
-        fieldsList.getRows().forEach(function (r) {
-          if (!r.name || !r.name.trim()) return;
+        rows.forEach(function (r) {
           var line = "    field " + r.name.trim() + ": " + (r.type || "text");
           if (r.required) line += " required";
           if (r.default && r.default.trim()) line += " default " + r.default.trim();

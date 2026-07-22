@@ -566,6 +566,23 @@ impl Parser {
         }
         self.expect_symbol('}')?;
 
+        // Each `id`-typed field compiles to its own `serial primary
+        // key` column (see model::FieldType::sql_column_type) — a
+        // second one would emit two `primary key` column constraints
+        // in the same `create table`, which Postgres rejects outright
+        // ("multiple primary keys for table ... are not allowed").
+        // Caught here instead, with a message that names the actual
+        // fields at fault rather than surfacing that raw DB error.
+        let id_fields: Vec<&str> = fields.iter().filter(|f| f.ty == FieldType::Id).map(|f| f.name.as_str()).collect();
+        if id_fields.len() > 1 {
+            bail!(
+                "entity '{name}' declares more than one 'id'-typed field ({}) — an entity can have only one \
+                 (line {})",
+                id_fields.join(", "),
+                self.cur_line(),
+            );
+        }
+
         Ok(EntityDef { name, fields, source_query, source_collection })
     }
 
@@ -2019,6 +2036,23 @@ app "Demo" {
         assert_eq!(s.icons_line, None);
         assert_eq!(s.chart_lib_line, None);
         assert_eq!(s.auth_lines, None);
+    }
+
+    #[test]
+    fn rejects_an_entity_with_more_than_one_id_field() {
+        let src = r#"
+app "Demo" {
+  entity "t" {
+    field id: id
+    field other_id: id
+    field name: text
+  }
+  page "P" { text "hi" }
+}
+"#;
+        let err = parse_app(src).unwrap_err().to_string();
+        assert!(err.contains("more than one 'id'-typed field"), "unexpected error: {err}");
+        assert!(err.contains("id, other_id"), "unexpected error: {err}");
     }
 
     #[test]

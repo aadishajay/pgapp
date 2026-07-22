@@ -2935,7 +2935,12 @@ fn admin_edit_guard(
 /// entity/query reference still only surfaces at `meta::sync_app`,
 /// same as any other markup edit) — just malformed syntax.
 fn validate_markup(text: &str) -> anyhow::Result<()> {
-    markup::parse_app(text).map(|_| ()).context("that markup doesn't parse")
+    // Every caller surfaces this via `e.to_string()`, which only prints
+    // an anyhow error's topmost message — a generic wrapper here would
+    // swallow the actually useful detail (an unknown field type, an
+    // entity declaring two `id` fields, ...), leaving the caller no
+    // better off than "that markup doesn't parse".
+    markup::parse_app(text).map(|_| ())
 }
 
 /// GET /:workspace/:app/admin/pages-list — every page name currently in
