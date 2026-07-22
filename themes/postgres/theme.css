@@ -1142,6 +1142,8 @@ a.pgapp-link:has(.pgapp-icon):hover .pgapp-icon {
 .pgapp-toolbar-slot {
   display: flex;
   justify-content: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
   margin-bottom: 0.5rem;
 }
 .pgapp-toolbar-slot:empty { display: none; }

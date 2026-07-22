@@ -13,16 +13,21 @@
 # brand-new workspace from scratch (either a fresh schema+role or an
 # existing schema handed a grant via a one-time superuser connection
 # string — see actions/create_workspace.rs for why that's two action
-# modules, not an entity Form), and — via each app's own "AppSettings"
-# page — edit its data model (add/edit/delete entities and their
-# fields), named queries, navigation menu, and theme/icons/chart_lib/
-# auth-on-off settings, plus delete the app or its whole workspace
-# outright (soft-disable or a real hard delete) — an Oracle-APEX-App-
-# Builder-flavored editor covering entities/pages/nav/settings/teardown
-# alike, without hand-editing markup over SSH. What's still Advanced-
-# editor-only: `header`/`footer` chrome, `auth_scheme` role groups, and
-# a directory-based (multi-file) app's structure — genuinely rarer
-# edits that don't earn a dedicated control yet.
+# modules, not an entity Form), and — via each app's own
+# "SharedComponents"/"AppSettings"/"Utilities" pages, APEX-style — edit
+# its data model (add/edit/delete entities and their fields), named
+# queries, and navigation menu (SharedComponents); theme/icons/
+# chart_lib/auth-on-off settings and secrets (AppSettings); and delete
+# the app or its whole workspace outright, soft-disable or a real hard
+# delete (Utilities) — an Oracle-APEX-App-Builder-flavored editor
+# covering entities/pages/nav/settings/teardown alike, without hand-
+# editing markup over SSH. A persistent subnav (see runtime.js's
+# `bindEditorSubnav`) ties Pages/EditPage/SharedComponents/AppSettings/
+# Utilities together so switching between them never means backtracking
+# to the Pages screen first. What's still Advanced-editor-only:
+# `header`/`footer` chrome, `auth_scheme` role groups, and a directory-
+# based (multi-file) app's structure — genuinely rarer edits that don't
+# earn a dedicated control yet.
 #
 # Every entity here reading pgapp_control.*/pgapp_meta.* is
 # query-backed — no core framework changes were needed for that read
@@ -165,6 +170,7 @@ app "App Builder" {
 
   page "Pages" {
     text "Editing:" attrs (id: "pgapp-context-slot")
+    text "Sections" attrs (id: "pgapp-editor-subnav-slot")
     text "Pick a page to edit its components, or add a new one below. Use the pencil to rename it — same searchable Interactive Report as everywhere else."
     report "Pages" of pages_list {
       columns: page_name
@@ -172,8 +178,6 @@ app "App Builder" {
       page_size: 50
     } attrs (id: "pgapp-pages-report")
     text "Add Page" attrs (id: "pgapp-add-page-slot")
-    text "App Settings" attrs (id: "pgapp-app-settings-link-slot")
-    text "Advanced" attrs (id: "pgapp-advanced-source-slot")
   }
 
   # A Page-Designer-style split: the "Components" region on the left is
@@ -185,6 +189,7 @@ app "App Builder" {
   # looks for to re-parent both halves into one flex layout.
   page "EditPage" {
     text "Editing:" attrs (id: "pgapp-context-slot")
+    text "Sections" attrs (id: "pgapp-editor-subnav-slot")
     text "Preview" attrs (id: "pgapp-preview-slot")
     text "Drag a row to reorder. Click a row to edit its properties in the panel alongside it — the ✕ deletes it. Every change saves immediately, in the database and in the app's own .pgapp file."
     region "Components" from query components_list {
@@ -194,25 +199,46 @@ app "App Builder" {
     text "Add Component" attrs (id: "pgapp-add-component-slot")
   }
 
-  # Everything that's app-wide rather than page-scoped: the data model
-  # (entities/fields), named queries, the nav menu, and the theme/
-  # icons/chart_lib/auth toggle — the App Builder's counterpart to
-  # APEX's own "Data" tab, "Shared Components", and "Edit Application
-  # Properties", plus the two teardown panels (delete this app / delete
-  # this whole workspace). Every placeholder here is filled in by
-  # runtime.js (bindEntitiesPanel/bindQueriesPanel/bindNavPanel/
-  # bindAppSettingsForm/bindDestroyAppPanel/bindDestroyWorkspacePanel) —
-  # each fetches its own current state fresh from the target app's admin
-  # routes rather than trusting anything server-rendered here, since
-  # this page itself never touches the target app's data.
-  page "AppSettings" {
+  # The App Builder's counterpart to APEX's own "Shared Components":
+  # the data model (entities/fields), named queries, and the nav menu —
+  # the three things every page's own components can reference. Split
+  # out from app-level settings/secrets/teardown (see "AppSettings" and
+  # "Utilities" below) so each concern has its own focused screen instead
+  # of one long page. Every placeholder here is filled in by runtime.js
+  # (bindEntitiesPanel/bindQueriesPanel/bindNavPanel) — each fetches its
+  # own current state fresh from the target app's admin routes rather
+  # than trusting anything server-rendered here, since this page itself
+  # never touches the target app's data.
+  page "SharedComponents" {
     text "Editing:" attrs (id: "pgapp-context-slot")
-    text "Everything about this app that isn't a page: its data model, named queries, navigation menu, instance-wide settings, and secrets — plus, at the bottom, ways to delete this app or its whole workspace outright."
+    text "Sections" attrs (id: "pgapp-editor-subnav-slot")
+    text "The things every page's components can reference: this app's data model, named queries, and navigation menu."
     text "Data Model" attrs (id: "pgapp-entities-slot")
     text "Queries" attrs (id: "pgapp-queries-slot")
     text "Navigation" attrs (id: "pgapp-nav-slot")
+  }
+
+  # The App Builder's counterpart to APEX's "Edit Application
+  # Definition": instance-wide theme/icons/chart_lib/auth toggle, plus
+  # this app's secrets. See "SharedComponents" above for the data/nav
+  # side and "Utilities" below for the destructive actions, both split
+  # out of what used to be one page.
+  page "AppSettings" {
+    text "Editing:" attrs (id: "pgapp-context-slot")
+    text "Sections" attrs (id: "pgapp-editor-subnav-slot")
+    text "This app's instance-wide settings and secrets."
     text "App Settings" attrs (id: "pgapp-app-settings-slot")
     text "Secrets" attrs (id: "pgapp-secrets-slot")
+  }
+
+  # Destructive actions only, isolated from routine editing/config —
+  # deleting this app or its whole workspace, each requiring its own
+  # explicit soft/hard confirm. See "SharedComponents"/"AppSettings"
+  # above for everything else that used to share this page.
+  page "Utilities" {
+    text "Editing:" attrs (id: "pgapp-context-slot")
+    text "Sections" attrs (id: "pgapp-editor-subnav-slot")
+    text "Ways to delete this app or its whole workspace outright."
     text "Danger zone" attrs (id: "pgapp-destroy-app-slot", class: "pgapp-danger-zone")
     text "Danger zone" attrs (id: "pgapp-destroy-workspace-slot", class: "pgapp-danger-zone")
   }

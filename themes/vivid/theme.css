@@ -251,6 +251,12 @@ body {
 .pgapp-btn-secondary:hover { border-color: var(--v-violet); }
 .pgapp-btn-disabled { opacity: 0.35; cursor: default; pointer-events: none; }
 
+/* Card panels the App Builder's own JS builds into `text` placeholder
+   slots — the preview link, the persistent section subnav, and the
+   Add Component form. */
+.pgapp-toolbar-slot { display: flex; justify-content: flex-end; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.pgapp-toolbar-slot:empty { display: none; }
+
 .pgapp-inline-form { display: inline; margin-left: 0.5rem; }
 
 /* Item types */

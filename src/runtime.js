@@ -527,49 +527,49 @@ window.pgapp = (function () {
     slot.appendChild(a);
   }
 
-  // The App Builder's "Advanced" escape hatch: a `text ... attrs (id:
-  // "pgapp-advanced-source-slot")` placeholder (see examples/
-  // app_builder.pgapp's Pages page) gets a link to the target app's
-  // own, already-existing `/admin/reload` page — a full-file raw
-  // markup editor built into every app (see `admin_reload_page` in
-  // server.rs), not something the App Builder adds. Entities, queries,
-  // nav, header/footer, and app-level settings (theme/auth/icons) have
-  // no dedicated GUI here — this is how to reach them without SSHing
-  // in to hand-edit the file.
-  function bindAdvancedSourceLink() {
-    var slot = document.getElementById("pgapp-advanced-source-slot");
+  // The App Builder's persistent, APEX-style subnav: a `text ... attrs
+  // (id: "pgapp-editor-subnav-slot")` placeholder (see examples/
+  // app_builder.pgapp's Pages/EditPage/SharedComponents/AppSettings/
+  // Utilities pages) gets one link per section plus the "Advanced"
+  // escape hatch — the target app's own, already-existing
+  // `/admin/reload` page, a full-file raw markup editor built into
+  // every app (see `admin_reload_page` in server.rs), not something
+  // the App Builder adds. Letting every one of these pages link
+  // straight to every other means switching sections never requires
+  // backtracking to Pages first. The current page's own entry is
+  // marked primary so there's always a visible "you are here".
+  function bindEditorSubnav() {
+    var slot = document.getElementById("pgapp-editor-subnav-slot");
     if (!slot) return;
     var target = pgappEditTarget();
     if (!pgappEditTargetValid2(target)) return;
     slot.textContent = "";
     slot.classList.add("pgapp-toolbar-slot");
-    var a = document.createElement("a");
-    a.className = "pgapp-link pgapp-btn pgapp-btn-secondary";
-    a.href = "/" + encodeURIComponent(target.workspace) + "/" + encodeURIComponent(target.app) + "/admin/reload";
-    a.target = "_blank";
-    a.rel = "noopener";
-    a.textContent = "Advanced: edit full app source ↗";
-    slot.appendChild(a);
-  }
-
-  // A link from the Pages screen to the "AppSettings" page (data
-  // model, queries, nav, app settings, teardown) — same "carry
-  // ?target_workspace=&target_app= forward" pattern as
-  // `bindAdvancedSourceLink`, just staying inside the App Builder
-  // itself rather than opening the target app's own raw editor.
-  function bindAppSettingsLink() {
-    var slot = document.getElementById("pgapp-app-settings-link-slot");
-    if (!slot) return;
-    var target = pgappEditTarget();
-    if (!pgappEditTargetValid2(target)) return;
-    slot.textContent = "";
-    slot.classList.add("pgapp-toolbar-slot");
-    var a = document.createElement("a");
-    a.className = "pgapp-link pgapp-btn pgapp-btn-secondary";
-    a.href =
-      "AppSettings?target_workspace=" + encodeURIComponent(target.workspace) + "&target_app=" + encodeURIComponent(target.app);
-    a.textContent = "Data Model, Queries, Nav & Settings →";
-    slot.appendChild(a);
+    // EditPage is reached from, and always returns to, the Pages list —
+    // keep "Pages" lit while editing a specific page's components,
+    // rather than showing no active section at all.
+    var currentPage = location.pathname.split("/").pop();
+    if (currentPage === "EditPage") currentPage = "Pages";
+    var qs = "target_workspace=" + encodeURIComponent(target.workspace) + "&target_app=" + encodeURIComponent(target.app);
+    [
+      { page: "Pages", label: "Pages" },
+      { page: "SharedComponents", label: "Shared Components" },
+      { page: "AppSettings", label: "App Settings" },
+      { page: "Utilities", label: "Utilities" },
+    ].forEach(function (entry) {
+      var a = document.createElement("a");
+      a.className = "pgapp-link pgapp-btn " + (entry.page === currentPage ? "pgapp-btn-primary" : "pgapp-btn-secondary");
+      a.href = entry.page + "?" + qs;
+      a.textContent = entry.label;
+      slot.appendChild(a);
+    });
+    var advanced = document.createElement("a");
+    advanced.className = "pgapp-link pgapp-btn pgapp-btn-secondary";
+    advanced.href = "/" + encodeURIComponent(target.workspace) + "/" + encodeURIComponent(target.app) + "/admin/reload";
+    advanced.target = "_blank";
+    advanced.rel = "noopener";
+    advanced.textContent = "Advanced ↗";
+    slot.appendChild(advanced);
   }
 
   // The App Builder's breadcrumb: a `text ... attrs (id:
@@ -4577,8 +4577,7 @@ window.pgapp = (function () {
     document.addEventListener("DOMContentLoaded", bindAddPageForm);
     document.addEventListener("DOMContentLoaded", bindPageCardActions);
     document.addEventListener("DOMContentLoaded", bindNewAppProcessing);
-    document.addEventListener("DOMContentLoaded", bindAdvancedSourceLink);
-    document.addEventListener("DOMContentLoaded", bindAppSettingsLink);
+    document.addEventListener("DOMContentLoaded", bindEditorSubnav);
     document.addEventListener("DOMContentLoaded", bindEntitiesPanel);
     document.addEventListener("DOMContentLoaded", bindQueriesPanel);
     document.addEventListener("DOMContentLoaded", bindNavPanel);
@@ -4602,8 +4601,7 @@ window.pgapp = (function () {
     bindAddPageForm();
     bindPageCardActions();
     bindNewAppProcessing();
-    bindAdvancedSourceLink();
-    bindAppSettingsLink();
+    bindEditorSubnav();
     bindEntitiesPanel();
     bindQueriesPanel();
     bindNavPanel();

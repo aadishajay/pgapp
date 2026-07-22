@@ -156,6 +156,12 @@ body {
 .pgapp-btn-secondary { background: #fff; border-color: var(--au-border); color: var(--au-text); }
 .pgapp-btn-secondary:hover { background: var(--au-header-bg); }
 
+/* Card panels the App Builder's own JS builds into `text` placeholder
+   slots — the preview link, the persistent section subnav, and the
+   Add Component form. */
+.pgapp-toolbar-slot { display: flex; justify-content: flex-end; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.pgapp-toolbar-slot:empty { display: none; }
+
 .pgapp-inline-form { display: inline; margin-left: 0.5rem; }
 .pgapp-alert { padding: 0.6rem 0.8rem; margin-bottom: 1rem; border-radius: var(--au-radius); border-left: 4px solid; }
 .pgapp-alert-error { color: var(--au-red); background: #fdf1ef; border-left-color: var(--au-red); }

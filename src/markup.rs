@@ -2224,10 +2224,10 @@ app "Demo" {
         assert_eq!(app.name, "App Builder");
         assert_eq!(app.queries.len(), 6);
         assert_eq!(app.entities.len(), 5);
-        assert_eq!(app.pages.len(), 6);
+        assert_eq!(app.pages.len(), 8);
 
         let edit_page = app.pages.iter().find(|p| p.name == "EditPage").unwrap();
-        assert_eq!(edit_page.components.len(), 6); // text (context), text (preview), text, region, text (properties), text (add-component)
+        assert_eq!(edit_page.components.len(), 7); // text (context), text (subnav), text (preview), text, region, text (properties), text (add-component)
         let region = edit_page
             .components
             .iter()
