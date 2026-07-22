@@ -1,0 +1,5 @@
+{
+  "name": "postgres",
+  "label": "Postgres",
+  "description": "A shadcn/ui derivative re-skinned around Postgres's own brand blue, with the pgapp logo (an elephant holding a pencil) as the header brand icon. Built for examples/showcase.pgapp."
+}

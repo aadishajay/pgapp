@@ -1,0 +1,987 @@
+/* pgapp theme: postgres
+ *
+ * A `shadcn` derivative re-skinned around Postgres's own brand blue
+ * (#336791 ≈ hsl(207 48% 38%)) for the primary/accent/ring tokens —
+ * everything else (neutral zinc surfaces, spacing, the validated
+ * dataviz chart palette below) is untouched shadcn, so every `.pgapp-*`
+ * rule it already gets right (calendar/map/faceted-search/IR
+ * aggregates included) carries over unchanged. Built for
+ * `examples/showcase.pgapp`, pgapp's own component tutorial app, but
+ * usable by any app via `theme: postgres`.
+ *
+ * Design tokens follow shadcn/ui's palette convention: HSL channel
+ * triples consumed as hsl(var(--token)), so callers can layer alpha with
+ * hsl(var(--token) / 0.1) etc. Component rules below style pgapp's fixed
+ * `.pgapp-*` class contract — see the "Theme contract" section of the
+ * project README for what any theme is expected to provide.
+ */
+
+:root {
+  --background: 0 0% 100%;
+  --foreground: 240 10% 3.9%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 10% 3.9%;
+  --primary: 207 48% 38%;
+  --primary-foreground: 0 0% 98%;
+  --secondary: 240 4.8% 95.9%;
+  --secondary-foreground: 240 5.9% 10%;
+  --muted: 240 4.8% 95.9%;
+  --muted-foreground: 240 3.8% 46.1%;
+  --accent: 207 60% 94%;
+  --accent-foreground: 207 60% 24%;
+  --destructive: 0 84.2% 60.2%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 240 5.9% 90%;
+  --input: 240 5.9% 90%;
+  --ring: 207 48% 38%;
+  --radius: 0.5rem;
+
+  /* Chart categorical palette (bar/pie/donut per-category fill, see
+     render.rs's `chart_slice_fill`) — unlike the tokens above these are
+     full colors, not bare HSL triples, since render.rs consumes them
+     directly as `var(--chart-N, <fallback>)`, not wrapped in hsl(...).
+     Order/values are the dataviz skill's validated 8-hue reference
+     palette (worst adjacent CVD ΔE 9.1, worst adjacent normal-vision ΔE
+     19.6) — swap freely, but re-validate any replacement set. */
+  --chart-1: #2a78d6;
+  --chart-2: #008300;
+  --chart-3: #e87ba4;
+  --chart-4: #eda100;
+  --chart-5: #1baf7a;
+  --chart-6: #eb6834;
+  --chart-7: #4a3aa7;
+  --chart-8: #e34948;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: 240 10% 3.9%;
+    --foreground: 0 0% 98%;
+    --card: 240 10% 3.9%;
+    --card-foreground: 0 0% 98%;
+    --primary: 207 70% 62%;
+    --primary-foreground: 210 45% 12%;
+    --secondary: 240 3.7% 15.9%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 3.7% 15.9%;
+    --muted-foreground: 240 5% 64.9%;
+    --accent: 207 35% 20%;
+    --accent-foreground: 207 70% 88%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 3.7% 15.9%;
+    --input: 240 3.7% 15.9%;
+    --ring: 207 70% 62%;
+
+    /* Same eight hues, stepped for the dark surface (see palette.md). */
+    --chart-1: #3987e5;
+    --chart-2: #008300;
+    --chart-3: #d55181;
+    --chart-4: #c98500;
+    --chart-5: #199e70;
+    --chart-6: #d95926;
+    --chart-7: #9085e9;
+    --chart-8: #e66767;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  max-width: 1400px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+  line-height: 1.5;
+}
+
+/* Wraps onto extra rows rather than forcing the whole page wider than
+   its max-width — a flex row with many non-shrinking items otherwise
+   overflows its container at any width, not just mobile. */
+.pgapp-nav {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  row-gap: 0.5rem;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+  font-size: 0.875rem;
+}
+/* The nav bar's own content (links + signed-in-user corner), wrapped
+   so a mobile hamburger toggle has one thing to show/hide — see the
+   640px breakpoint below. Reproduces .pgapp-nav's own flex layout so
+   nothing changes on desktop. */
+.pgapp-nav-collapse {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  row-gap: 0.5rem;
+  gap: 1.5rem;
+  flex: 1;
+}
+.pgapp-nav-toggle {
+  display: none;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1.25rem;
+  line-height: 1;
+  padding: 0.15rem 0.4rem;
+  color: hsl(var(--foreground));
+}
+
+.pgapp-link {
+  color: hsl(var(--foreground));
+  text-decoration: none;
+  font-weight: 500;
+}
+.pgapp-link:hover {
+  text-decoration: underline;
+}
+
+/* Multi-level nav bar: submenus are plain nested <ul>s, shown via
+   hover/focus-within so no JS is required. */
+.pgapp-navbar {
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: 0.35rem;
+  gap: 1.25rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pgapp-navbar-item {
+  position: relative;
+}
+.pgapp-navbar-label {
+  color: hsl(var(--muted-foreground));
+  font-weight: 500;
+}
+.pgapp-navbar-submenu {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 0;
+  min-width: 10rem;
+  /* No top margin: a gap here is empty space the pointer has to cross
+     between the link and the submenu, and :hover drops before it gets
+     there. padding-top keeps the same visual breathing room instead. */
+  margin: 0;
+  padding: 0.375rem 0.25rem 0.25rem;
+  list-style: none;
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.08);
+  z-index: 10;
+}
+.pgapp-navbar-item.pgapp-open > .pgapp-navbar-submenu,
+.pgapp-navbar-item:hover > .pgapp-navbar-submenu,
+.pgapp-navbar-item:focus-within > .pgapp-navbar-submenu {
+  display: block;
+}
+.pgapp-navbar-submenu .pgapp-navbar-item {
+  display: block;
+}
+.pgapp-navbar-submenu .pgapp-link {
+  display: block;
+  padding: 0.375rem 0.5rem;
+  border-radius: calc(var(--radius) - 2px);
+}
+.pgapp-navbar-submenu .pgapp-link:hover {
+  background: hsl(var(--accent));
+  text-decoration: none;
+}
+.pgapp-navbar-row { display: inline-flex; align-items: center; }
+.pgapp-navbar-toggle {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.65rem;
+  color: hsl(var(--muted-foreground));
+}
+.pgapp-navbar-toggle:hover { color: hsl(var(--foreground)); }
+
+/* Signed-in user corner: pushed to the right end of the nav. */
+.pgapp-nav-user { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; }
+.pgapp-nav-user .pgapp-inline-form { margin-left: 0; }
+.pgapp-nav-user .pgapp-btn { padding: 0.25rem 0.75rem; font-size: 0.8rem; }
+.pgapp-nav-username { font-weight: 600; }
+
+.pgapp-items {
+  margin-bottom: 1.25rem;
+}
+.pgapp-text {
+  color: hsl(var(--muted-foreground));
+  margin: 0 0 0.5rem;
+}
+
+.pgapp-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 0 0 1rem;
+}
+
+.pgapp-subtitle {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin: 1.5rem 0 0.75rem;
+}
+
+.pgapp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  margin-bottom: 1.5rem;
+}
+.pgapp-table th,
+.pgapp-table td {
+  border-bottom: 1px solid hsl(var(--border));
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+.pgapp-table th {
+  color: hsl(var(--muted-foreground));
+  font-weight: 500;
+}
+
+.pgapp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 24rem;
+}
+
+.pgapp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.pgapp-label {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.pgapp-input,
+.pgapp-select {
+  border: 1px solid hsl(var(--input));
+  border-radius: var(--radius);
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  background: hsl(var(--background));
+  color: hsl(var(--foreground));
+}
+.pgapp-input:focus,
+.pgapp-select:focus {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 1px;
+}
+
+.pgapp-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius);
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.pgapp-btn-primary {
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
+.pgapp-btn-primary:hover {
+  opacity: 0.9;
+}
+.pgapp-btn-destructive {
+  background: hsl(var(--destructive));
+  color: hsl(var(--destructive-foreground));
+}
+.pgapp-btn-destructive:hover {
+  opacity: 0.9;
+}
+.pgapp-btn-secondary {
+  background: hsl(var(--secondary));
+  color: hsl(var(--secondary-foreground));
+  border-color: hsl(var(--border));
+}
+.pgapp-btn-secondary:hover {
+  opacity: 0.9;
+}
+
+.pgapp-inline-form {
+  display: inline;
+  margin-left: 0.5rem;
+}
+
+/* Item types: checkbox, read-only display, radio group, popup LOV. */
+.pgapp-checkbox {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: hsl(var(--primary));
+}
+
+.pgapp-readonly {
+  display: inline-block;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--muted));
+  border-radius: var(--radius);
+}
+
+.pgapp-radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+.pgapp-radio-option {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.875rem;
+  font-weight: 400;
+}
+
+.pgapp-switch { display: inline-flex; align-items: center; cursor: pointer; }
+.pgapp-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.pgapp-switch-track { width: 2.4rem; height: 1.4rem; background: hsl(var(--border)); border-radius: 999px; position: relative; transition: background 0.15s; }
+.pgapp-switch-track::before { content: ""; position: absolute; top: 0.15rem; left: 0.15rem; width: 1.1rem; height: 1.1rem; background: hsl(var(--background)); border-radius: 50%; transition: transform 0.15s; }
+.pgapp-switch input:checked + .pgapp-switch-track { background: hsl(var(--primary)); }
+.pgapp-switch input:checked + .pgapp-switch-track::before { transform: translateX(1rem); }
+.pgapp-checkbox-group { display: flex; flex-direction: column; gap: 0.375rem; }
+.pgapp-checkbox-group-option { display: flex; align-items: center; gap: 0.4rem; font-size: 0.875rem; font-weight: 400; }
+.pgapp-checkbox-group-option input { accent-color: hsl(var(--primary)); }
+
+.pgapp-star-rating { display: inline-flex; }
+.pgapp-star { cursor: pointer; font-size: 1.4rem; color: hsl(var(--border)); }
+.pgapp-star-on { color: #eab308; }
+.pgapp-list-manager-items { list-style: none; margin: 0 0 0.4rem; padding: 0; }
+.pgapp-list-manager-items li { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.3rem 0; border-bottom: 1px solid hsl(var(--border)); }
+.pgapp-list-manager-add { display: flex; gap: 0.4rem; }
+.pgapp-list-manager-add input { flex: 1; }
+
+.pgapp-popup {
+  display: inline-block;
+}
+.pgapp-popup-dialog {
+  min-width: 16rem;
+  padding: 0.75rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--card));
+  color: hsl(var(--card-foreground));
+}
+.pgapp-popup-dialog::backdrop {
+  background: rgb(0 0 0 / 0.4);
+}
+.pgapp-popup-search {
+  width: 100%;
+  margin-bottom: 0.5rem;
+}
+.pgapp-popup-list {
+  list-style: none;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  max-height: 16rem;
+  overflow-y: auto;
+}
+.pgapp-popup-list button {
+  width: 100%;
+  text-align: left;
+  padding: 0.5rem 0.625rem;
+  border: none;
+  border-radius: calc(var(--radius) - 2px);
+  background: transparent;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+.pgapp-popup-list button:hover {
+  background: hsl(var(--accent));
+}
+.pgapp-popup-empty {
+  padding: 0.5rem 0.625rem;
+  font-size: 0.875rem;
+  color: hsl(var(--muted-foreground));
+  font-style: italic;
+}
+
+.pgapp-slider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.pgapp-slider-input {
+  flex: 1;
+  accent-color: hsl(var(--primary));
+}
+.pgapp-slider-output {
+  min-width: 2.5rem;
+  text-align: right;
+  font-size: 0.875rem;
+  font-variant-numeric: tabular-nums;
+  color: hsl(var(--muted-foreground));
+}
+
+/* Header / footer chrome, shown on every page. */
+.pgapp-header,
+.pgapp-footer {
+  font-size: 0.875rem;
+  color: hsl(var(--muted-foreground));
+}
+.pgapp-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid hsl(var(--border));
+}
+/* The app's name/brand always leads the header, at full contrast (not
+   the muted color the rest of a custom header { } block uses) — the
+   pgapp logo (a Postgres-blue elephant holding a pencil, see
+   assets/pgapp-logo.svg) leads it as an inline icon via `::before`, a
+   data URI so the whole theme stays one self-contained CSS file, no
+   extra asset request. */
+.pgapp-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: hsl(var(--foreground));
+  font-size: 1.125rem;
+  font-weight: 700;
+  margin-right: 1rem;
+}
+.pgapp-brand::before {
+  content: "";
+  display: inline-block;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  background-image: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%20role%3D%22img%22%20aria-label%3D%22pgapp%20logo%3A%20a%20blue%20elephant%20holding%20a%20pencil%22%3E%3Ctitle%3Epgapp%3C%2Ftitle%3E%3Cellipse%20cx%3D%2226%22%20cy%3D%2255%22%20rx%3D%2223%22%20ry%3D%2232%22%20fill%3D%22%232C5F7C%22%2F%3E%3Ccircle%20cx%3D%2262%22%20cy%3D%2246%22%20r%3D%2228%22%20fill%3D%22%23336791%22%2F%3E%3Cpath%20d%3D%22M%2078%2066%20Q%2087%2069%2085%2078%20Q%2083%2083%2076%2080%20Z%22%20fill%3D%22%23F5F1E8%22%2F%3E%3Cellipse%20cx%3D%2250%22%20cy%3D%2228%22%20rx%3D%2211%22%20ry%3D%226%22%20fill%3D%22%23FFFFFF%22%20opacity%3D%220.15%22%2F%3E%3Ccircle%20cx%3D%2272%22%20cy%3D%2236%22%20r%3D%225.5%22%20fill%3D%22%23FFFFFF%22%2F%3E%3Ccircle%20cx%3D%2274%22%20cy%3D%2236%22%20r%3D%222.8%22%20fill%3D%22%231A1A1A%22%2F%3E%3Cg%20transform%3D%22rotate%28-35%2080%2084%29%22%3E%3Crect%20x%3D%2245%22%20y%3D%2278%22%20width%3D%2210%22%20height%3D%2212%22%20rx%3D%223%22%20fill%3D%22%23F4A7B9%22%2F%3E%3Crect%20x%3D%2255%22%20y%3D%2278%22%20width%3D%225%22%20height%3D%2212%22%20fill%3D%22%23C9CDD3%22%2F%3E%3Crect%20x%3D%2260%22%20y%3D%2278%22%20width%3D%2238%22%20height%3D%2212%22%20fill%3D%22%23FFC53D%22%2F%3E%3Cpolygon%20points%3D%2298%2C78%2098%2C90%20114%2C84%22%20fill%3D%22%23E3A857%22%2F%3E%3Cpolygon%20points%3D%22108%2C80.5%20108%2C87.5%20114%2C84%22%20fill%3D%22%232B2B2B%22%2F%3E%3C%2Fg%3E%3Cpath%20d%3D%22M%2076%2064%20C%2092%2070%2C%20100%2082%2C%2093%2094%20C%2089%20102%2C%2077%20101%2C%2075%2091%22%20stroke%3D%22%23336791%22%20stroke-width%3D%2215%22%20stroke-linecap%3D%22round%22%20fill%3D%22none%22%2F%3E%3C%2Fsvg%3E");
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+.pgapp-footer {
+  margin-top: 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid hsl(var(--border));
+  text-align: center;
+}
+.pgapp-header .pgapp-items,
+.pgapp-footer .pgapp-items {
+  margin-bottom: 0;
+}
+
+/* A region: a named query's rows rendered inline wherever it's placed. */
+.pgapp-region, .pgapp-dynamic-content {
+  margin: 0 0 1.25rem;
+  padding: 1rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+}
+.pgapp-region-title {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.pgapp-region .pgapp-table {
+  margin-bottom: 0;
+}
+
+.pgapp-alert {
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  font-size: 0.875rem;
+  border: 1px solid hsl(var(--border));
+}
+.pgapp-alert-error {
+  background: hsl(var(--destructive) / 0.1);
+  color: hsl(var(--destructive));
+  border-color: hsl(var(--destructive) / 0.3);
+}
+
+.pgapp-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* Components: Report, Form, EditableTable, Chart. Each renders inside
+   its own panel so several can sit on one page without visually
+   running together. */
+.pgapp-report,
+.pgapp-form-panel,
+.pgapp-editable-table {
+  margin-bottom: 1.5rem;
+}
+.pgapp-report .pgapp-table,
+.pgapp-editable-table .pgapp-table {
+  margin-bottom: 0.75rem;
+}
+
+.pgapp-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+.pgapp-row-actions .pgapp-inline-form {
+  margin-left: 0;
+}
+.pgapp-icon {
+  width: 1rem;
+  height: 1rem;
+  vertical-align: -0.15em;
+  color: hsl(var(--muted-foreground));
+}
+a.pgapp-link:has(.pgapp-icon):hover .pgapp-icon {
+  color: hsl(var(--foreground));
+}
+.pgapp-row-actions .pgapp-btn-destructive .pgapp-icon {
+  color: hsl(var(--destructive-foreground));
+}
+
+.pgapp-pagination {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.pgapp-btn-disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* EditableTable: each row (and the "add new" row) is its own <form>,
+   since a <form> can't wrap <tr>/<td> — laid out horizontally via flex
+   so it still reads as a table. */
+.pgapp-editable-row-wrap {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.pgapp-editable-row-wrap .pgapp-inline-form {
+  margin-left: 0;
+}
+.pgapp-editable-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem;
+  max-width: none;
+}
+.pgapp-editable-row .pgapp-field {
+  margin-bottom: 0;
+  min-width: 7rem;
+}
+
+.pgapp-chart {
+  margin: 0 0 1.25rem;
+  padding: 1rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+}
+.pgapp-chart-svg {
+  width: 100%;
+  height: auto;
+  color: hsl(var(--primary));
+}
+.pgapp-chart canvas {
+  max-width: 100%;
+}
+/* A donut's punched-out center — matches the page background rather
+   than a hardcoded white, which would show as a stark mismatched
+   circle in dark mode. */
+.pgapp-chart-donut-hole { fill: hsl(var(--background)); }
+
+/* Map region: inline-SVG lat/lng scatter, no tile server (see model::ComponentDef::Map). */
+.pgapp-map { margin: 0 0 1.5rem; padding: 1.25rem 1.5rem; background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: var(--radius); }
+.pgapp-map-svg { width: 100%; height: auto; color: hsl(var(--destructive)); }
+
+/* Faceted Search: a panel of facets filtering a sibling Report (see model::ComponentDef::FacetedSearch). */
+.pgapp-facet-search { margin: 0 0 1.5rem; padding: 1.25rem 1.5rem; background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: var(--radius); }
+.pgapp-facet-search form { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: flex-start; }
+.pgapp-facet-group { display: flex; flex-direction: column; gap: 0.35rem; min-width: 10rem; }
+.pgapp-facet-title { font-weight: 600; font-size: 0.85rem; }
+.pgapp-facet-group input[type="number"], .pgapp-facet-group input[type="date"] { width: 8rem; }
+
+/* Report toolbar, saved views, actions, notices */
+.pgapp-report-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.75rem; }
+.pgapp-report-toolbar .pgapp-input[type="search"] { min-width: 14rem; }
+.pgapp-report-views { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.9rem; }
+.pgapp-view-chip { display: inline-flex; align-items: center; gap: 0.25rem; background: hsl(var(--secondary)); border: 1px solid hsl(var(--border)); border-radius: 999px; padding: 0.2rem 0.7rem; font-size: 0.8rem; }
+.pgapp-btn-viewdel { border: none; background: transparent; color: hsl(var(--destructive)); font-weight: 700; cursor: pointer; padding: 0 0.15rem; }
+.pgapp-view-save { display: inline-flex; align-items: center; gap: 0.4rem; }
+.pgapp-view-save .pgapp-input { padding: 0.3rem 0.6rem; font-size: 0.8rem; }
+.pgapp-view-public { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.8rem; color: hsl(var(--muted-foreground)); }
+.pgapp-action { display: inline-block; margin-bottom: 1.25rem; }
+.pgapp-alert-success { background: hsl(160 60% 40% / 0.1); color: hsl(160 70% 30%); border-color: hsl(160 60% 40% / 0.35); }
+
+/* Report header ("+ New" trigger next to the title) and table scroll
+   wrapper (narrow viewports scroll the table instead of blowing out the
+   page layout). */
+.pgapp-report-header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; flex-wrap: wrap; }
+.pgapp-report-header .pgapp-subtitle { margin: 0; }
+.pgapp-table-wrap { overflow-x: auto; }
+
+/* Report display: cards | list (Oracle APEX's Card/List regions folded
+   into Report as a display mode — see model::REPORT_DISPLAY_MODES). This
+   is unrelated to the App Builder's `.pgapp-cards .pgapp-table` hack
+   below: that hack restyles a plain table-mode report via an explicit
+   `attrs (class: "pgapp-cards")`, while this is the report's own
+   `display: cards` markup producing its own div-per-row structure with
+   no `<table>` inside — the two never nest, so their rules don't overlap. */
+.pgapp-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.9rem; margin-bottom: 0.85rem; }
+.pgapp-card { background: hsl(var(--card)); color: hsl(var(--card-foreground)); border: 1px solid hsl(var(--border)); border-radius: var(--radius); padding: 0.85rem 1.1rem; }
+.pgapp-card-field { display: flex; justify-content: space-between; gap: 0.5rem; padding: 0.2rem 0; }
+.pgapp-card-label { color: hsl(var(--muted-foreground)); font-size: 0.8rem; }
+.pgapp-card-value { text-align: right; }
+.pgapp-card .pgapp-row-actions { margin-top: 0.55rem; justify-content: flex-end; }
+
+.pgapp-list-view { list-style: none; margin: 0 0 0.85rem; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.pgapp-list-row { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; background: hsl(var(--card)); border: 1px solid hsl(var(--border)); border-radius: var(--radius); padding: 0.65rem 1rem; }
+.pgapp-list-row-fields { display: flex; flex-wrap: wrap; gap: 0.25rem 1.1rem; }
+.pgapp-list-row-label { color: hsl(var(--muted-foreground)); font-size: 0.8rem; }
+
+/* Interactive Report's clickable column-header sort. */
+.pgapp-sort-link { color: inherit; text-decoration: none; white-space: nowrap; }
+.pgapp-sort-link:hover { text-decoration: underline; }
+
+/* Interactive Report's per-column footer aggregates. */
+.pgapp-report-agg-row td { font-weight: 600; background: hsl(var(--muted)); border-top: 2px solid hsl(var(--border)); }
+.pgapp-agg-label { font-weight: 400; color: hsl(var(--muted-foreground)); font-size: 0.75rem; text-transform: uppercase; margin-right: 0.3rem; }
+
+/* Interactive Report's Control Break: a top border marks each new group. */
+.pgapp-break-row td { border-top: 2px solid hsl(var(--border)); }
+
+/* Calendar region: a month grid, one entry per day (see model::ComponentDef::Calendar). */
+.pgapp-calendar-header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.75rem; }
+.pgapp-calendar-header .pgapp-subtitle { margin: 0; }
+.pgapp-calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 1px; background: hsl(var(--border)); border: 1px solid hsl(var(--border)); border-radius: var(--radius); overflow: hidden; }
+.pgapp-calendar-daylabel { background: hsl(var(--muted)); padding: 0.4rem 0.5rem; font-size: 0.8rem; font-weight: 600; text-align: center; color: hsl(var(--muted-foreground)); }
+.pgapp-calendar-day { background: hsl(var(--card)); min-height: 5.5rem; padding: 0.4rem 0.5rem; display: flex; flex-direction: column; gap: 0.25rem; }
+.pgapp-calendar-day-outside { background: hsl(var(--muted)); }
+.pgapp-calendar-daynum { font-size: 0.85rem; color: hsl(var(--muted-foreground)); }
+.pgapp-calendar-entry { display: block; font-size: 0.8rem; padding: 0.2rem 0.4rem; background: hsl(var(--secondary)); color: hsl(var(--secondary-foreground)); border-radius: calc(var(--radius) - 2px); text-decoration: none; }
+
+/* A Report's edit/create Form renders as a centered modal over the
+   report: a dimmed, full-viewport backdrop (.pgapp-modal-overlay) with
+   the form panel (.pgapp-form-floating) centered on top of it at 60% of
+   the viewport width. */
+.pgapp-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 0.5);
+  padding: 1rem;
+}
+.pgapp-form-floating {
+  position: relative;
+  width: 60vw;
+  max-width: 40rem;
+  max-height: calc(100vh - 4rem);
+  overflow-y: auto;
+  /* .pgapp-form-panel has no card look of its own in this theme (it
+     normally just sits in page flow), but floating over a report needs
+     one — otherwise its content visually merges with the backdrop. */
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+  padding: 1.25rem 1.5rem;
+}
+.pgapp-form-floating-close {
+  position: absolute;
+  top: 0.7rem;
+  right: 0.9rem;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: hsl(var(--muted-foreground));
+  text-decoration: none;
+}
+.pgapp-form-floating-close:hover { color: hsl(var(--foreground)); }
+
+/* Mobile: no per-app work required to get a usable narrow-viewport
+   layout — nav wraps, the report toolbar stacks, and the form modal
+   widens toward a near-full-width sheet instead of the fixed 60vw box
+   (still centered by .pgapp-modal-overlay's flex layout, just wider). */
+@media (max-width: 640px) {
+  body { padding: 0 0.85rem; margin: 1.25rem auto; }
+  .pgapp-nav { flex-wrap: wrap; row-gap: 0.5rem; }
+  .pgapp-navbar { flex-wrap: wrap; row-gap: 0.35rem; }
+  /* Collapsed by default: the hamburger toggle (hidden on desktop)
+     shows/hides .pgapp-nav-collapse via the .pgapp-nav-open class
+     runtime.js toggles on the parent <nav>. */
+  .pgapp-nav-toggle { display: inline-flex; align-items: center; justify-content: center; }
+  .pgapp-nav-collapse {
+    display: none;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.5rem;
+    flex-basis: 100%;
+    margin-top: 0.5rem;
+  }
+  .pgapp-nav.pgapp-nav-open .pgapp-nav-collapse { display: flex; }
+  .pgapp-nav-collapse .pgapp-nav-user { margin-left: 0; }
+  .pgapp-report-toolbar .pgapp-input[type="search"] { min-width: 0; flex: 1 1 100%; }
+  .pgapp-form-floating {
+    width: 100%;
+    max-width: none;
+    max-height: calc(100vh - 2rem);
+  }
+}
+
+/* Themed alert/confirm dialogs (runtime.js pgapp.alert/pgapp.confirm),
+   replacing the browser's native, unstyleable alert()/confirm(). */
+.pgapp-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: hsl(0 0% 0% / 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 1rem;
+}
+.pgapp-dialog-box {
+  background: hsl(var(--card));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.15);
+  padding: 1.25rem 1.4rem;
+  max-width: 24rem;
+  width: 100%;
+}
+.pgapp-dialog-message { margin: 0 0 1.1rem; color: hsl(var(--card-foreground)); font-weight: 500; }
+.pgapp-dialog-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
+.pgapp-dialog-box .pgapp-input { margin-bottom: 1.1rem; }
+.pgapp-dialog-box-wide { max-width: 40rem; }
+.pgapp-source-textarea {
+  display: block;
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  resize: vertical;
+  white-space: pre;
+}
+
+/* renderLinkControls (runtime.js) — the structured "Target page" +
+   "Link parameters" GUI that appears above a component's raw markup
+   textarea whenever that text targets a page (a `link` component, or a
+   report's `link:` property), inside both the "Add Component" panel
+   and the component "Edit" dialog. */
+.pgapp-link-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-bottom: 0.9rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--muted));
+}
+.pgapp-link-controls-row { display: flex; flex-direction: column; gap: 0.35rem; }
+.pgapp-link-controls-row > label { font-size: 0.8rem; font-weight: 500; color: hsl(var(--muted-foreground)); }
+.pgapp-link-params-list { display: flex; flex-direction: column; gap: 0.35rem; }
+.pgapp-link-param-row { display: flex; align-items: center; gap: 0.4rem; }
+.pgapp-link-param-row .pgapp-input { margin-bottom: 0; flex: 1 1 auto; }
+
+/* App Builder (examples/app_builder.pgapp) — an APEX-App-Builder-
+   flavored look for its 4 pages: a card grid for "Apps"/"Pages"
+   (`attrs (class: "pgapp-cards")` on those reports), a compact
+   icon-actioned list for a page's components (added to the existing
+   `pgapp-draggable-rows` class), and card panels for the "Add
+   Component"/preview affordances runtime.js builds into `text`
+   placeholder slots. Every rule here is scoped under these classnames
+   so it only ever applies where the App Builder's own markup opts in
+   — no effect on any other app using this theme. */
+.pgapp-cards .pgapp-table thead { display: none; }
+.pgapp-cards .pgapp-table,
+.pgapp-cards .pgapp-table-wrap { border: none; overflow: visible; }
+/* A picker grid has no use for search/filter/saved-views chrome or a
+   redundant subtitle repeating the page's own <h1> — App-Builder-home
+   reads as a plain tile grid, not another data-grid report. */
+.pgapp-cards .pgapp-report-header,
+.pgapp-cards .pgapp-report-toolbar,
+.pgapp-cards .pgapp-report-views,
+.pgapp-cards .pgapp-pagination { display: none; }
+.pgapp-cards .pgapp-table tbody {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.9rem;
+}
+.pgapp-cards .pgapp-table tr {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) + 2px);
+  background: hsl(var(--card));
+  padding: 1rem 1.1rem;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+.pgapp-cards .pgapp-table tr:hover {
+  border-color: hsl(var(--ring) / 0.4);
+  box-shadow: 0 2px 10px rgb(0 0 0 / 0.08);
+}
+.pgapp-cards .pgapp-table td { border: none; padding: 0; }
+.pgapp-cards .pgapp-table td:first-child {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: hsl(var(--muted-foreground));
+}
+.pgapp-cards .pgapp-table td a.pgapp-link {
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+/* The component list: each row gets a kind icon, its label, an
+   ordinal badge, and a cluster of small icon buttons — laid out by
+   runtime.js's bindComponentRowActions, styled here. */
+.pgapp-draggable-rows .pgapp-table thead { display: none; }
+.pgapp-draggable-rows .pgapp-table,
+.pgapp-draggable-rows .pgapp-table-wrap { border: none; overflow: visible; }
+.pgapp-draggable-rows .pgapp-table tr {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  background: hsl(var(--card));
+  padding: 0.55rem 0.85rem;
+  margin-bottom: 0.5rem;
+  cursor: grab;
+}
+.pgapp-draggable-rows .pgapp-table tr:active { cursor: grabbing; }
+.pgapp-draggable-rows .pgapp-table td { border: none; padding: 0; }
+.pgapp-draggable-rows .pgapp-table td:first-child {
+  /* the raw pgapp_meta.components.id — still read by JS (reorder's
+     POST body, see saveDraggedOrder), never shown */
+  display: none;
+}
+.pgapp-component-kind-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: calc(var(--radius) - 2px);
+  background: hsl(var(--secondary));
+  font-size: 0.9rem;
+  flex: none;
+}
+.pgapp-component-label { font-weight: 500; }
+.pgapp-component-ordinal {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--secondary));
+  border-radius: 999px;
+  padding: 0.1rem 0.55rem;
+  flex: none;
+}
+.pgapp-component-actions { display: flex; gap: 0.3rem; flex: none; }
+.pgapp-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: calc(var(--radius) - 2px);
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--background));
+  color: hsl(var(--muted-foreground));
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0;
+}
+.pgapp-icon-btn:hover { color: hsl(var(--foreground)); background: hsl(var(--accent)); }
+.pgapp-icon-btn-destructive:hover { color: hsl(var(--destructive)); border-color: hsl(var(--destructive) / 0.5); }
+
+/* Card panels the App Builder's own JS builds into `text` placeholder
+   slots — the preview link and the Add Component form. */
+.pgapp-toolbar-slot {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.5rem;
+}
+.pgapp-toolbar-slot:empty { display: none; }
+.pgapp-panel-card {
+  border: 1px solid hsl(var(--border));
+  border-radius: calc(var(--radius) + 2px);
+  background: hsl(var(--card));
+  padding: 1rem 1.15rem;
+  margin-top: 1rem;
+}
+.pgapp-panel-card-title {
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+.pgapp-add-component-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.6rem;
+  align-items: end;
+}
+.pgapp-add-component-form .pgapp-btn { grid-column: 1 / -1; justify-self: start; }
+
+/* Breadcrumb (bindContextHeader) — which app/page is actually being
+   edited, since that's otherwise only visible in the URL's own query
+   string. */
+.pgapp-context-header {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: hsl(var(--muted-foreground));
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 0.5rem;
+}
+
+/* Pages picker cards get a small top-right delete button
+   (bindPageCardActions) instead of a 4th column like the component
+   list's table shape allows — a picker card is a single link, not a
+   multi-column row. */
+.pgapp-page-cards .pgapp-table tr { position: relative; padding-right: 4.5rem; }
+.pgapp-page-cards .pgapp-table tr .pgapp-icon-btn { position: absolute; top: 0.6rem; right: 0.6rem; }
+.pgapp-page-cards .pgapp-table tr .pgapp-icon-btn:not(.pgapp-icon-btn-destructive) { right: 2.5rem; }
+
+@media (max-width: 640px) {
+  .pgapp-cards .pgapp-table tbody { grid-template-columns: 1fr; }
+}
+.pgapp-shuttle { display: flex; align-items: center; gap: 0.5rem; }
+.pgapp-shuttle-list { flex: 1; min-width: 10rem; height: auto; }
+.pgapp-shuttle-controls { display: flex; flex-direction: column; gap: 0.3rem; }
+.pgapp-rich-text { border: 1px solid hsl(var(--input)); border-radius: var(--radius); overflow: hidden; }
+.pgapp-rich-text-toolbar { display: flex; gap: 0.2rem; padding: 0.4rem; border-bottom: 1px solid hsl(var(--input)); background: hsl(var(--muted)); }
+.pgapp-rich-text-toolbar button { cursor: pointer; padding: 0.25rem 0.55rem; border: 1px solid hsl(var(--input)); border-radius: calc(var(--radius) - 4px); background: hsl(var(--background)); color: hsl(var(--foreground)); }
+.pgapp-rich-text-editor { min-height: 6rem; padding: 0.6rem 0.75rem; font-size: 0.875rem; background: hsl(var(--background)); color: hsl(var(--foreground)); }
+.pgapp-rich-text-editor:focus { outline: none; }
+.pgapp-file-browse { display: flex; align-items: center; gap: 0.6rem; }
+.pgapp-file-browse-link { color: hsl(var(--primary)); text-decoration: none; font-weight: 500; }
+.pgapp-file-browse-link:hover { text-decoration: underline; }

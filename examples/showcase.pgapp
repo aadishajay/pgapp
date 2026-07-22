@@ -1,0 +1,430 @@
+# pgapp Showcase — a tutorial application demonstrating every built-in
+# component kind in one file: reports (with computed columns, format
+# masks, aggregates, control breaks, row highlights, and all three
+# display modes), forms (every item type), an editable table, all six
+# chart types, a calendar, a map, faceted search, dynamic content
+# (raw-HTML PL/pgSQL region), dynamic actions, and both server-side
+# action styles (run_query / call_function).
+#
+# Setup (functions before first sync, seed data after):
+#   export DATABASE_URL=postgres://user:pass@host:5432/<dbname>
+#   psql "$DATABASE_URL" -v schema=<workspace_schema> -f examples/showcase_functions.sql
+#   pgapp run examples/showcase.pgapp --workspace <slug>
+#   psql "$DATABASE_URL" -v schema=<workspace_schema> -f examples/showcase_seed.sql
+
+app "pgapp Showcase" {
+  theme: postgres
+
+  header {
+    text "pgapp Showcase — a demo of every component this framework offers"
+  }
+
+  footer {
+    text "Built from scratch with pgapp on postgres database"
+    link "About" -> page About
+  }
+
+  nav {
+    item "Home" -> page Home
+    item "Products" -> page Products
+    item "Tasks" -> page Tasks
+    item "Team" -> page Team
+    item "Cities" -> page Cities
+    item "Dashboard" -> page Dashboard
+    item "Feedback" -> page Feedback
+    item "More" {
+      item "Product Gallery" -> page ProductGallery
+      item "Task Calendar" -> page TaskCalendar
+      item "Team Quick Edit" -> page TeamQuickEdit
+      item "About" -> page About
+    }
+  }
+
+  # ---- App-scoped named queries ----
+
+  query home_hero_q {
+    sql: "select home_hero_html()"
+  }
+
+  query category_lov_q {
+    sql: "select distinct category as value from showcase_products order by 1"
+  }
+
+  query assignee_lov_q {
+    sql: "select distinct assignee as value from showcase_tasks where assignee is not null order by 1"
+  }
+
+  query department_lov_q {
+    sql: "select distinct department as value from showcase_team_members order by 1"
+  }
+
+  query topic_lov_q {
+    sql: "select unnest(array['Bug', 'Feature Request', 'General', 'Praise']) as value"
+  }
+
+  query category_summary_q {
+    sql: "select category, count(*) as product_count, avg(price::numeric)::text as avg_price
+            from showcase_products group by category order by 1"
+  }
+
+  query status_counts_q {
+    sql: "select status as label, count(*) as value from showcase_tasks group by status order by 1"
+  }
+
+  query priority_counts_q {
+    sql: "select priority as label, count(*) as value from showcase_tasks group by priority order by 1"
+  }
+
+  query team_by_department_q {
+    sql: "select department as label, count(*) as value from showcase_team_members group by department order by 1"
+  }
+
+  query price_by_product_q {
+    sql: "select name as label, price::numeric as value from showcase_products order by price::numeric desc limit 8"
+  }
+
+  query feedback_by_day_q {
+    sql: "select to_char(submitted_at, 'MM-DD') as label, count(*) as value
+            from showcase_feedback group by 1 order by 1"
+  }
+
+  # ---- Entities ----
+
+  entity "products" {
+    field id: id
+    field name: text required
+    field category: text default Electronics
+    field price: text required
+    field rating: integer default 3
+    field featured: boolean default false
+    field in_stock: boolean default true
+    field description: text
+    field created_at: timestamp default now
+  }
+
+  entity "tasks" {
+    field id: id
+    field title: text required
+    field status: text default Open
+    field priority: text default Medium
+    field due_date: text
+    field urgent: boolean default false
+    field assignee: text
+    field tags: text
+    field notes: text
+  }
+
+  entity "cities" {
+    field id: id
+    field name: text required
+    field country: text
+    field lat: text
+    field lng: text
+    field population: integer default 0
+  }
+
+  entity "feedback" {
+    field id: id
+    field name: text required
+    field email: text
+    field topic: text
+    field rating: integer default 5
+    field comments: text
+    field submitted_at: timestamp default now
+  }
+
+  entity "team_members" {
+    field id: id
+    field name: text required
+    field role: text
+    field department: text default Engineering
+    field color: text
+    field bio: text
+    field skills: text
+    field active: boolean default true
+  }
+
+  # Read-only, query-backed entity: no physical table, feeds a Report
+  # straight off category_summary_q's aggregated columns.
+  entity "category_summary" from query category_summary_q {
+    field category: text
+    field product_count: integer
+    field avg_price: text
+  }
+
+  # ---- Pages ----
+
+  # A rich HTML home page via dynamic_content — the only component kind
+  # that renders raw, unescaped HTML (see render::dynamic_content_html)
+  # — backed by a PL/pgSQL function (examples/showcase_functions.sql's
+  # home_hero_html()) that returns a card grid linking to every
+  # functional area below.
+  page "Home" {
+    dynamic_content "Welcome" calls call_function (query: "home_hero_q")
+  }
+
+  # Report + Form CRUD, with a computed column sitting between two
+  # physical columns, currency formatting, an average aggregate, a
+  # control break by category, and a row highlight for featured items.
+  page "Products" {
+    text "Every field type and format mask in one report: a computed 'Tier' column placed between Category and Price, currency formatting, a per-category control break, and a highlight rule for featured products."
+    report "Products" of products {
+      columns: name, category, tier, price, rating, featured, in_stock
+      computed tier: "case when t.price::numeric > 50 then 'Premium' else 'Standard' end"
+      heading tier: "Tier"
+      format price: currency
+      align price: right
+      aggregate price: avg
+      break_on: category
+      highlight (when: "t.featured = true", color: "#fef3c7")
+      page_size: 8
+    }
+    form "Add / edit product" of products {
+      fields: name, category, price, rating, featured, in_stock, description
+      item category as popup from query category_lov_q
+      item rating as star_rating (max: "5")
+      item featured as switch
+      item in_stock as switch
+      item description as rich_text
+    }
+  }
+
+  # Same entity, same report, one property different — Oracle APEX's
+  # "Cards" region folded into Report as a display mode.
+  page "ProductGallery" {
+    text "The exact same products report, rendered as cards instead of a table — a single 'display: cards' property, no separate component."
+    report "Product gallery" of products {
+      columns: name, category, price, rating, featured
+      format price: currency
+      display: cards
+      page_size: 6
+    }
+  }
+
+  # Faceted search (a sibling region matched to the Report below by
+  # entity), a control break, a row highlight, checkbox-group tags, and
+  # three dynamic actions driving each other client-side.
+  page "Tasks" {
+    text "Filter with the facets on the left, or use the report's own column search. The form below demos checkbox-group tags and three dynamic actions: Priority auto-sets Urgent, Assignee refreshes a live open-task count, and Urgent shows/hides the Notes field."
+    faceted_search "Filter tasks" of tasks {
+      facet status as checkbox_list
+      facet priority as checkbox_list
+      facet due_date as date_range
+    }
+    report "All tasks" of tasks {
+      columns: title, status, priority, assignee, due_date, urgent
+      link: title -> page TaskDetail (status: status)
+      break_on: status
+      highlight (when: "t.urgent = true", color: "#fee2e2")
+      page_size: 8
+    }
+    form "Create / edit task" of tasks {
+      fields: title, status, priority, due_date, urgent, assignee, tags, notes
+      item status as radio ("Open", "In Progress", "Done")
+      item priority as radio ("Low", "Medium", "High")
+      item due_date as date
+      item assignee as popup from query assignee_lov_q
+      item tags as checkbox_group ("Backend", "Frontend", "Docs", "Urgent-Fix")
+      item notes as textarea (rows: "3")
+    }
+
+    query task_load_for_assignee {
+      sql: "select count(*) as open_tasks from showcase_tasks
+              where assignee = :assignee and status = 'Open'"
+    }
+    region "Open tasks for the selected assignee" from query task_load_for_assignee
+    on change of priority {
+      set urgent to "pgapp.getItem('priority') === 'High'"
+    }
+    on change of assignee {
+      refresh task_load_for_assignee
+    }
+    on change of urgent {
+      toggle notes when "pgapp.getItem('urgent') === 'true'"
+    }
+
+    # A raw SQL action (src/actions/run_query.rs): the button executes
+    # this named UPDATE directly, no PL/pgSQL function needed.
+    query mark_overdue_urgent {
+      sql: "update showcase_tasks set urgent = true, priority = 'High'
+              where due_date < to_char(now(), 'YYYY-MM-DD') and status <> 'Done'"
+    }
+    action "Mark all overdue tasks as urgent" calls run_query (query: "mark_overdue_urgent")
+
+    # A named-query-sourced report (source: query) alongside the
+    # entity-backed one above — OFFSET-paginated since arbitrary SQL
+    # has no assumed sort key, but still gets edit/delete actions since
+    # it targets the same "tasks" entity by id.
+    query overdue_tasks_q {
+      sql: "select id, title, priority, assignee from showcase_tasks
+              where due_date < to_char(now(), 'YYYY-MM-DD') and status <> 'Done'
+             order by due_date"
+    }
+    report "Overdue (via named query)" of tasks {
+      source: query overdue_tasks_q
+      columns: title, priority, assignee
+      page_size: 5
+    }
+  }
+
+  # Oracle APEX's Calendar region: a month grid of tasks bucketed by
+  # due_date, each entry linking back to TaskDetail.
+  page "TaskCalendar" {
+    text "Every task plotted on a month calendar by its due date. Click an entry to see that task's detail."
+    calendar "Task calendar" of tasks {
+      date: due_date
+      title: title
+      link: page TaskDetail
+    }
+  }
+
+  # Reached from the Tasks report's linked column (forwards ?id=&status=)
+  # or the Calendar's entry link (forwards only ?id=) — the page-scoped
+  # queries below read both back as binds, resolved by name from the
+  # URL's query string.
+  page "TaskDetail" {
+    query task_context {
+      sql: "select title, status, priority, assignee, due_date, notes
+              from showcase_tasks where id = :id"
+    }
+    query same_status_tasks {
+      sql: "select id, title, priority, assignee from showcase_tasks
+              where status = :status and id != :id
+             order by id desc limit 8"
+    }
+    text "The task below was reached by a report link or a calendar entry, both forwarding ?id=; the report link also forwards ?status= for the second region."
+    region "This task" from query task_context
+    region "Other tasks with the same status" from query same_status_tasks
+    link "Back to Tasks" -> page Tasks
+    link "Back to Calendar" -> page TaskCalendar
+  }
+
+  # Report + Form CRUD with a color picker, a skills shuttle, and a
+  # rich-text bio field.
+  page "Team" {
+    text "Color picker, skills shuttle, and rich-text bio — three more item types, same form grammar as every other page."
+    report "Team" of team_members {
+      columns: name, role, department, active
+      page_size: 8
+    }
+    form "Add / edit team member" of team_members {
+      fields: name, role, department, color, bio, skills, active
+      item department as select from query department_lov_q
+      item color as color
+      item bio as rich_text
+      item skills as shuttle ("Rust", "SQL", "Postgres", "Design", "Writing", "DevOps")
+      item active as switch
+    }
+  }
+
+  # An EditableTable over the same entity as the Team page above — every
+  # row inline-editable, plus an add-new row, no separate popup form.
+  page "TeamQuickEdit" {
+    text "The same team_members table as an EditableTable: every row is inline-editable in place."
+    editable_table "Quick edit team" of team_members {
+      columns: name, role, department, active
+    }
+  }
+
+  # Report + Form CRUD, plus a Map region — Oracle APEX's Map region,
+  # an inline SVG scatter of rows by latitude/longitude, no map-tile
+  # service required.
+  page "Cities" {
+    text "A Map region plots every city below by latitude/longitude as an inline SVG — no external map service."
+    map "City locations" of cities {
+      lat: lat
+      lng: lng
+      title: name
+      link: page Cities
+    }
+    report "Cities" of cities {
+      columns: name, country, population
+      format population: number(0)
+      page_size: 8
+    }
+    form "Add / edit city" of cities {
+      fields: name, country, lat, lng, population
+    }
+  }
+
+  # A dashboard: every component here is read-only, each one line of
+  # markup backed by a named query — all six built-in chart types
+  # (model::CHART_TYPES) demoed across this one page.
+  page "Dashboard" {
+    text "Live metrics across every entity. Every widget below is one line of markup over a named SQL query — this page has no report or form of its own."
+    chart "Products by category" from query category_summary_q {
+      type: bar
+      x: category
+      y: product_count
+    }
+    chart "Task status split" from query status_counts_q {
+      type: donut
+      x: label
+      y: value
+    }
+    chart "Task priority split" from query priority_counts_q {
+      type: pie
+      x: label
+      y: value
+    }
+    chart "Team by department" from query team_by_department_q {
+      type: bar
+      x: label
+      y: value
+    }
+    chart "Top products by price" from query price_by_product_q {
+      type: line
+      x: label
+      y: value
+    }
+    chart "Price spread (scatter)" from query price_by_product_q {
+      type: scatter
+      x: label
+      y: value
+    }
+    chart "Feedback volume by day (area)" from query feedback_by_day_q {
+      type: area
+      x: label
+      y: value
+    }
+    report "Category summary (a query-backed entity)" of category_summary {
+      columns: category, product_count, avg_price
+      format avg_price: currency
+      page_size: 5
+    }
+  }
+
+  # A public-style submission form (star rating, popup topic picker),
+  # its own Report + Form CRUD pairing, and both server-side action
+  # styles: a raw SQL one lives on the Tasks page above, this one is
+  # PL/pgSQL-native.
+  page "Feedback" {
+    text "Submit feedback below. 'Run daily digest' calls a PL/pgSQL function (examples/showcase_functions.sql) and shows back whatever it returns."
+    report "Recent feedback" of feedback {
+      columns: name, rating, comments
+      page_size: 6
+    }
+    form "Submit feedback" of feedback {
+      fields: name, email, topic, rating, comments
+      item topic as popup from query topic_lov_q
+      item rating as star_rating (max: "5")
+      item comments as textarea (rows: "3")
+    }
+
+    query daily_digest_q {
+      sql: "select showcase_daily_digest()"
+    }
+    action "Run daily digest (PL/pgSQL)" calls call_function (query: "daily_digest_q")
+  }
+
+  page "About" {
+    text "pgapp Showcase demonstrates every built-in component kind — reports (computed columns, format masks, aggregates, control breaks, highlights, table/cards/list display), forms (every item type), an editable table, all 6 chart types, a calendar, a map, faceted search, dynamic content, dynamic actions, and both server-side action styles — defined entirely in examples/showcase.pgapp, with zero per-app code."
+    chart "Task priority split (as a bar chart)" from query priority_counts_q {
+      type: bar
+      x: label
+      y: value
+    }
+    action "Log a page view" calls log_values (message: "Showcase About page viewed")
+    link "Back to Home" -> page Home
+  }
+}

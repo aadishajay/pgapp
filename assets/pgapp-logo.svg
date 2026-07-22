@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="pgapp logo: a blue elephant holding a pencil">
+  <title>pgapp</title>
+  <ellipse cx="26" cy="55" rx="23" ry="32" fill="#2C5F7C"/>
+  <circle cx="62" cy="46" r="28" fill="#336791"/>
+  <path d="M 78 66 Q 87 69 85 78 Q 83 83 76 80 Z" fill="#F5F1E8"/>
+  <ellipse cx="50" cy="28" rx="11" ry="6" fill="#FFFFFF" opacity="0.15"/>
+  <circle cx="72" cy="36" r="5.5" fill="#FFFFFF"/>
+  <circle cx="74" cy="36" r="2.8" fill="#1A1A1A"/>
+  <g transform="rotate(-35 80 84)">
+    <rect x="45" y="78" width="10" height="12" rx="3" fill="#F4A7B9"/>
+    <rect x="55" y="78" width="5" height="12" fill="#C9CDD3"/>
+    <rect x="60" y="78" width="38" height="12" fill="#FFC53D"/>
+    <polygon points="98,78 98,90 114,84" fill="#E3A857"/>
+    <polygon points="108,80.5 108,87.5 114,84" fill="#2B2B2B"/>
+  </g>
+  <path d="M 76 64 C 92 70, 100 82, 93 94 C 89 102, 77 101, 75 91" stroke="#336791" stroke-width="15" stroke-linecap="round" fill="none"/>
+</svg>
