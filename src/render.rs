@@ -1002,6 +1002,7 @@ fn input_for_field(
     resolved_choices: &HashMap<String, Vec<(String, String)>>,
     registry: &item_types::Registry,
     field_html: &HashMap<String, HtmlAttrs>,
+    show_label: bool,
 ) -> String {
     let field = entity.field(field_name).expect("field must exist on entity");
     let value = value.unwrap_or("");
@@ -1027,9 +1028,16 @@ fn input_for_field(
     let html = field_html.get(field_name).unwrap_or(&EMPTY_HTML);
 
     // data-pgapp-item lets dynamic actions show/hide/toggle the whole
-    // field (label included), not just its input.
+    // field (label included), not just its input. `show_label` is off
+    // for an EditableTable cell — the grid's own header row already
+    // names the column, so repeating it per row would be redundant.
+    let label_html = if show_label {
+        format!(r#"<label class="pgapp-label">{label}</label>"#, label = escape(field_name))
+    } else {
+        String::new()
+    };
     format!(
-        r#"<div class="{class}" data-pgapp-item="{label}"{extra}><label class="pgapp-label">{label}</label>{input}</div>"#,
+        r#"<div class="{class}" data-pgapp-item="{label}"{extra}>{label_html}{input}</div>"#,
         class = merged_class("pgapp-field", html),
         extra = extra_attrs(html),
         label = escape(field_name),
@@ -1594,7 +1602,7 @@ pub fn form_html(
     body.push_str(&format!(r#"<form class="pgapp-form" method="post" action="{action}">"#));
     for field_name in fields {
         let value = row.get(field_name).and_then(|v| v.as_deref());
-        body.push_str(&input_for_field(entity, item_types, field_name, value, resolved_choices, registry, field_html));
+        body.push_str(&input_for_field(entity, item_types, field_name, value, resolved_choices, registry, field_html, true));
     }
     let submit_label = if edit_id.is_some() { "Save" } else { "Create" };
     body.push_str(&format!(
@@ -1619,11 +1627,26 @@ pub fn form_html(
     body
 }
 
-/// An `EditableTable` component: every row rendered as its own inline
-/// form (fields laid out horizontally via CSS to look table-like),
-/// plus an "add new" form at the bottom. Deliberately not a literal
-/// `<table>` — a `<form>` can't wrap `<tr>`/`<td>` — but styled to read
-/// as one.
+/// An `EditableTable`'s toolbar state — only present when the markup
+/// sets `page_size:`, gating pagination, the search box, and clickable
+/// column-header sort as one bundle (Oracle APEX's Interactive Grid
+/// always has all three; a plain unpaginated grid keeps the historical
+/// "just render every row" behavior with none of them).
+pub struct EditableTableExtras<'a> {
+    pub q: &'a str,
+    pub sort: Option<(&'a str, bool)>,
+    pub prev_href: Option<&'a str>,
+    pub next_href: Option<&'a str>,
+}
+
+/// An `EditableTable` component: Oracle APEX's Interactive Grid look —
+/// one shared header row naming each column, then every data row (plus
+/// a trailing "add new" row) as its own inline form. Each `<form>` is
+/// styled `display: contents` so it contributes no box of its own —
+/// its cells become direct children of the surrounding CSS Grid, right
+/// alongside the header's — sidestepping the fact that a `<form>` can't
+/// wrap `<tr>`/`<td>` while still sharing one set of column tracks
+/// (see themes/*/theme.css's `.pgapp-editable-grid` rules).
 #[allow(clippy::too_many_arguments)]
 pub fn editable_table_html(
     app: &str,
@@ -1638,6 +1661,7 @@ pub fn editable_table_html(
     registry: &item_types::Registry,
     icons: &Icons,
     field_html: &HashMap<String, HtmlAttrs>,
+    extras: Option<&EditableTableExtras>,
     html: &HtmlAttrs,
 ) -> String {
     let mut body = format!(
@@ -1646,12 +1670,67 @@ pub fn editable_table_html(
         extra = extra_attrs(html),
         title = escape(title),
     );
-
-    for row in rows {
-        let id = row.get("id").and_then(|v| v.as_deref()).unwrap_or("");
-        body.push_str(r#"<div class="pgapp-editable-row-wrap">"#);
+    if let Some(extras) = extras {
         body.push_str(&format!(
-            r#"<form class="pgapp-editable-row" method="post" action="/{app}/{page}/c/{idx}/update/{id}">"#,
+            r#"<form class="pgapp-report-toolbar" method="get" action="/{app}/{page}#pgapp-c{idx}">
+<input class="pgapp-input" type="search" name="r{idx}_q" value="{q}" placeholder="Search all columns">
+<button class="pgapp-btn pgapp-btn-secondary" type="submit">Apply</button>
+<a class="pgapp-link" href="/{app}/{page}#pgapp-c{idx}">Clear</a>
+</form>"#,
+            app = escape(app),
+            page = escape(page_name),
+            q = escape(extras.q),
+        ));
+    }
+
+    body.push_str(&format!(
+        r#"<div class="pgapp-editable-grid" style="grid-template-columns: repeat({}, 1fr) auto;">"#,
+        columns.len()
+    ));
+
+    body.push_str(r#"<div class="pgapp-editable-grid-row pgapp-editable-grid-header">"#);
+    for col in columns {
+        match extras {
+            // Same clickable column-header sort as Report's Interactive
+            // Report: toggles asc/desc on the currently-sorted column,
+            // defaults a newly-clicked column to ascending.
+            Some(extras) => {
+                let (next_dir, arrow) = match extras.sort {
+                    Some((c, desc)) if c == col => {
+                        if desc {
+                            ("asc", " \u{25bc}")
+                        } else {
+                            ("desc", " \u{25b2}")
+                        }
+                    }
+                    _ => ("asc", ""),
+                };
+                let q_qs = if extras.q.is_empty() { String::new() } else { format!("&r{idx}_q={}", url_encode(extras.q)) };
+                body.push_str(&format!(
+                    r#"<div class="pgapp-editable-grid-cell"><a class="pgapp-link pgapp-sort-link" href="/{app}/{page}?r{idx}_sort={col_enc}:{next_dir}{q_qs}#pgapp-c{idx}">{label}{arrow}</a></div>"#,
+                    app = escape(app),
+                    page = escape(page_name),
+                    col_enc = url_encode(col),
+                    label = escape(col),
+                ));
+            }
+            None => body.push_str(&format!(r#"<div class="pgapp-editable-grid-cell">{}</div>"#, escape(col))),
+        }
+    }
+    body.push_str(r#"<div class="pgapp-editable-grid-cell"></div></div>"#);
+
+    for (i, row) in rows.iter().enumerate() {
+        let id = row.get("id").and_then(|v| v.as_deref()).unwrap_or("");
+        let form_id = format!("pgapp-et-{idx}-{}", escape(id));
+        // A `display: contents` `<form>` paints no box of its own, so
+        // zebra shading can't ride on the row form's own background —
+        // it's applied per-cell instead, keyed off this row's parity
+        // (an explicit class from here rather than CSS `:nth-of-type`,
+        // which would have to thread through the header row and the
+        // "add new" row's own `<form>` too).
+        let alt = if i % 2 == 1 { " pgapp-editable-grid-row-alt" } else { "" };
+        body.push_str(&format!(
+            r#"<form id="{form_id}" class="pgapp-editable-grid-row" method="post" action="/{app}/{page}/c/{idx}/update/{id}">"#,
             app = escape(app),
             page = escape(page_name),
             idx = idx,
@@ -1659,12 +1738,22 @@ pub fn editable_table_html(
         ));
         for col in columns {
             let value = row.get(col).and_then(|v| v.as_deref());
-            body.push_str(&input_for_field(entity, item_types, col, value, resolved_choices, registry, field_html));
+            body.push_str(&format!(
+                r#"<div class="pgapp-editable-grid-cell{alt}">{}</div>"#,
+                input_for_field(entity, item_types, col, value, resolved_choices, registry, field_html, false)
+            ));
         }
+        body.push_str("</form>");
+        // The actions cell sits *outside* the update `<form>` (as a
+        // grid sibling, not a descendant) so the Delete `<form>` below
+        // doesn't have to nest inside it — forms can't nest, and this
+        // row's Save button already reaches the update form by its
+        // `form="{form_id}"` attribute instead of DOM containment.
         body.push_str(&format!(
-            r#"<button class="pgapp-btn pgapp-btn-primary" type="submit" title="Save">{save_icon}</button></form>
+            r#"<div class="pgapp-editable-grid-cell pgapp-editable-grid-actions{alt}">
+<button class="pgapp-btn pgapp-btn-primary" type="submit" form="{form_id}" title="Save">{save_icon}</button>
 <form class="pgapp-inline-form" method="post" action="/{app}/{page}/c/{idx}/delete/{id}" data-pgapp-confirm="Delete this row?">
-<button class="pgapp-btn pgapp-btn-destructive" type="submit" title="Delete">{delete_icon}</button></form>"#,
+<button class="pgapp-btn pgapp-btn-destructive" type="submit" title="Delete">{delete_icon}</button></form></div>"#,
             save_icon = icons.render("edit"),
             delete_icon = icons.render("delete"),
             app = escape(app),
@@ -1672,19 +1761,46 @@ pub fn editable_table_html(
             idx = idx,
             id = escape(id),
         ));
-        body.push_str("</div>");
     }
 
     body.push_str(&format!(
-        r#"<h3 class="pgapp-region-title">Add new</h3><div class="pgapp-editable-row-wrap"><form class="pgapp-form pgapp-editable-row" method="post" action="/{app}/{page}/c/{idx}/create">"#,
+        r#"<form class="pgapp-editable-grid-row pgapp-editable-grid-new" method="post" action="/{app}/{page}/c/{idx}/create">"#,
         app = escape(app),
         page = escape(page_name),
         idx = idx,
     ));
     for col in columns {
-        body.push_str(&input_for_field(entity, item_types, col, None, resolved_choices, registry, field_html));
+        body.push_str(&format!(
+            r#"<div class="pgapp-editable-grid-cell">{}</div>"#,
+            input_for_field(entity, item_types, col, None, resolved_choices, registry, field_html, false)
+        ));
     }
-    body.push_str(r#"<button class="pgapp-btn pgapp-btn-primary" type="submit">Add</button></form></div>"#);
+    body.push_str(
+        r#"<div class="pgapp-editable-grid-cell pgapp-editable-grid-actions"><button class="pgapp-btn pgapp-btn-primary" type="submit">Add</button></div></form>"#,
+    );
+
+    body.push_str("</div>"); // .pgapp-editable-grid
+
+    if let Some(extras) = extras {
+        if extras.prev_href.is_some() || extras.next_href.is_some() {
+            body.push_str(r#"<div class="pgapp-pagination">"#);
+            match extras.prev_href {
+                Some(href) => body.push_str(&format!(
+                    r#"<a class="pgapp-link pgapp-btn pgapp-btn-secondary" href="{}">&laquo; Prev</a>"#,
+                    escape(href)
+                )),
+                None => body.push_str(r#"<span class="pgapp-btn pgapp-btn-secondary pgapp-btn-disabled">&laquo; Prev</span>"#),
+            }
+            match extras.next_href {
+                Some(href) => body.push_str(&format!(
+                    r#"<a class="pgapp-link pgapp-btn pgapp-btn-secondary" href="{}">Next &raquo;</a>"#,
+                    escape(href)
+                )),
+                None => body.push_str(r#"<span class="pgapp-btn pgapp-btn-secondary pgapp-btn-disabled">Next &raquo;</span>"#),
+            }
+            body.push_str("</div>");
+        }
+    }
 
     body.push_str("</div>");
     body

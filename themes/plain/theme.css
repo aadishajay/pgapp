@@ -155,13 +155,20 @@ body {
 .pgapp-pagination { display: flex; justify-content: space-between; gap: 0.75rem; }
 .pgapp-btn-disabled { opacity: 0.4; cursor: default; pointer-events: none; }
 
-/* EditableTable: each row (and the "add new" row) is its own <form>,
-   since a <form> can't wrap <tr>/<td> — laid out horizontally via flex
-   so it still reads as a table. */
-.pgapp-editable-row-wrap { display: flex; align-items: flex-end; gap: 0.5rem; margin-bottom: 0.5rem; }
-.pgapp-editable-row-wrap .pgapp-inline-form { margin-left: 0; }
-.pgapp-editable-row { display: flex; flex-direction: row; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem; }
-.pgapp-editable-row .pgapp-field { margin-bottom: 0; min-width: 7rem; }
+/* EditableTable: an Interactive-Grid-style CSS Grid. Each row (and the
+   "add new" row) is its own <form> (a <form> can't wrap <tr>/<td>),
+   styled `display: contents` so its cells become direct grid items
+   alongside the header row's. */
+.pgapp-editable-grid { display: grid; border: 1px solid #ddd; margin-bottom: 1rem; }
+.pgapp-editable-grid-row { display: contents; }
+.pgapp-editable-grid-cell { display: flex; align-items: center; padding: 0.35rem 0.6rem; border-bottom: 1px solid #ddd; min-width: 0; }
+.pgapp-editable-grid-cell .pgapp-field { width: 100%; margin-bottom: 0; }
+.pgapp-editable-grid-cell .pgapp-input, .pgapp-editable-grid-cell .pgapp-select { width: 100%; }
+.pgapp-editable-grid-header .pgapp-editable-grid-cell { font-weight: 600; background: #f5f5f5; }
+.pgapp-editable-grid-actions { display: flex; align-items: center; gap: 0.35rem; white-space: nowrap; }
+.pgapp-editable-grid-actions .pgapp-inline-form { display: inline-flex; margin-left: 0; }
+.pgapp-editable-grid-row-alt { background: #f5f5f5; }
+.pgapp-editable-grid-new .pgapp-editable-grid-cell { border-bottom: none; }
 
 .pgapp-chart { margin: 0 0 1rem; padding: 0.75rem; border: 1px solid #ddd; }
 .pgapp-chart-svg { width: 100%; height: auto; color: #06c; }

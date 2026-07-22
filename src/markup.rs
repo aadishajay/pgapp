@@ -138,6 +138,7 @@
 //!
 //! editable_table := "editable_table" String "of" Ident "{" etprop* "}"
 //! etprop    := "columns" ":" identlist
+//!            | "page_size" ":" Number
 //!            | itemprop
 //!
 //! itemprop  := "item" Ident ("as" fielditem)? htmlattrs?
@@ -1269,6 +1270,7 @@ impl Parser {
         let mut columns = Vec::new();
         let mut item_types = std::collections::HashMap::new();
         let mut field_html = std::collections::HashMap::new();
+        let mut page_size: Option<i64> = None;
         while !self.at_symbol('}') {
             if self.at_keyword("item") {
                 let (field, item, html) = self.parse_field_item()?;
@@ -1284,6 +1286,13 @@ impl Parser {
             self.expect_symbol(':')?;
             match prop.as_str() {
                 "columns" => columns = self.parse_ident_list()?,
+                "page_size" => {
+                    let n = self.expect_ident()?;
+                    page_size = Some(
+                        n.parse()
+                            .with_context(|| format!("invalid page_size '{n}' on editable_table '{title}'"))?,
+                    );
+                }
                 other => bail!("unknown editable_table property '{other}' (line {})", self.cur_line()),
             }
         }
@@ -1295,6 +1304,7 @@ impl Parser {
             columns,
             item_types,
             field_html,
+            page_size,
             requires: None,
             html: HtmlAttrs::default(),
         })

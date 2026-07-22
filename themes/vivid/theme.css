@@ -361,21 +361,32 @@ a.pgapp-link:hover .pgapp-icon { color: var(--v-fuchsia); }
 
 .pgapp-pagination { display: flex; justify-content: space-between; gap: 0.75rem; }
 
-.pgapp-editable-row-wrap {
-  display: flex;
-  align-items: flex-end;
-  gap: 0.55rem;
-  margin-bottom: 0.6rem;
+.pgapp-editable-grid {
+  display: grid;
   background: var(--v-surface);
   border: 1px solid var(--v-border);
   border-radius: var(--v-radius);
-  padding: 0.7rem 0.9rem;
   box-shadow: var(--v-shadow);
+  overflow: hidden;
+  margin-bottom: 1.25rem;
 }
-.pgapp-editable-row-wrap .pgapp-inline-form { margin-left: 0; }
-.pgapp-editable-row { display: flex; flex-direction: row; flex-wrap: wrap; align-items: flex-end; gap: 0.7rem; max-width: none; }
-.pgapp-editable-row .pgapp-field { margin-bottom: 0; min-width: 8rem; }
-.pgapp-editable-row .pgapp-btn { padding: 0.4rem 0.7rem; }
+.pgapp-editable-grid-row { display: contents; }
+.pgapp-editable-grid-cell { display: flex; align-items: center; padding: 0.45rem 0.7rem; border-bottom: 1px solid var(--v-border); min-width: 0; }
+.pgapp-editable-grid-cell .pgapp-field { width: 100%; margin-bottom: 0; }
+.pgapp-editable-grid-cell .pgapp-input, .pgapp-editable-grid-cell .pgapp-select { width: 100%; }
+.pgapp-editable-grid-header .pgapp-editable-grid-cell {
+  background: linear-gradient(120deg, rgb(79 70 229 / 0.09), rgb(217 70 239 / 0.09));
+  color: var(--v-indigo);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+}
+.pgapp-editable-grid-actions { display: flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+.pgapp-editable-grid-actions .pgapp-inline-form { display: inline-flex; margin-left: 0; }
+.pgapp-editable-grid-actions .pgapp-btn { padding: 0.4rem 0.7rem; }
+.pgapp-editable-grid-row-alt { background: #faf9ff; }
+.pgapp-editable-grid-new .pgapp-editable-grid-cell { border-bottom: none; }
 
 .pgapp-region, .pgapp-chart {
   margin: 0 0 1.5rem;

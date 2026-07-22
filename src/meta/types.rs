@@ -157,6 +157,7 @@ pub enum RuntimeComponent {
         columns: Vec<String>,
         item_types: HashMap<String, FieldItem>,
         field_html: HashMap<String, HtmlAttrs>,
+        page_size: Option<i64>,
         requires: Option<String>,
         html: HtmlAttrs,
     },
@@ -353,13 +354,14 @@ impl RuntimeComponent {
                 "requires": requires,
                 "html": html_attrs_json(html),
             }),
-            RuntimeComponent::EditableTable { title, entity, columns, item_types, field_html, requires, html } => serde_json::json!({
+            RuntimeComponent::EditableTable { title, entity, columns, item_types, field_html, page_size, requires, html } => serde_json::json!({
                 "title": title,
                 "entity": entity.name,
                 "entity_fields": entity_fields_json(entity),
                 "columns": columns,
                 "item_types": item_types_json(item_types),
                 "field_html": field_html_json(field_html),
+                "page_size": page_size,
                 "requires": requires,
                 "html": html_attrs_json(html),
             }),

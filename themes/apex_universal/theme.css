@@ -215,13 +215,28 @@ body {
 .pgapp-pagination { display: flex; justify-content: space-between; gap: 0.75rem; }
 .pgapp-btn-disabled { opacity: 0.4; cursor: default; pointer-events: none; }
 
-/* EditableTable: each row (and the "add new" row) is its own <form>,
-   since a <form> can't wrap <tr>/<td> — laid out horizontally via flex
-   so it still reads as a table. */
-.pgapp-editable-row-wrap { display: flex; align-items: flex-end; gap: 0.5rem; margin-bottom: 0.5rem; }
-.pgapp-editable-row-wrap .pgapp-inline-form { margin-left: 0; }
-.pgapp-editable-row { display: flex; flex-direction: row; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem; }
-.pgapp-editable-row .pgapp-field { margin-bottom: 0; min-width: 7rem; }
+/* EditableTable: Oracle APEX's own Interactive Grid look. One CSS Grid
+   shares its column tracks between the header row and every data row
+   — each row is its own <form> (a <form> can't wrap <tr>/<td>), styled
+   `display: contents` so its cells become direct grid items right
+   alongside the header's. */
+.pgapp-editable-grid { display: grid; border: 1px solid var(--au-border); margin-bottom: 1.25rem; font-size: 0.9rem; }
+.pgapp-editable-grid-row { display: contents; }
+.pgapp-editable-grid-cell { display: flex; align-items: center; padding: 0.4rem 0.7rem; border-bottom: 1px solid var(--au-border); min-width: 0; }
+.pgapp-editable-grid-cell .pgapp-field { width: 100%; margin-bottom: 0; }
+.pgapp-editable-grid-cell .pgapp-input, .pgapp-editable-grid-cell .pgapp-select { width: 100%; }
+.pgapp-editable-grid-header .pgapp-editable-grid-cell {
+  background: var(--au-header-bg);
+  color: var(--au-muted);
+  font-weight: 700;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.pgapp-editable-grid-actions { display: flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+.pgapp-editable-grid-actions .pgapp-inline-form { display: inline-flex; margin-left: 0; }
+.pgapp-editable-grid-row-alt { background: #fafbfd; }
+.pgapp-editable-grid-new .pgapp-editable-grid-cell { border-bottom: none; }
 
 .pgapp-chart { margin: 0 0 1.25rem; padding: 1rem 1.1rem; background: var(--au-bg); border: 1px solid var(--au-border); border-radius: var(--au-radius); }
 .pgapp-chart-svg { width: 100%; height: auto; color: var(--au-blue); }

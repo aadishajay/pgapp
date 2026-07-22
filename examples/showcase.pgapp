@@ -320,9 +320,10 @@ app "Showcase" {
   # An EditableTable over the same entity as the Team page above — every
   # row inline-editable, plus an add-new row, no separate popup form.
   page "TeamQuickEdit" {
-    text "The same team_members table as an EditableTable: every row is inline-editable in place."
+    text "The same team_members table as an EditableTable: every row is inline-editable in place. page_size: turns on the search box, clickable column-header sort, and paging, same as a Report's Interactive Report."
     editable_table "Quick edit team" of team_members {
       columns: name, role, department, active
+      page_size: 3
     }
   }
 

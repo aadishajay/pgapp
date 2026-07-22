@@ -539,29 +539,61 @@ a.pgapp-link:has(.pgapp-icon):hover .pgapp-icon {
   pointer-events: none;
 }
 
-/* EditableTable: each row (and the "add new" row) is its own <form>,
-   since a <form> can't wrap <tr>/<td> — laid out horizontally via flex
-   so it still reads as a table. */
-.pgapp-editable-row-wrap {
-  display: flex;
-  align-items: flex-end;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
+/* EditableTable: Oracle APEX's Interactive Grid look. One CSS Grid
+   shares its column tracks between the header row and every data row
+   — each row is its own <form> (a <form> can't wrap <tr>/<td>), styled
+   `display: contents` so it contributes no box of its own and its
+   cells become direct grid items right alongside the header's. */
+.pgapp-editable-grid {
+  display: grid;
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 1rem;
+  font-size: 0.875rem;
 }
-.pgapp-editable-row-wrap .pgapp-inline-form {
+.pgapp-editable-grid-row {
+  display: contents;
+}
+.pgapp-editable-grid-cell {
+  display: flex;
+  align-items: center;
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid hsl(var(--border));
+  min-width: 0;
+}
+.pgapp-editable-grid-cell .pgapp-field {
+  width: 100%;
+}
+.pgapp-editable-grid-cell .pgapp-input,
+.pgapp-editable-grid-cell .pgapp-select {
+  width: 100%;
+  padding: 0.3rem 0.5rem;
+}
+.pgapp-editable-grid-header .pgapp-editable-grid-cell {
+  font-weight: 500;
+  font-size: 0.8rem;
+  color: hsl(var(--muted-foreground));
+  background: hsl(var(--muted));
+}
+.pgapp-editable-grid-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  white-space: nowrap;
+}
+.pgapp-editable-grid-actions .pgapp-inline-form {
+  display: inline-flex;
   margin-left: 0;
 }
-.pgapp-editable-row {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 0.5rem;
-  max-width: none;
+/* Zebra shading: a `display: contents` row `<form>` paints no box of
+   its own, so this is an explicit per-cell class from render.rs (keyed
+   off row parity) rather than a `:nth-of-type` trick. */
+.pgapp-editable-grid-row-alt {
+  background: hsl(var(--muted) / 0.4);
 }
-.pgapp-editable-row .pgapp-field {
-  margin-bottom: 0;
-  min-width: 7rem;
+.pgapp-editable-grid-new .pgapp-editable-grid-cell {
+  border-bottom: none;
 }
 
 .pgapp-chart {

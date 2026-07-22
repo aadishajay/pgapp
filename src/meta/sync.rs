@@ -832,6 +832,7 @@ fn build_component_config(
             columns,
             item_types,
             field_html,
+            page_size,
             ..
         } => {
             if !entity_ids.contains_key(entity) {
@@ -863,6 +864,7 @@ fn build_component_config(
                     "columns": columns,
                     "item_types": resolved,
                     "field_html": field_html_resolved,
+                    "page_size": page_size,
                 }),
             ))
         }

@@ -576,6 +576,11 @@ pub enum ComponentDef {
         columns: Vec<String>,
         item_types: HashMap<String, FieldItem>,
         field_html: HashMap<String, HtmlAttrs>,
+        /// `None` loads every row unpaginated (the historical default,
+        /// for backward compatibility with markup predating this
+        /// property) — `Some(n)` offset-paginates like a query-backed
+        /// `Report`, `n` rows per page.
+        page_size: Option<i64>,
         requires: Option<String>,
         html: HtmlAttrs,
     },

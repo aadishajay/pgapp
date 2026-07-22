@@ -1829,10 +1829,65 @@ async fn render_component(
             }
         }
 
-        RuntimeComponent::EditableTable { title, entity, columns, item_types, field_html, html, .. } => {
+        RuntimeComponent::EditableTable { title, entity, columns, item_types, field_html, page_size, html, .. } => {
             let ctx = bind_context(query, None);
             let choices = resolve_field_choices(&state.pool, &data.app, page, item_types, &ctx).await?;
-            let rows = fetch_rows(&state.pool, &data.app.data_schema, entity).await?;
+
+            // Pagination, the search box, and clickable column-header
+            // sort are one bundle, gated on `page_size:` being set in
+            // the markup — an unpaginated grid keeps the historical
+            // "just render every row" behavior with none of them (see
+            // `render::EditableTableExtras`).
+            struct PagedState {
+                q: String,
+                sort_col: String,
+                sort_desc: bool,
+                prev_href: Option<String>,
+                next_href: Option<String>,
+            }
+            let (rows, paged) = match page_size {
+                Some(page_size) => {
+                    let filters = ReportFilters::from_query(query, idx, columns).map_err(|(_, msg)| anyhow::anyhow!(msg))?;
+                    // `id` isn't necessarily one of this grid's declared
+                    // `columns`, so the default sort below must never be
+                    // round-tripped back into the URL — `SortSpec::from_query`
+                    // validates `r{idx}_sort` against `columns` alone, and
+                    // would reject its own default on the very next request.
+                    let explicit_sort = SortSpec::from_query(query, idx, columns, &[]).map_err(|(_, msg)| anyhow::anyhow!(msg))?;
+                    let sort = explicit_sort
+                        .clone()
+                        .unwrap_or_else(|| SortSpec { column: "id".to_string(), desc: false });
+                    let p_page = format!("e{idx}_page");
+                    let page_num: i64 = query.get(&p_page).and_then(|s| s.parse().ok()).unwrap_or(1).max(1);
+                    let (rows, has_next) =
+                        fetch_report_rows_sorted(&state.pool, &data.app.data_schema, entity, &[], &filters, columns, &sort, *page_size, page_num)
+                            .await?;
+
+                    let mut filter_qs = String::new();
+                    if let Some(fq) = &filters.q {
+                        filter_qs.push_str(&format!("&r{idx}_q={}", url_encode(fq)));
+                    }
+                    if let Some(s) = &explicit_sort {
+                        filter_qs.push_str(&format!("&r{idx}_sort={}:{}", url_encode(&s.column), s.dir_str()));
+                    }
+                    let prev_href = (page_num > 1).then(|| format!("/{app}/{page_name}?{p_page}={}{filter_qs}#pgapp-c{idx}", page_num - 1));
+                    let next_href = has_next.then(|| format!("/{app}/{page_name}?{p_page}={}{filter_qs}#pgapp-c{idx}", page_num + 1));
+
+                    (
+                        rows,
+                        Some(PagedState { q: filters.q.unwrap_or_default(), sort_col: sort.column, sort_desc: sort.desc, prev_href, next_href }),
+                    )
+                }
+                None => (fetch_rows(&state.pool, &data.app.data_schema, entity).await?, None),
+            };
+
+            let extras = paged.as_ref().map(|p| render::EditableTableExtras {
+                q: p.q.as_str(),
+                sort: Some((p.sort_col.as_str(), p.sort_desc)),
+                prev_href: p.prev_href.as_deref(),
+                next_href: p.next_href.as_deref(),
+            });
+
             Ok(render::editable_table_html(
                 app,
                 page_name,
@@ -1846,6 +1901,7 @@ async fn render_component(
                 &state.item_types,
                 &data.icons,
                 field_html,
+                extras.as_ref(),
                 html,
             ))
         }

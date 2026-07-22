@@ -405,9 +405,14 @@ fixed "page kind." Eleven kinds:
   under new names (same `(field, target param)` shape as a report's
   `link:`). `field` must be `"id"` or one of this form's own `fields:`
   — the only data available to forward without a second DB round trip.
-- **`editable_table "Title" of <entity> { ... }`** — every row rendered
-  as its own inline-editable form, plus an "add new" row. Not
-  paginated. Same `item` syntax as `form`.
+- **`editable_table "Title" of <entity> { ... }`** — Oracle APEX's
+  Interactive Grid look: one CSS Grid sharing column tracks between a
+  header row and every data row (each an inline-editable form), plus an
+  "add new" row. Same `item` syntax as `form`. `page_size: <n>` turns on
+  pagination, a search box, and clickable column-header sort — all
+  three as one bundle, same as a Report's Interactive Report — with
+  offset pagination; omitted, it loads every row unpaginated (the
+  historical default, kept for backward compatibility).
 - **`chart "Title" from query <name> { type: bar|line|area|scatter|pie|donut x: <col> y: <col> }`**
   — see "Charts".
 - **`text "..."`** — static text.

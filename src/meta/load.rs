@@ -613,6 +613,7 @@ fn decode_component(
             columns: json_strings(&config["columns"]),
             item_types: decode_item_types(&config["item_types"]),
             field_html: decode_field_html(&config),
+            page_size: config.get("page_size").and_then(|v| v.as_i64()),
             requires,
             html,
         }),
