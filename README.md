@@ -1009,19 +1009,28 @@ still Rust code — those need `cargo build` + restart. Markup changes
 ## App Builder
 
 `examples/app_builder.pgapp` is a pgapp app, like any other, that lists
-every app registered across every workspace in the instance and lets
-you drag-and-drop reorder a page's components, add a component of any
-of the 13 kinds through a real per-attribute property form (title/
-entity/columns/computed columns/format masks/item types/dynamic-action
-ops/requires/attrs — whatever that kind supports, as typed fields and
-add/remove/reorder row lists, not a raw markup blob), delete it, add/
-rename/delete whole pages, jump straight to a live preview, scaffold
-brand-new apps, stand up a brand-new workspace from scratch, and — via
-each app's own "AppSettings" page — edit its data model
-(entities/fields), named queries, navigation menu, and
-theme/icons/chart_lib/auth settings, plus delete the app or its whole
-workspace outright — an Oracle-APEX-App-Builder-flavored way to build
-without hand-editing markup over SSH. What's still Advanced-editor-only
+every app registered across every workspace in the instance — as a
+genuinely searchable Interactive Report (search box, column filter,
+sort, saved views), same as the Pages listing underneath it, not a
+static card grid — and lets you edit a page in an APEX-Page-Designer-
+style split view: a clickable component tree on the left, a docked
+property editor on the right showing the selected component's full
+attribute form (title/entity/columns/computed columns/format masks/
+item types/dynamic-action ops/requires/attrs — whatever that kind
+supports, as typed fields and add/remove/reorder row lists, not a raw
+markup blob) inline, no modal — add a component of any of the 13
+kinds, delete it, add/rename/delete whole pages, jump straight to a
+live preview, scaffold brand-new apps, stand up a brand-new workspace
+from scratch, and — via each app's own "AppSettings" page — edit its
+data model (entities/fields, with name suggestions drawn from the
+table's real Postgres columns), named queries (with a live "Test
+Query" syntax/table/column check and a quick tables-and-columns
+reference alongside the SQL box), navigation menu,
+theme/icons/chart_lib/auth settings, and secrets (add/list/remove,
+the same encrypted-at-rest store `pgapp secret set/list/rm` uses),
+plus delete the app or its whole workspace outright — an
+Oracle-APEX-App-Builder-flavored way to build without hand-editing
+markup over SSH. What's still Advanced-editor-only
 (`header`/`footer` chrome, `auth_scheme` role groups, a directory-based
 app's structure) is one click away via the "Advanced" link into the
 full-file raw editor every app already has; each component's raw
@@ -1086,18 +1095,25 @@ in place — no restart:
   anything the structured form doesn't cover well. The new component
   always lands at the bottom of the page; drag it into place from
   there.
-- **Edit**: per-row pencil button opens the same structured editor,
+- **Edit**: clicking a row in the component tree (not a separate
+  pencil button — the whole row is the affordance) loads the same
+  structured editor into the docked Property Editor alongside it,
   prefilled from that component's already-resolved, already-typed
   attributes (`GET .../components/:idx/structured`, backed by
   `RuntimeComponent::to_json`) rather than its raw text — a Form's
   `trip_type as popup from query trip_types_lov` shows up as a real
   "popup" dropdown with a "from query" config field already filled in,
-  not a string to retype. Save regenerates the whole component's markup
-  from the form's current state and POSTs it to
+  not a string to retype. A Report's own Columns list also gets a
+  "Column headings & alignment" row-list here — an optional per-column
+  `heading "<Display name>"` override plus a left/center/right `align`,
+  the same APEX "column heading" concept, distinct from the underlying
+  field name. Save regenerates the whole component's markup from the
+  panel's current state and POSTs it to
   `.../pages/:page/components/:idx/edit`, replacing the whole block
   (`page_reorder::replace_component`) — genuine APEX-Page-Designer-
-  style editing: pick a component, get a property sheet, not a raw text
-  box. A `{ }` button next to the pencil opens the original raw-markup
+  style editing: pick a component in the tree, get a property sheet
+  right there, not a raw text box, and not a modal either. An "Edit as
+  raw markup" button in the panel's footer opens the original raw-markup
   textarea instead (prefilled via `GET .../components/:idx/source`),
   for anything the structured form doesn't have a dedicated control for
   yet, or to hand-tweak formatting/inline comments the structured
@@ -1145,17 +1161,24 @@ views, not just left orphaned) and reloads the in-memory app.
 Single-file apps only for now — a directory app's page lives across
 more than one file, and splicing across files isn't implemented yet.
 
-The drag itself, the panels, and the per-row/per-card action buttons
-are all `runtime.js` (`bindDraggableRows`/`bindAddComponentForm`/
-`bindComponentRowActions`/`bindAddPageForm`/`bindPageCardActions`/
-`bindAdvancedSourceLink`) — plain HTML5 drag-and-drop, a themed
-structured property-sheet modal (`pgappStructuredEditor`, one render
-function per kind in `PGAPP_KIND_RENDERERS` plus shared widgets —
+The drag itself, the tree-plus-property-panel split, and the per-row/
+per-card action buttons are all `runtime.js` (`bindDraggableRows`/
+`bindAddComponentForm`/`bindComponentDesigner`/`loadPropertyPanel`/
+`bindAddPageForm`/`bindPageCardActions`/`bindAdvancedSourceLink`) —
+plain HTML5 drag-and-drop, a re-parenting trick that combines the
+"Components" region and "Properties" placeholder (two separate markup
+components) into one `.pgapp-designer-layout` flex row purely in the
+DOM, and the same per-kind structured renderers
+(`PGAPP_KIND_RENDERERS`, one function per kind, plus shared widgets —
 `pgappRowList` for repeatable rows, `pgappAttrsEditor`/
 `pgappRequiresEditor`/`pgappConfigEditor`/`pgappItemTypesEditor` for
-the bits every kind or every field shares) alongside the original raw-
-source editor modal (`pgappSourceEditor`, still the "Advanced"/"{ }"
-fallback), both built the same way as the existing `pgappPrompt`/
+the bits every kind or every field shares) rendered directly into that
+docked panel instead of a modal — "Add Component" is the one place a
+modal (`pgappStructuredEditor`) still appears, since a brand-new
+component has no existing row to dock a panel next to yet. The
+original raw-source editor modal (`pgappSourceEditor`, still the
+"Advanced"/"Edit as raw markup" fallback) is built the same way as the
+existing `pgappPrompt`/
 `pgappAlert`/`pgappConfirm` dialogs, and small DOM-built forms injected
 into `text` component placeholders (`attrs (id: "...")`), no framework
 changes needed to host any of it. Saving in the structured editor never
@@ -1237,25 +1260,40 @@ counterpart to APEX's Data workshop, Shared Components, and Edit
 Application Properties, all in one place:
 
 - **Data Model**: add/edit/delete entities and their fields (name,
-  type, required, default) through the same structured field-list
-  editor a Form/Report's own field picker already uses. Adding a
-  physical entity provisions its table on the next sync exactly like a
-  hand-written `entity { }` block would; adding a query-backed one
-  (`from query <name>`) just needs an existing query to point at.
-  Renaming an entity, or changing an existing field's type, isn't
-  supported here — the former needs rewriting every place that entity
-  is referenced (unlike a page, which already has that machinery via
-  `page_reorder::rename_page`; entities don't yet), and the latter is
-  already a hard sync-time error if it doesn't match the physical
-  column, so there's nothing this editor could safely do differently.
-  Deleting an entity removes its `pgapp_meta` bookkeeping only — its
-  physical table (if it has one) is deliberately left in place, same
-  "pgapp adds columns but never changes or drops them" caution
-  `meta::sync_app`'s `ensure_data_table` already applies to fields.
-- **Queries**: add/edit/delete a named query (name + SQL). Deleting
-  one still in use (an entity `from query`, a report/chart/region/LOV
-  bound to it) is rejected at the next sync with the same "unknown
-  query" error a hand-edit would get.
+  type, a real checkbox for required, default) through the same
+  structured field-list editor a Form/Report's own field picker
+  already uses. For an *existing* physical entity, the Name field is a
+  datalist — not a hard dropdown — suggesting real column names read
+  straight from `information_schema.columns` via `GET
+  .../admin/schema-metadata` (`admin_schema_metadata` in server.rs),
+  scoped to the app's own `data_schema`; typing something not in the
+  list is still fine (a brand-new field the next sync will add a
+  column for). Adding a physical entity provisions its table on the
+  next sync exactly like a hand-written `entity { }` block would;
+  adding a query-backed one (`from query <name>`) just needs an
+  existing query to point at. Renaming an entity, or changing an
+  existing field's type, isn't supported here — the former needs
+  rewriting every place that entity is referenced (unlike a page,
+  which already has that machinery via `page_reorder::rename_page`;
+  entities don't yet), and the latter is already a hard sync-time error
+  if it doesn't match the physical column, so there's nothing this
+  editor could safely do differently. Deleting an entity removes its
+  `pgapp_meta` bookkeeping only — its physical table (if it has one) is
+  deliberately left in place, same "pgapp adds columns but never
+  changes or drops them" caution `meta::sync_app`'s `ensure_data_table`
+  already applies to fields.
+- **Queries**: add/edit/delete a named query (name + SQL), with the
+  same schema-metadata endpoint powering a quick "Available tables"
+  reference (table name, its entity name, and its real columns) right
+  under the SQL box, and a **Test Query** button that POSTs the SQL to
+  `.../admin/queries/test` — real syntax/table/column validation via
+  `meta::compile_named_query`'s Postgres `Describe` round-trip (the
+  same check a sync already runs on every named query, now reachable
+  before saving, not just after), reporting either the bind names it
+  detected or Postgres's own error message. Deleting a query still in
+  use (an entity `from query`, a report/chart/region/LOV bound to it)
+  is rejected at the next sync with the same "unknown query" error a
+  hand-edit would get.
 - **Navigation**: add/edit/delete/reorder the nav menu's *top-level*
   items (label + target page) with plain ▲▼ buttons, same convention
   every other repeatable-row editor here uses. A nested submenu item
@@ -1266,15 +1304,28 @@ Application Properties, all in one place:
   on/off toggle — APEX's "Edit Application Properties," scoped
   deliberately: an `auth_scheme`'s own role list, and which pages
   `requires:` which role, both stay Advanced-editor-only.
+- **Secrets**: add/update (name + value) and remove app-scoped
+  secrets — the same encrypted-at-rest store (`src/secrets.rs`,
+  AES-256-GCM) the CLI's `pgapp secret set/list/rm` already uses, and
+  what an `http_request` action's `{{secret.name}}` resolves against.
+  Only names ever come back to the browser; a value, once saved, can be
+  overwritten but never displayed again. Setting one still needs
+  `PGAPP_SECRET_KEY` set in the server process's own environment (the
+  in-memory-only AES key — see "Secrets" below) — without it, Add/
+  Update fails with a clear error instead of silently no-op'ing.
 
-All four are line-splice edits in `src/app_editor.rs`, the entity/
-query/nav/settings counterpart to `src/page_reorder.rs`'s page/
-component splices — same discipline (reusing the real parser's own
-walk to find exact line ranges, so untouched content, including
-comments and formatting, survives every edit unchanged), same routes
-shape (`/:workspace/:app/admin/{entities,queries,nav,settings}...`,
-JSON in/out, validated with `markup::parse_app` before writing, ending
-in a hot `entry.reload()` — no restart).
+The first four (Data Model/Queries/Navigation/App Settings) are all
+line-splice edits in `src/app_editor.rs`, the entity/query/nav/settings
+counterpart to `src/page_reorder.rs`'s page/component splices — same
+discipline (reusing the real parser's own walk to find exact line
+ranges, so untouched content, including comments and formatting,
+survives every edit unchanged), same routes shape
+(`/:workspace/:app/admin/{entities,queries,nav,settings}...`, JSON
+in/out, validated with `markup::parse_app` before writing, ending in a
+hot `entry.reload()` — no restart). Secrets don't touch the markup file
+at all — they're rows in `pgapp_control.secrets`, scoped by the app's
+own control-plane id (`secrets::Scope::App`), so there's no reload
+step and no file to keep in sync.
 
 ### Deleting an app or its whole workspace
 
@@ -1331,7 +1382,7 @@ piece goes:
 | `region ... (type: cards)` / `region ... (type: list)`        | `report "Title" of <entity> { display: cards }` / `{ display: list }` — a display mode on the same `report`, not a separate region kind |
 | `region ... (type: calendar)`                                  | `calendar "Title" of <entity> { date: <field> title: <field> }` |
 | `region ... (type: map)`                                        | `map "Title" of <entity> { lat: <field> lng: <field> title: <field> }` — an inline-SVG scatter, no external mapping library/tile server |
-| a region's `column NAME (heading, layout, appearance, ...)`   | one name in `columns:`, plus `format <column>: <mask>` for display formatting (see "Computed columns & format masks") — no per-column heading override yet (see "App Builder" for what's GUI-editable today) |
+| a region's `column NAME (heading, layout, appearance, ...)`   | one name in `columns:`, plus `heading <column>: "<Display name>"` / `align <column>: left\|center\|right` for the heading/alignment overrides, and `format <column>: <mask>` for display formatting (see "Computed columns & format masks") |
 | a column's "Derived Column"/computation                       | `computed <name>: "<sql>"` on the report (see "Computed columns & format masks") |
 | `region`'s `link { target: { page, items } }`                 | a report's `link: <field> -> page <Name> (extra: param, ...)`               |
 | `button ... (behavior { action: redirectThisApp, target })`  | `button "Label" -> page <Name> (extra: param, ...)`                          |

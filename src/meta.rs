@@ -7,7 +7,7 @@ mod load;
 mod sync;
 mod types;
 
-pub use load::{load_app, load_runtime_js};
+pub use load::{compile_named_query, load_app, load_runtime_js};
 pub use sync::sync_app;
 pub use types::*;
 

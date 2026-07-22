@@ -111,12 +111,16 @@ fn render_segments(segments: &[Segment], names: &[String], casts: Option<&[Strin
 /// hand-written cast (`:project_id::integer`, the old style) still
 /// works exactly as before: it's just a redundant no-op layered under
 /// the auto-detected one.
+///
+/// Always runs the `Describe` round-trip, even when `sql` has no
+/// `:name` binds at all — a bind-less query still needs its syntax (and
+/// every table/column reference) checked against real Postgres, and
+/// skipping this the moment there's nothing to *infer* would leave the
+/// most common query shape (`select ... from <table>`, no filter
+/// parameter) with no syntax check at all, at either load time or in
+/// the App Builder's own "Test Query".
 pub async fn compile_named_query(pool: &PgPool, data_schema: &str, sql: &str) -> Result<(String, Vec<String>)> {
     let (segments, names) = tokenize_binds(sql);
-    if names.is_empty() {
-        return Ok((sql.to_string(), names));
-    }
-
     let bare = render_segments(&segments, &names, None);
     // search_path-scoped (see meta::scoped_conn): an unqualified table
     // reference in the query's own SQL only resolves to this app's
@@ -128,13 +132,21 @@ pub async fn compile_named_query(pool: &PgPool, data_schema: &str, sql: &str) ->
         .describe(&wrap_to_jsonb(&bare))
         .await
         .with_context(|| {
-            format!(
-                "couldn't infer bind parameter types for named query SQL: {sql}\n\
-                 (Postgres couldn't tell what type one of the `:name` binds should be — \
-                 add an explicit cast, e.g. `:{}::text`, to disambiguate it)",
-                names[0]
-            )
+            if names.is_empty() {
+                format!("named query SQL failed to parse: {sql}")
+            } else {
+                format!(
+                    "couldn't infer bind parameter types for named query SQL: {sql}\n\
+                     (Postgres couldn't tell what type one of the `:name` binds should be — \
+                     add an explicit cast, e.g. `:{}::text`, to disambiguate it)",
+                    names[0]
+                )
+            }
         })?;
+
+    if names.is_empty() {
+        return Ok((sql.to_string(), names));
+    }
 
     let casts: Vec<String> = match described.parameters() {
         Some(sqlx::Either::Left(params)) if params.len() == names.len() => {

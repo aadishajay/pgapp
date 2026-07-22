@@ -646,12 +646,15 @@ window.pgapp = (function () {
     return !!(target.workspace && target.app);
   }
 
-  // A "Delete" button per page card on the Pages page (`.pgapp-cards`
-  // rows there) — the page's own name is the card's visible link text,
-  // so no hidden id column is needed the way the component list needs
-  // one for its ordinal-based `idx`.
+  // A "Rename"/"Delete" button per row of the Pages page's Interactive
+  // Report (`#pgapp-pages-report`) — the page's own name is the row's
+  // visible link text, so no hidden id column is needed the way the
+  // component list needs one for its ordinal-based `idx`. The buttons
+  // land in their own trailing `<td>` (a plain IR row, not a
+  // `.pgapp-cards` tile, so a bare `<button>` can't be a direct `<tr>`
+  // child).
   function bindPageCardActions() {
-    var rows = document.querySelectorAll(".pgapp-page-cards tbody tr");
+    var rows = document.querySelectorAll("#pgapp-pages-report tbody tr");
     if (!rows.length) return;
     var target = pgappEditTarget();
     if (!pgappEditTargetValid2(target)) return;
@@ -662,6 +665,7 @@ window.pgapp = (function () {
         var pageUrl =
           "/" + encodeURIComponent(target.workspace) + "/" + encodeURIComponent(target.app) + "/admin/pages/" + encodeURIComponent(pageName);
 
+        var actionsTd = document.createElement("td");
         var renameBtn = document.createElement("button");
         renameBtn.type = "button";
         renameBtn.className = "pgapp-icon-btn";
@@ -690,7 +694,7 @@ window.pgapp = (function () {
               });
           });
         });
-        row.appendChild(renameBtn);
+        actionsTd.appendChild(renameBtn);
 
         var btn = document.createElement("button");
         btn.type = "button";
@@ -716,7 +720,8 @@ window.pgapp = (function () {
               });
           });
         });
-        row.appendChild(btn);
+        actionsTd.appendChild(btn);
+        row.appendChild(actionsTd);
       })(rows[i]);
     }
   }
@@ -813,8 +818,12 @@ window.pgapp = (function () {
   // `{name, source_query, source_collection, fields: [{name, type,
   // required, default}]}` (blank/absent for a brand-new entity — see
   // `admin_entities_list`'s JSON shape in server.rs). `queries` (from
-  // the same fetch) populates the "from query" dropdown.
-  function renderEntityForm(container, data, queries) {
+  // the same fetch) populates the "from query" dropdown. `columns` (from
+  // `/admin/schema-metadata`, only non-empty for an *existing* physical
+  // entity) suggests real Postgres column names for the field-name
+  // input — a datalist, not a hard dropdown, since adding a field that
+  // doesn't exist in the table yet is normal (the next sync creates it).
+  function renderEntityForm(container, data, queries, columns) {
     var nameInput = pgappTextInput(data.name);
     if (data.name) nameInput.disabled = true; // renaming isn't supported here — delete + recreate, or the Advanced editor
     pgappFieldRow(container, "Name", nameInput);
@@ -826,15 +835,21 @@ window.pgapp = (function () {
     pgappFieldRow(container, "Source", sourceSel);
 
     pgappSectionTitle(container, "Fields");
+    if (columns && columns.length) {
+      var hint = document.createElement("p");
+      hint.className = "pgapp-designer-properties-empty";
+      hint.textContent = "Name suggestions come from the table's real columns.";
+      container.appendChild(hint);
+    }
     var fieldsList = pgappRowList(
       [
-        { key: "name", label: "Name", type: "text" },
+        { key: "name", label: "Name", type: "datalist", options: columns || [] },
         { key: "type", label: "Type", type: "select", options: ENTITY_FIELD_TYPES },
-        { key: "required", label: "Required (y/n)", type: "text" },
+        { key: "required", label: "Required", type: "checkbox" },
         { key: "default", label: "Default", type: "text" },
       ],
       (data.fields || []).map(function (f) {
-        return { name: f.name, type: f.type, required: f.required ? "y" : "", default: f.default || "" };
+        return { name: f.name, type: f.type, required: !!f.required, default: f.default || "" };
       })
     );
     container.appendChild(fieldsList.el);
@@ -851,7 +866,7 @@ window.pgapp = (function () {
         fieldsList.getRows().forEach(function (r) {
           if (!r.name || !r.name.trim()) return;
           var line = "    field " + r.name.trim() + ": " + (r.type || "text");
-          if (r.required && /^y/i.test(r.required.trim())) line += " required";
+          if (r.required) line += " required";
           if (r.default && r.default.trim()) line += " default " + r.default.trim();
           lines.push(line);
         });
@@ -886,12 +901,19 @@ window.pgapp = (function () {
     }
 
     function openEditor(title, existing) {
-      fetch(pgappAdminAppUrl(target, "/entities-list"))
-        .then(function (r) { return r.json(); })
-        .then(function (data) {
+      Promise.all([
+        fetch(pgappAdminAppUrl(target, "/entities-list")).then(function (r) { return r.json(); }),
+        fetch(pgappAdminAppUrl(target, "/schema-metadata")).then(function (r) { return r.json(); }),
+      ]).then(function (results) {
+          var data = results[0];
+          var schema = results[1];
           var queries = data.ok ? data.meta.queries : [];
+          var columns = [];
+          if (existing && existing.name && schema.ok && schema.entities[existing.name]) {
+            columns = schema.entities[existing.name].columns.map(function (c) { return c.name; });
+          }
           pgappGenericEditor(title, function (body) {
-            return renderEntityForm(body, existing || {}, queries);
+            return renderEntityForm(body, existing || {}, queries, columns);
           }).then(function (generated) {
             if (generated === null) return;
             var isNew = !existing || !existing.name;
@@ -983,12 +1005,69 @@ window.pgapp = (function () {
     if (!pgappEditTargetValid2(target)) return;
     pgappEnsureBuilderStyle();
 
+    // Filled in once from `/admin/schema-metadata` before the panel first
+    // renders — every physical entity's real table/column names, shown as
+    // a quick reference so an author doesn't have to leave the editor to
+    // remember what a `from` clause can bind against.
+    var schemaEntities = {};
+
     function renderForm(container, data) {
       var nameInput = pgappTextInput(data.name);
       if (data.name) nameInput.disabled = true;
       pgappFieldRow(container, "Name", nameInput);
       var sqlArea = pgappTextArea(data.sql, 5);
       pgappFieldRow(container, "SQL", sqlArea);
+
+      var entityNames = Object.keys(schemaEntities).sort();
+      if (entityNames.length) {
+        pgappSectionTitle(container, "Available tables");
+        var ref = document.createElement("div");
+        ref.className = "pgapp-query-schema-ref";
+        entityNames.forEach(function (name) {
+          var e = schemaEntities[name];
+          var line = document.createElement("div");
+          var colNames = e.columns.map(function (c) { return c.name; }).join(", ");
+          line.textContent = e.table_name + " (" + name + "): " + colNames;
+          ref.appendChild(line);
+        });
+        container.appendChild(ref);
+      }
+
+      var testRow = document.createElement("div");
+      testRow.className = "pgapp-field";
+      var testBtn = document.createElement("button");
+      testBtn.type = "button";
+      testBtn.className = "pgapp-btn pgapp-btn-secondary";
+      testBtn.textContent = "Test Query";
+      var testResult = document.createElement("span");
+      testResult.className = "pgapp-query-test-result";
+      testBtn.addEventListener("click", function () {
+        testResult.className = "pgapp-query-test-result";
+        testResult.textContent = "Testing…";
+        fetch(pgappAdminAppUrl(target, "/queries/test"), {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "sql=" + encodeURIComponent(sqlArea.value),
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (d.ok) {
+              testResult.className = "pgapp-query-test-result pgapp-query-test-ok";
+              testResult.textContent = d.binds.length ? "Valid SQL — binds: " + d.binds.join(", ") : "Valid SQL — no binds";
+            } else {
+              testResult.className = "pgapp-query-test-result pgapp-query-test-error";
+              testResult.textContent = d.error;
+            }
+          })
+          .catch(function (e) {
+            testResult.className = "pgapp-query-test-result pgapp-query-test-error";
+            testResult.textContent = "pgapp: " + e;
+          });
+      });
+      testRow.appendChild(testBtn);
+      testRow.appendChild(testResult);
+      container.appendChild(testRow);
+
       return {
         generate: function () {
           var name = nameInput.value.trim();
@@ -1021,9 +1100,14 @@ window.pgapp = (function () {
       });
     }
 
-    fetch(pgappAdminAppUrl(target, "/queries-list"))
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
+    Promise.all([
+      fetch(pgappAdminAppUrl(target, "/queries-list")).then(function (r) { return r.json(); }),
+      fetch(pgappAdminAppUrl(target, "/schema-metadata")).then(function (r) { return r.json(); }),
+    ])
+      .then(function (results) {
+        var data = results[0];
+        var schema = results[1];
+        if (schema.ok) schemaEntities = schema.entities;
         if (!data.ok) {
           slot.textContent = "Couldn't load queries: " + data.error;
           return;
@@ -1318,6 +1402,108 @@ window.pgapp = (function () {
       });
   }
 
+  // The "Secrets" panel — a `text ... attrs (id: "pgapp-secrets-slot")`
+  // placeholder: add/list/remove app-scoped secrets, the same
+  // encrypted-at-rest store `pgapp secret set/list/rm` uses (see
+  // src/secrets.rs) — `{{secret.name}}` in an `http_request` action
+  // resolves against these. Only names ever come back from the server;
+  // a value, once saved, can be overwritten but never displayed again.
+  function bindSecretsPanel() {
+    var slot = document.getElementById("pgapp-secrets-slot");
+    if (!slot) return;
+    var target = pgappEditTarget();
+    if (!pgappEditTargetValid2(target)) return;
+    pgappEnsureBuilderStyle();
+
+    function render() {
+      fetch(pgappAdminAppUrl(target, "/secrets-list"))
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (!data.ok) {
+            slot.textContent = "Couldn't load secrets: " + data.error;
+            return;
+          }
+          slot.textContent = "";
+          slot.classList.add("pgapp-panel-card");
+          var title = document.createElement("div");
+          title.className = "pgapp-panel-card-title";
+          title.textContent = "Secrets";
+          slot.appendChild(title);
+
+          data.names.forEach(function (name) {
+            var row = document.createElement("div");
+            row.className = "pgapp-builder-two-col";
+            var label = document.createElement("div");
+            label.textContent = name;
+            row.appendChild(label);
+
+            var delBtn = document.createElement("button");
+            delBtn.type = "button";
+            delBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
+            delBtn.title = "Delete";
+            delBtn.textContent = "✕";
+            delBtn.addEventListener("click", function () {
+              pgappConfirm(
+                'Delete secret "' + name + '"? Anything using {{secret.' + name + "}} will fail until it's replaced."
+              ).then(function (ok) {
+                if (!ok) return;
+                fetch(pgappAdminAppUrl(target, "/secrets/" + encodeURIComponent(name) + "/delete"), { method: "POST" })
+                  .then(function (r) { return r.json(); })
+                  .then(function (d) {
+                    if (d.ok) render();
+                    else pgappAlert("Couldn't delete secret: " + d.error);
+                  })
+                  .catch(function (e) { pgappAlert("pgapp: " + e); });
+              });
+            });
+            row.appendChild(delBtn);
+            slot.appendChild(row);
+          });
+
+          var addRow = document.createElement("div");
+          addRow.className = "pgapp-builder-two-col";
+          var nameInput = pgappTextInput("");
+          nameInput.placeholder = "name";
+          var valueInput = document.createElement("input");
+          valueInput.type = "password";
+          valueInput.className = "pgapp-input";
+          valueInput.placeholder = "value";
+          addRow.appendChild(nameInput);
+          addRow.appendChild(valueInput);
+          slot.appendChild(addRow);
+
+          var addBtn = document.createElement("button");
+          addBtn.type = "button";
+          addBtn.className = "pgapp-btn pgapp-btn-secondary";
+          addBtn.textContent = "+ Add / Update Secret";
+          addBtn.addEventListener("click", function () {
+            var name = nameInput.value.trim();
+            if (!name) {
+              pgappAlert("A secret needs a name.");
+              return;
+            }
+            fetch(pgappAdminAppUrl(target, "/secrets/set"), {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: "name=" + encodeURIComponent(name) + "&value=" + encodeURIComponent(valueInput.value),
+            })
+              .then(function (r) { return r.json(); })
+              .then(function (d) {
+                if (d.ok) render();
+                else pgappAlert("Couldn't save secret: " + d.error);
+              })
+              .catch(function (e) { pgappAlert("pgapp: " + e); });
+          });
+          slot.appendChild(addBtn);
+        })
+        .catch(function (e) {
+          slot.textContent = "pgapp: " + e;
+        });
+    }
+
+    render();
+  }
+
   // The "Delete App" panel — a `text ... attrs (id:
   // "pgapp-destroy-app-slot")` placeholder: soft (disable) needs only a
   // confirm; hard (permanently drop its data tables) also needs the
@@ -1534,9 +1720,11 @@ window.pgapp = (function () {
 
   // The App Builder's "Add Component" panel: a kind picker plus an
   // "Add..." button that opens the same structured, per-attribute
-  // editor `bindComponentRowActions`'s Edit button uses (see
-  // `pgappStructuredEditor`), just prefilled blank instead of from an
-  // existing component's data. A secondary "Add as raw markup" link
+  // editor the docked Property Editor uses to edit an existing one
+  // (see `pgappStructuredEditor`/`PGAPP_KIND_RENDERERS`, shared by
+  // both), just prefilled blank instead of from an existing
+  // component's data — a modal here since there's no selected tree row
+  // yet to dock a panel next to. A secondary "Add as raw markup" link
   // reveals the original kind-picker + raw-textarea flow (still backed
   // by `COMPONENT_TEMPLATES`) as a fallback/escape hatch for anything
   // the structured form doesn't cover well.
@@ -1703,7 +1891,22 @@ window.pgapp = (function () {
       ".pgapp-builder-attrs { margin-bottom: 0.5rem; } " +
       ".pgapp-builder-two-col { display: flex; gap: 0.75rem; align-items: center; justify-content: space-between; margin-bottom: 0.4rem; } " +
       ".pgapp-builder-two-col > div { flex: 1; }" +
-      ".pgapp-danger-zone { border: 1px solid #b91c1c; border-radius: 0.375rem; padding: 0.75rem; margin-top: 1rem; }";
+      ".pgapp-danger-zone { border: 1px solid #b91c1c; border-radius: 0.375rem; padding: 0.75rem; margin-top: 1rem; }" +
+      // APEX Page-Designer-style tree + Property Editor split (EditPage) —
+      // stacks on narrow screens since a fixed 2-column split doesn't fit
+      // a phone-width viewport (same responsive philosophy as the rest of
+      // pgapp's own default mobile handling).
+      ".pgapp-designer-layout { display: flex; gap: 1.25rem; align-items: flex-start; flex-wrap: wrap; } " +
+      ".pgapp-designer-layout > *:first-child { flex: 1 1 22rem; min-width: 0; } " +
+      ".pgapp-designer-layout > *:last-child { flex: 1 1 22rem; min-width: 0; position: sticky; top: 1rem; } " +
+      ".pgapp-designer-row { cursor: pointer; } " +
+      ".pgapp-designer-row.pgapp-selected { background: rgba(99, 102, 241, 0.12); box-shadow: inset 3px 0 0 0 #6366f1; } " +
+      ".pgapp-designer-properties { border: 1px solid rgba(120, 120, 120, 0.3); border-radius: 0.5rem; padding: 1rem; min-height: 10rem; } " +
+      ".pgapp-designer-properties-empty { color: #888; font-style: italic; margin: 0; }" +
+      ".pgapp-query-schema-ref { max-height: 8rem; overflow-y: auto; font-family: monospace; font-size: 0.85em; border: 1px solid rgba(120, 120, 120, 0.3); border-radius: 0.375rem; padding: 0.5rem; margin-bottom: 0.5rem; }" +
+      ".pgapp-query-test-result { margin-left: 0.75rem; }" +
+      ".pgapp-query-test-ok { color: #15803d; }" +
+      ".pgapp-query-test-error { color: #b91c1c; }";
     document.head.appendChild(style);
   }
 
@@ -1774,7 +1977,11 @@ window.pgapp = (function () {
   // Remove/reorder (▲▼) controls. `getRows()` reads the table's current
   // live values back out in display order, silently skipping any row
   // every column is still blank on (so a stray "Add row" click that's
-  // never filled in doesn't turn into a bogus markup line).
+  // never filled in doesn't turn into a bogus markup line). A `"datalist"`
+  // column type renders a plain text input with `<datalist>` suggestions
+  // (not a hard dropdown — the value doesn't have to be one of them, e.g.
+  // an entity field that doesn't exist in the table yet).
+  var pgappDatalistCounter = 0;
   function pgappRowList(cols, rows) {
     var wrap = document.createElement("div");
     wrap.className = "pgapp-builder-rowlist";
@@ -1803,6 +2010,22 @@ window.pgapp = (function () {
           field = pgappSelect(c.options, initial ? initial[c.key] : null);
         } else if (c.type === "textarea") {
           field = pgappTextArea(initial ? initial[c.key] : "", 2);
+        } else if (c.type === "datalist" && c.options && c.options.length) {
+          field = pgappTextInput(initial ? initial[c.key] : "");
+          var listId = "pgapp-datalist-" + pgappDatalistCounter++;
+          var dl = document.createElement("datalist");
+          dl.id = listId;
+          c.options.forEach(function (opt) {
+            var o = document.createElement("option");
+            o.value = opt;
+            dl.appendChild(o);
+          });
+          field.setAttribute("list", listId);
+          td.appendChild(dl);
+        } else if (c.type === "checkbox") {
+          field = document.createElement("input");
+          field.type = "checkbox";
+          field.checked = !!(initial && initial[c.key]);
         } else {
           field = pgappTextInput(initial ? initial[c.key] : "");
         }
@@ -1866,9 +2089,14 @@ window.pgapp = (function () {
         var fields = trs[i].querySelectorAll("[data-key]");
         var allBlank = true;
         for (var j = 0; j < fields.length; j++) {
-          var v = fields[j].value;
-          row[fields[j].dataset.key] = v;
-          if (v && v.trim() !== "") allBlank = false;
+          if (fields[j].type === "checkbox") {
+            row[fields[j].dataset.key] = fields[j].checked;
+            if (fields[j].checked) allBlank = false;
+          } else {
+            var v = fields[j].value;
+            row[fields[j].dataset.key] = v;
+            if (v && v.trim() !== "") allBlank = false;
+          }
         }
         if (!allBlank) out.push(row);
       }
@@ -2340,6 +2568,27 @@ window.pgapp = (function () {
       );
       container.appendChild(formatsList.el);
 
+      pgappSectionTitle(container, "Column headings & alignment (optional overrides)");
+      var headingsList = pgappRowList(
+        [
+          { key: "field", label: "Column", type: "select", options: entityFields.map(function (f) { return f.name; }) },
+          { key: "heading", label: "Display name", type: "text" },
+          { key: "align", label: "Align", type: "select", options: ["left", "center", "right"] },
+        ],
+        entityFields
+          .filter(function (f) {
+            return (data.headings && data.headings[f.name]) || (data.aligns && data.aligns[f.name] && data.aligns[f.name] !== "left");
+          })
+          .map(function (f) {
+            return {
+              field: f.name,
+              heading: (data.headings && data.headings[f.name]) || "",
+              align: (data.aligns && data.aligns[f.name]) || "left",
+            };
+          })
+      );
+      container.appendChild(headingsList.el);
+
       pgappSectionTitle(container, "Link a column to another page");
       var linkWrap = document.createElement("div");
       var linkFieldSel = pgappSelect(entityFields.map(function (f) { return f.name; }).concat(computedNamesPlaceholder(computedList)), data.link_column && data.link_column.field);
@@ -2398,6 +2647,15 @@ window.pgapp = (function () {
             if (!r.field || !r.field.trim()) return;
             var maskText = r.kind === "number" ? "number(" + (parseInt(r.param, 10) || 0) + ")" : r.kind === "date" ? "date(" + pgappMarkupStr(r.param || "%Y-%m-%d") + ")" : r.kind;
             lines.push("      format " + r.field.trim() + ": " + maskText);
+          });
+          headingsList.getRows().forEach(function (r) {
+            if (!r.field || !r.field.trim()) return;
+            if (r.heading && r.heading.trim()) {
+              lines.push("      heading " + r.field.trim() + ": " + pgappMarkupStr(r.heading));
+            }
+            if (r.align && r.align !== "left") {
+              lines.push("      align " + r.field.trim() + ": " + r.align);
+            }
           });
           lines.push("    }" + requiresGen() + attrsGen());
           return lines.join("\n");
@@ -2817,120 +3075,218 @@ window.pgapp = (function () {
   // doubles as the `idx` the edit/delete routes expect, since
   // `meta::sync_app` always re-derives ordinal from file order on
   // every reload — it's never stale relative to the file.
-  function bindComponentRowActions() {
-    var tbodies = document.querySelectorAll(".pgapp-draggable-rows tbody");
+  // APEX Page-Designer-style: the flat component list becomes a
+  // clickable "rendering tree" on the left, and a persistent Property
+  // Editor panel on the right shows the selected component's full
+  // structured form inline — same `PGAPP_KIND_RENDERERS` functions
+  // `pgappStructuredEditor`'s modal already uses, just targeting a
+  // docked container instead of a dialog. The modal itself
+  // (`pgappStructuredEditor`) and the raw-markup editor
+  // (`pgappSourceEditor`) both stay reachable from the panel's own
+  // footer — this replaces *where* editing happens, not the
+  // structured-form code that does it.
+  function bindComponentDesigner() {
+    var treeSlot = document.getElementById("pgapp-designer-tree");
+    var propsSlot = document.getElementById("pgapp-designer-properties-slot");
+    if (!treeSlot || !propsSlot) return;
+    var target = pgappEditTarget();
+    if (!pgappEditTargetValid(target)) return;
+    pgappEnsureBuilderStyle();
+
+    // Re-parent the tree region and the properties placeholder (two
+    // separate top-level page components, each in its own numbered
+    // `#pgapp-cN` wrapper) into one flex layout, side by side.
+    var treeWrap = treeSlot.closest('[id^="pgapp-c"]') || treeSlot;
+    var propsWrap = propsSlot.closest('[id^="pgapp-c"]') || propsSlot;
+    var layout = document.createElement("div");
+    layout.className = "pgapp-designer-layout";
+    treeWrap.parentNode.insertBefore(layout, treeWrap);
+    layout.appendChild(treeWrap);
+    layout.appendChild(propsWrap);
+
+    propsSlot.textContent = "";
+    propsSlot.classList.add("pgapp-designer-properties");
+    var placeholder = document.createElement("p");
+    placeholder.className = "pgapp-designer-properties-empty";
+    placeholder.textContent = "Select a component on the left to edit its properties.";
+    propsSlot.appendChild(placeholder);
+
+    var tbodies = treeWrap.querySelectorAll(".pgapp-draggable-rows tbody, tbody");
+    var allRows = [];
     for (var t = 0; t < tbodies.length; t++) {
-      var target = pgappEditTarget();
-      if (!pgappEditTargetValid(target)) continue;
       var rows = tbodies[t].querySelectorAll("tr");
       for (var i = 0; i < rows.length; i++) {
-        (function (row) {
-          var cells = row.querySelectorAll("td");
-          if (cells.length < 3) return;
-          var kind = cells[1].textContent.trim();
-          var idx = cells[2].textContent.trim();
-
-          var icon = document.createElement("span");
-          icon.className = "pgapp-component-kind-icon";
-          icon.title = kind;
-          icon.textContent = COMPONENT_KIND_ICONS[kind] || "•";
-          cells[1].textContent = "";
-          cells[1].className = "pgapp-component-label";
-          cells[1].appendChild(icon);
-          cells[1].appendChild(document.createTextNode(" " + kind));
-
-          cells[2].className = "pgapp-component-ordinal";
-          cells[2].textContent = "#" + idx;
-
-          var actionsTd = document.createElement("td");
-          actionsTd.className = "pgapp-component-actions";
-
-          var editBtn = document.createElement("button");
-          editBtn.type = "button";
-          editBtn.className = "pgapp-icon-btn";
-          editBtn.title = "Edit";
-          editBtn.setAttribute("aria-label", "Edit component");
-          editBtn.textContent = "✎";
-          editBtn.addEventListener("click", function () {
-            var structuredFetch = fetch(pgappAdminPagesUrl(target, "/components/" + encodeURIComponent(idx) + "/structured")).then(function (r) {
-              return r.json();
-            });
-            Promise.all([structuredFetch, fetchAppMeta(target)])
-              .then(function (results) {
-                var structured = results[0];
-                var meta = results[1];
-                if (!structured.ok) {
-                  pgappAlert("Couldn't load component: " + structured.error);
-                  return;
-                }
-                pgappStructuredEditor("Edit component (" + kind + ")", structured.kind, structured.data, meta).then(function (generated) {
-                  if (generated === null) return;
-                  postComponentEdit(target, idx, "source=" + encodeURIComponent(generated));
-                });
-              })
-              .catch(function (e) {
-                pgappAlert("pgapp: " + e);
-              });
-          });
-
-          var rawEditBtn = document.createElement("button");
-          rawEditBtn.type = "button";
-          rawEditBtn.className = "pgapp-icon-btn";
-          rawEditBtn.title = "Edit as raw markup";
-          rawEditBtn.setAttribute("aria-label", "Edit component as raw markup");
-          rawEditBtn.textContent = "{ }";
-          rawEditBtn.addEventListener("click", function () {
-            var sourceFetch = fetch(pgappAdminPagesUrl(target, "/components/" + encodeURIComponent(idx) + "/source")).then(function (r) {
-              return r.json();
-            });
-            Promise.all([sourceFetch, fetchPagesList(target)])
-              .then(function (results) {
-                var data = results[0];
-                var pagesList = results[1];
-                if (!data.ok) {
-                  pgappAlert("Couldn't load component source: " + data.error);
-                  return;
-                }
-                pgappSourceEditor("Edit component (" + kind + ") — raw markup", data.source, pagesList).then(function (edited) {
-                  if (edited === null) return;
-                  postComponentEdit(target, idx, "source=" + encodeURIComponent(edited));
-                });
-              })
-              .catch(function (e) {
-                pgappAlert("pgapp: " + e);
-              });
-          });
-          actionsTd.appendChild(editBtn);
-          actionsTd.appendChild(rawEditBtn);
-
-          var deleteBtn = document.createElement("button");
-          deleteBtn.type = "button";
-          deleteBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
-          deleteBtn.title = "Delete";
-          deleteBtn.setAttribute("aria-label", "Delete");
-          deleteBtn.textContent = "✕";
-          deleteBtn.addEventListener("click", function () {
-            pgappConfirm("Delete this component? This can't be undone.").then(function (ok) {
-              if (!ok) return;
-              fetch(pgappAdminPagesUrl(target, "/components/" + encodeURIComponent(idx) + "/delete"), { method: "POST" })
-                .then(function (r) {
-                  return r.json();
-                })
-                .then(function (data) {
-                  if (data.ok) location.reload();
-                  else pgappAlert("Couldn't delete component: " + data.error);
-                })
-                .catch(function (e) {
-                  pgappAlert("pgapp: " + e);
-                });
-            });
-          });
-          actionsTd.appendChild(deleteBtn);
-
-          row.appendChild(actionsTd);
-        })(rows[i]);
+        allRows.push(rows[i]);
       }
     }
+
+    function selectRow(row, idx, kind) {
+      for (var r = 0; r < allRows.length; r++) {
+        allRows[r].classList.remove("pgapp-selected");
+      }
+      row.classList.add("pgapp-selected");
+      loadPropertyPanel(target, idx, kind, propsSlot);
+    }
+
+    allRows.forEach(function (row) {
+      var cells = row.querySelectorAll("td");
+      if (cells.length < 3) return;
+      var kind = cells[1].textContent.trim();
+      var idx = cells[2].textContent.trim();
+
+      var icon = document.createElement("span");
+      icon.className = "pgapp-component-kind-icon";
+      icon.title = kind;
+      icon.textContent = COMPONENT_KIND_ICONS[kind] || "•";
+      cells[1].textContent = "";
+      cells[1].className = "pgapp-component-label";
+      cells[1].appendChild(icon);
+      cells[1].appendChild(document.createTextNode(" " + kind));
+
+      cells[2].className = "pgapp-component-ordinal";
+      cells[2].textContent = "#" + idx;
+
+      row.classList.add("pgapp-designer-row");
+      row.addEventListener("click", function (ev) {
+        if (ev.target.closest("button")) return; // let the delete button's own handler run
+        selectRow(row, idx, kind);
+      });
+
+      var actionsTd = document.createElement("td");
+      actionsTd.className = "pgapp-component-actions";
+      var deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "pgapp-icon-btn pgapp-icon-btn-destructive";
+      deleteBtn.title = "Delete";
+      deleteBtn.setAttribute("aria-label", "Delete");
+      deleteBtn.textContent = "✕";
+      deleteBtn.addEventListener("click", function () {
+        pgappConfirm("Delete this component? This can't be undone.").then(function (ok) {
+          if (!ok) return;
+          fetch(pgappAdminPagesUrl(target, "/components/" + encodeURIComponent(idx) + "/delete"), { method: "POST" })
+            .then(function (r) {
+              return r.json();
+            })
+            .then(function (data) {
+              if (data.ok) location.reload();
+              else pgappAlert("Couldn't delete component: " + data.error);
+            })
+            .catch(function (e) {
+              pgappAlert("pgapp: " + e);
+            });
+        });
+      });
+      actionsTd.appendChild(deleteBtn);
+      row.appendChild(actionsTd);
+    });
+
+    if (allRows.length > 0) {
+      var firstCells = allRows[0].querySelectorAll("td");
+      if (firstCells.length >= 3) {
+        selectRow(allRows[0], firstCells[2].textContent.replace("#", "").trim(), firstCells[1].textContent.trim());
+      }
+    }
+  }
+
+  // Fetches component `idx`'s structured data + this page's app-meta,
+  // then renders its property form directly into `panelEl` (the docked
+  // panel), with Save/Edit-as-raw/Delete actions in its own footer —
+  // the inline counterpart to `pgappStructuredEditor`'s modal, reusing
+  // the exact same `PGAPP_KIND_RENDERERS[kind]` function to build the
+  // fields either way.
+  function loadPropertyPanel(target, idx, kind, panelEl) {
+    panelEl.textContent = "";
+    var loading = document.createElement("p");
+    loading.className = "pgapp-designer-properties-empty";
+    loading.textContent = "Loading " + kind + " #" + idx + "…";
+    panelEl.appendChild(loading);
+
+    var structuredFetch = fetch(pgappAdminPagesUrl(target, "/components/" + encodeURIComponent(idx) + "/structured")).then(function (r) {
+      return r.json();
+    });
+    Promise.all([structuredFetch, fetchAppMeta(target)])
+      .then(function (results) {
+        var structured = results[0];
+        var meta = results[1];
+        panelEl.textContent = "";
+        if (!structured.ok) {
+          var err = document.createElement("p");
+          err.className = "pgapp-alert pgapp-alert-error";
+          err.textContent = "Couldn't load component: " + structured.error;
+          panelEl.appendChild(err);
+          return;
+        }
+
+        var header = document.createElement("div");
+        header.className = "pgapp-panel-card-title";
+        header.textContent = structured.kind + " #" + idx;
+        panelEl.appendChild(header);
+
+        var body = document.createElement("div");
+        panelEl.appendChild(body);
+        var spec = PGAPP_KIND_RENDERERS[structured.kind];
+        var rendered = spec ? spec(body, structured.data || {}, meta || {}) : null;
+        if (!rendered) {
+          var note = document.createElement("p");
+          note.textContent = "No structured editor for kind '" + structured.kind + "' yet — use \"Edit as raw markup\" below.";
+          body.appendChild(note);
+        }
+
+        var actions = document.createElement("div");
+        actions.className = "pgapp-dialog-actions";
+        var rawBtn = document.createElement("button");
+        rawBtn.type = "button";
+        rawBtn.className = "pgapp-btn pgapp-btn-secondary";
+        rawBtn.textContent = "Edit as raw markup";
+        rawBtn.addEventListener("click", function () {
+          var sourceFetch = fetch(pgappAdminPagesUrl(target, "/components/" + encodeURIComponent(idx) + "/source")).then(function (r) {
+            return r.json();
+          });
+          Promise.all([sourceFetch, fetchPagesList(target)])
+            .then(function (results2) {
+              var data = results2[0];
+              var pagesList = results2[1];
+              if (!data.ok) {
+                pgappAlert("Couldn't load component source: " + data.error);
+                return;
+              }
+              pgappSourceEditor("Edit component (" + structured.kind + ") — raw markup", data.source, pagesList).then(function (edited) {
+                if (edited === null) return;
+                postComponentEdit(target, idx, "source=" + encodeURIComponent(edited));
+              });
+            })
+            .catch(function (e) {
+              pgappAlert("pgapp: " + e);
+            });
+        });
+        actions.appendChild(rawBtn);
+
+        if (rendered) {
+          var saveBtn = document.createElement("button");
+          saveBtn.type = "button";
+          saveBtn.className = "pgapp-btn pgapp-btn-primary";
+          saveBtn.textContent = "Save";
+          saveBtn.addEventListener("click", function () {
+            var text;
+            try {
+              text = rendered.generate();
+            } catch (e) {
+              pgappAlert("Couldn't build markup from the form: " + e);
+              return;
+            }
+            postComponentEdit(target, idx, "source=" + encodeURIComponent(text));
+          });
+          actions.appendChild(saveBtn);
+        }
+        panelEl.appendChild(actions);
+      })
+      .catch(function (e) {
+        panelEl.textContent = "";
+        var err = document.createElement("p");
+        err.className = "pgapp-alert pgapp-alert-error";
+        err.textContent = "pgapp: " + e;
+        panelEl.appendChild(err);
+      });
   }
 
   // Fetches every page name currently in the target app's markup (see
@@ -3434,7 +3790,7 @@ window.pgapp = (function () {
     document.addEventListener("DOMContentLoaded", bindDraggableRows);
     document.addEventListener("DOMContentLoaded", bindPreviewLink);
     document.addEventListener("DOMContentLoaded", bindAddComponentForm);
-    document.addEventListener("DOMContentLoaded", bindComponentRowActions);
+    document.addEventListener("DOMContentLoaded", bindComponentDesigner);
     document.addEventListener("DOMContentLoaded", bindContextHeader);
     document.addEventListener("DOMContentLoaded", bindAddPageForm);
     document.addEventListener("DOMContentLoaded", bindPageCardActions);
@@ -3445,6 +3801,7 @@ window.pgapp = (function () {
     document.addEventListener("DOMContentLoaded", bindQueriesPanel);
     document.addEventListener("DOMContentLoaded", bindNavPanel);
     document.addEventListener("DOMContentLoaded", bindAppSettingsForm);
+    document.addEventListener("DOMContentLoaded", bindSecretsPanel);
     document.addEventListener("DOMContentLoaded", bindDestroyAppPanel);
     document.addEventListener("DOMContentLoaded", bindDestroyWorkspacePanel);
     document.addEventListener("DOMContentLoaded", wireFileBrowseLinks);
@@ -3456,7 +3813,7 @@ window.pgapp = (function () {
     bindDraggableRows();
     bindPreviewLink();
     bindAddComponentForm();
-    bindComponentRowActions();
+    bindComponentDesigner();
     bindContextHeader();
     bindAddPageForm();
     bindPageCardActions();
@@ -3467,6 +3824,7 @@ window.pgapp = (function () {
     bindQueriesPanel();
     bindNavPanel();
     bindAppSettingsForm();
+    bindSecretsPanel();
     bindDestroyAppPanel();
     bindDestroyWorkspacePanel();
     wireFileBrowseLinks();

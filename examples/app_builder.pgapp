@@ -155,34 +155,42 @@ app "App Builder" {
   }
 
   page "Apps" {
-    text "Every app registered in this instance. Pick one to edit its pages."
+    text "Every app registered in this instance. Search/sort/filter like any other Interactive Report — pick one to edit its pages."
     report "Apps" of apps_list {
       columns: workspace_slug, app_slug, app_name
       link: app_name -> page Pages (workspace_slug: target_workspace, app_slug: target_app, meta_app_id: meta_app_id)
       page_size: 50
-    } attrs (class: "pgapp-cards")
+    }
   }
 
   page "Pages" {
     text "Editing:" attrs (id: "pgapp-context-slot")
-    text "Pick a page to edit its components, or add a new one below. Use the pencil on a card to rename it."
+    text "Pick a page to edit its components, or add a new one below. Use the pencil to rename it — same searchable Interactive Report as everywhere else."
     report "Pages" of pages_list {
       columns: page_name
       link: page_name -> page EditPage (target_workspace: target_workspace, target_app: target_app, page_name: target_page)
       page_size: 50
-    } attrs (class: "pgapp-cards pgapp-page-cards")
+    } attrs (id: "pgapp-pages-report")
     text "Add Page" attrs (id: "pgapp-add-page-slot")
     text "App Settings" attrs (id: "pgapp-app-settings-link-slot")
     text "Advanced" attrs (id: "pgapp-advanced-source-slot")
   }
 
+  # A Page-Designer-style split: the "Components" region on the left is
+  # both the drag-to-reorder list it always was *and* now a clickable
+  # rendering tree — selecting a row loads its full property form into
+  # the docked panel on the right (id "pgapp-designer-properties-slot"),
+  # via `runtime.js`'s `bindComponentDesigner`/`loadPropertyPanel`. The
+  # region's own `attrs (id: "pgapp-designer-tree")` is what that JS
+  # looks for to re-parent both halves into one flex layout.
   page "EditPage" {
     text "Editing:" attrs (id: "pgapp-context-slot")
     text "Preview" attrs (id: "pgapp-preview-slot")
-    text "Drag a row to reorder. The pencil opens a property form for that component's kind (any attribute, any kind) — the { } button next to it opens the same edit as raw markup instead; the ✕ deletes it. Every change saves immediately, in the database and in the app's own .pgapp file."
+    text "Drag a row to reorder. Click a row to edit its properties in the panel alongside it — the ✕ deletes it. Every change saves immediately, in the database and in the app's own .pgapp file."
     region "Components" from query components_list {
       columns: id, kind, ordinal
-    } attrs (class: "pgapp-draggable-rows")
+    } attrs (id: "pgapp-designer-tree", class: "pgapp-draggable-rows")
+    text "Properties" attrs (id: "pgapp-designer-properties-slot")
     text "Add Component" attrs (id: "pgapp-add-component-slot")
   }
 
@@ -199,11 +207,12 @@ app "App Builder" {
   # this page itself never touches the target app's data.
   page "AppSettings" {
     text "Editing:" attrs (id: "pgapp-context-slot")
-    text "Everything about this app that isn't a page: its data model, named queries, navigation menu, and instance-wide settings — plus, at the bottom, ways to delete this app or its whole workspace outright."
+    text "Everything about this app that isn't a page: its data model, named queries, navigation menu, instance-wide settings, and secrets — plus, at the bottom, ways to delete this app or its whole workspace outright."
     text "Data Model" attrs (id: "pgapp-entities-slot")
     text "Queries" attrs (id: "pgapp-queries-slot")
     text "Navigation" attrs (id: "pgapp-nav-slot")
     text "App Settings" attrs (id: "pgapp-app-settings-slot")
+    text "Secrets" attrs (id: "pgapp-secrets-slot")
     text "Danger zone" attrs (id: "pgapp-destroy-app-slot", class: "pgapp-danger-zone")
     text "Danger zone" attrs (id: "pgapp-destroy-workspace-slot", class: "pgapp-danger-zone")
   }

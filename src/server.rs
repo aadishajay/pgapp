@@ -44,6 +44,7 @@ use crate::actions::{self, ActionContext};
 use crate::app_editor;
 use crate::chart_lib::ChartLib;
 use crate::control;
+use crate::secrets;
 use crate::html::url_encode;
 use crate::icons::Icons;
 use crate::instance;
@@ -287,6 +288,11 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/:workspace/:app/admin/nav/:idx/edit", post(admin_edit_nav_item))
         .route("/:workspace/:app/admin/nav/:idx/delete", post(admin_delete_nav_item))
         .route("/:workspace/:app/admin/settings", get(admin_settings_get).post(admin_settings_set))
+        .route("/:workspace/:app/admin/schema-metadata", get(admin_schema_metadata))
+        .route("/:workspace/:app/admin/queries/test", post(admin_test_query))
+        .route("/:workspace/:app/admin/secrets-list", get(admin_secrets_list))
+        .route("/:workspace/:app/admin/secrets/set", post(admin_secrets_set))
+        .route("/:workspace/:app/admin/secrets/:name/delete", post(admin_secrets_delete))
         .route("/:workspace/:app/admin/destroy", post(admin_destroy_app))
         .route("/:workspace/:app/admin/destroy-workspace", post(admin_destroy_workspace))
         .route("/pgapp/builder/admin/apps/create-pending", post(admin_create_pending_app))
@@ -3846,6 +3852,159 @@ async fn admin_settings_set(
             Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
             Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("saved, but reload failed: {e:#}")})).into_response()),
         },
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// GET /:workspace/:app/admin/schema-metadata — every physical
+/// entity's *real* current Postgres columns (name + type), straight
+/// from `information_schema.columns` scoped to this app's own
+/// `data_schema` — not the markup's own declared field list, which can
+/// disagree (a column added outside pgapp, or a declared field the
+/// table doesn't have yet). Powers two things in the App Builder: the
+/// entity field editor's name suggestions (a datalist, not a hard
+/// dropdown — adding a field that doesn't exist in the table yet is
+/// completely normal, since `ensure_data_table` creates it on the next
+/// sync) and the query editor's "available tables/columns" reference.
+/// Query-backed/collection-backed entities have no physical columns to
+/// report and are simply omitted.
+async fn admin_schema_metadata(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let data = entry.data();
+    let app_id = data.app.id;
+    let data_schema = data.app.data_schema.clone();
+    let result: anyhow::Result<serde_json::Value> = async {
+        let physical: Vec<(String, String)> = sqlx::query_as(
+            "select name, table_name from pgapp_meta.entities
+              where app_id = $1 and source_query is null and source_collection is null",
+        )
+        .bind(app_id)
+        .fetch_all(&state.pool)
+        .await
+        .context("failed to read entity list")?;
+        let table_names: Vec<&str> = physical.iter().map(|(_, t)| t.as_str()).collect();
+        let rows: Vec<(String, String, String)> = sqlx::query_as(
+            "select table_name, column_name, udt_name from information_schema.columns
+              where table_schema = $1 and table_name = any($2)
+              order by ordinal_position",
+        )
+        .bind(&data_schema)
+        .bind(&table_names)
+        .fetch_all(&state.pool)
+        .await
+        .context("failed to read column metadata")?;
+
+        let mut entities = serde_json::Map::new();
+        for (entity_name, table_name) in &physical {
+            let columns: Vec<serde_json::Value> = rows
+                .iter()
+                .filter(|(t, _, _)| t == table_name)
+                .map(|(_, col, udt)| json!({"name": col, "type": udt}))
+                .collect();
+            entities.insert(entity_name.clone(), json!({"table_name": table_name, "columns": columns}));
+        }
+        Ok(serde_json::Value::Object(entities))
+    }
+    .await;
+
+    match result {
+        Ok(v) => Ok(axum::Json(json!({"ok": true, "entities": v})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/queries/test — checks a query's `sql`
+/// against a real Postgres connection scoped to this app's
+/// `data_schema`, via the exact same `meta::compile_named_query` path
+/// that a normal sync runs (bind-tokenizing + `.describe()`) — catches
+/// syntax errors and unknown-column/table references before the author
+/// saves, without inventing a second SQL-checking path.
+async fn admin_test_query(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let sql = values.get("sql").map(|s| s.as_str()).unwrap_or("").to_string();
+    let result: anyhow::Result<Vec<String>> = async {
+        if sql.trim().is_empty() {
+            anyhow::bail!("a query needs some SQL");
+        }
+        let data_schema = entry.data().app.data_schema.clone();
+        let (_, binds) = meta::compile_named_query(&state.pool, &data_schema, &sql).await?;
+        Ok(binds)
+    }
+    .await;
+
+    match result {
+        Ok(binds) => Ok(axum::Json(json!({"ok": true, "binds": binds})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// GET /:workspace/:app/admin/secrets-list — names only (never values,
+/// they're encrypted-at-rest and `secrets::list` doesn't decrypt them)
+/// of every secret scoped to this app's own `pgapp_control.apps` row.
+async fn admin_secrets_list(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let control_app_id = entry.data().app.control_app_id;
+    match secrets::list(&state.pool, secrets::Scope::App(control_app_id)).await {
+        Ok(names) => Ok(axum::Json(json!({"ok": true, "names": names})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/secrets/set — adds or overwrites one
+/// app-scoped secret. Requires `PGAPP_SECRET_KEY` to be set in this
+/// process's environment (same requirement as `pgapp secret set`) since
+/// `secrets::load_key` is what encrypts the value before it's stored.
+async fn admin_secrets_set(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let name = values.get("name").map(|s| s.trim()).unwrap_or("").to_string();
+    let value = values.get("value").cloned().unwrap_or_default();
+    let control_app_id = entry.data().app.control_app_id;
+
+    let result: anyhow::Result<()> = async {
+        if name.is_empty() {
+            anyhow::bail!("a secret needs a name");
+        }
+        let key = secrets::load_key()?;
+        secrets::set(&state.pool, &key, secrets::Scope::App(control_app_id), &name, &value).await?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/secrets/:name/delete — removes one
+/// app-scoped secret by name.
+async fn admin_secrets_delete(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, name)): Path<(String, String, String)>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let control_app_id = entry.data().app.control_app_id;
+    match secrets::remove(&state.pool, secrets::Scope::App(control_app_id), &name).await {
+        Ok(_) => Ok(axum::Json(json!({"ok": true})).into_response()),
         Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
     }
 }

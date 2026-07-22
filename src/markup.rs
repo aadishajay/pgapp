@@ -2179,7 +2179,7 @@ app "Demo" {
         assert_eq!(app.pages.len(), 6);
 
         let edit_page = app.pages.iter().find(|p| p.name == "EditPage").unwrap();
-        assert_eq!(edit_page.components.len(), 5); // text (context), text (preview), text, region, text (add-component)
+        assert_eq!(edit_page.components.len(), 6); // text (context), text (preview), text, region, text (properties), text (add-component)
         let region = edit_page
             .components
             .iter()
