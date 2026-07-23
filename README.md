@@ -26,9 +26,9 @@ No ORM. No API layer. No JS build step. No second system to babysit.
 
 <br>
 
-<img src="marketing/shots/pgapp-run-hero.gif" alt="A terminal running 'pgapp run todo.pgapp --workspace demo', the server printing the app's URL, and the live app appearing in the browser" width="90%">
+<img src="marketing/shots/pgapp-run-hero.gif" alt="Editing todo.pgapp in nvim to add a column, saving with :wq, running 'pgapp run todo.pgapp --workspace demo', and the live app opening in the browser with the new column" width="90%">
 
-<sub><code>pgapp run todo.pgapp</code> — the file syncs into Postgres and the app is live at its own URL. No restart, no API layer, no build step.</sub>
+<sub>Add a column to the <code>.pgapp</code> file, <code>:wq</code>, <code>pgapp run</code> — the app is live at its own URL, new column and all. No restart, no API layer, no build step.</sub>
 
 </div>
 
