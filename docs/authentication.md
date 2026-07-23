@@ -17,7 +17,10 @@ Opt in with an `auth { }` block:
 - Passwords are argon2id hashes in `pgapp_meta.users`; sessions are
   server-side rows in `pgapp_meta.sessions` (an HttpOnly, `SameSite=Lax`
   cookie holds only a random token — revoking a session means deleting
-  its row).
+  its row). pgapp itself never terminates TLS (see
+  [Architecture](./architecture.md)) — put a reverse proxy in front for
+  production, and the session cookie picks up `Secure` automatically
+  once that proxy forwards `X-Forwarded-Proto: https`.
 - A user holds any number of `roles` (free-form strings, comma-separated
   on the Add-user form). `requires: <role>` gates a page (and its
   create/update/delete routes) to a user holding that role, or admin.

@@ -132,13 +132,30 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
     None
 }
 
+/// pgapp itself never terminates TLS (see `main::serve_registered_apps`'s
+/// plain `TcpListener`) — a production deployment puts a reverse proxy
+/// in front that does, and forwards `X-Forwarded-Proto: https` the same
+/// way every mainstream proxy (Caddy, nginx, Traefik, cloud load
+/// balancers) does by default. Trusting that header is only sound
+/// because the proxy sits between the browser and this process and
+/// overwrites whatever a client sent — never expose pgapp directly to
+/// the internet without one in front, or this check is trivially spoofed.
+fn is_https(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.eq_ignore_ascii_case("https"))
+}
+
 /// Creates a session row and returns the Set-Cookie header value. Two
 /// v4 UUIDs give the token ~244 bits of randomness. `Path=/{app_key}`
 /// (`app_key` is `"{workspace}/{app_slug}"`) keeps the cookie from ever
 /// being sent to a *different* app sharing this process — `load_session`'s
 /// own `app_id` filter would reject it anyway, but scoping the cookie
-/// itself means the browser doesn't even offer it cross-app.
-async fn create_session(pool: &PgPool, app_id: i32, user_id: i32, app_key: &str) -> anyhow::Result<String> {
+/// itself means the browser doesn't even offer it cross-app. `secure`
+/// (see `is_https`) appends `Secure` so the browser never sends the
+/// token back over a plain-HTTP connection.
+async fn create_session(pool: &PgPool, app_id: i32, user_id: i32, app_key: &str, secure: bool) -> anyhow::Result<String> {
     // Opportunistic cleanup: expired sessions are dead weight either way.
     sqlx::query("delete from pgapp_meta.sessions where expires_at < now()")
         .execute(pool)
@@ -156,8 +173,9 @@ async fn create_session(pool: &PgPool, app_id: i32, user_id: i32, app_key: &str)
     .execute(pool)
     .await?;
 
+    let secure_attr = if secure { "; Secure" } else { "" };
     Ok(format!(
-        "{SESSION_COOKIE}={token}; Path=/{app_key}; HttpOnly; SameSite=Lax; Max-Age={SESSION_SECONDS}"
+        "{SESSION_COOKIE}={token}; Path=/{app_key}; HttpOnly; SameSite=Lax; Max-Age={SESSION_SECONDS}{secure_attr}"
     ))
 }
 
@@ -240,8 +258,9 @@ pub async fn require_login(State(state): State<Arc<AppState>>, mut req: Request,
         }
         None => {
             let fresh = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+            let secure_attr = if is_https(req.headers()) { "; Secure" } else { "" };
             let cookie = format!(
-                "{CALLER_COOKIE}={fresh}; Path=/{app_key}; HttpOnly; SameSite=Lax; Max-Age={CALLER_COOKIE_SECONDS}"
+                "{CALLER_COOKIE}={fresh}; Path=/{app_key}; HttpOnly; SameSite=Lax; Max-Age={CALLER_COOKIE_SECONDS}{secure_attr}"
             );
             req.extensions_mut().insert(CallerKey(fresh));
             Some(cookie)
@@ -323,6 +342,7 @@ pub async fn login_form(
 pub async fn login(
     State(state): State<Arc<AppState>>,
     Path((workspace, app)): Path<(String, String)>,
+    headers: HeaderMap,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     let app = format!("{workspace}/{app}");
@@ -352,7 +372,7 @@ pub async fn login(
         return Ok(Html(render::login_page(&app, &data.app.name, Some("Invalid username or password."), false)).into_response());
     }
 
-    let cookie = create_session(&state.pool, data.app.id, user_id, &app)
+    let cookie = create_session(&state.pool, data.app.id, user_id, &app, is_https(&headers))
         .await
         .map_err(err_response)?;
     Ok((StatusCode::SEE_OTHER, [(header::SET_COOKIE, cookie), (header::LOCATION, format!("/{app}"))]).into_response())
@@ -364,6 +384,7 @@ pub async fn login(
 pub async fn setup(
     State(state): State<Arc<AppState>>,
     Path((workspace, app)): Path<(String, String)>,
+    headers: HeaderMap,
     Form(values): Form<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     let app = format!("{workspace}/{app}");
@@ -400,7 +421,7 @@ pub async fn setup(
     .await
     .map_err(|e| err_response(e.into()))?;
 
-    let cookie = create_session(&state.pool, data.app.id, user_id, &app)
+    let cookie = create_session(&state.pool, data.app.id, user_id, &app, is_https(&headers))
         .await
         .map_err(err_response)?;
     Ok((StatusCode::SEE_OTHER, [(header::SET_COOKIE, cookie), (header::LOCATION, format!("/{app}"))]).into_response())

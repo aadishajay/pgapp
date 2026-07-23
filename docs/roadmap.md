@@ -29,8 +29,6 @@ pieces. Known gaps, honestly listed:
 - Field-level authorization (page- and component-level `requires:`
   exist, per-column doesn't), plus password reset flows (today an admin
   deletes/recreates the account)
-- Login sessions have no `Secure` cookie attribute — fine for
-  localhost, add it behind TLS
 - Item type config is always flat strings, even for numeric-looking
   values (Slider's `min`/`max`)
 - `ensure_data_table` adds columns to an existing table but doesn't

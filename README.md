@@ -343,11 +343,11 @@ pitch, everything below is the reference:
 
 pgapp is intentionally the smallest end-to-end loop, not the finished
 framework. No real foreign-key relationships yet, no multi-step flow
-blocks, no drag-and-drop free page composition, no `Secure`-cookie
-story below TLS — the full, honest list (with the reasoning behind
-each gap) is in [docs/roadmap.md](./docs/roadmap.md). If one of these
-is a dealbreaker for your use case, that's useful to know up front,
-and also exactly the kind of thing a PR is welcome for.
+blocks, no drag-and-drop free page composition — the full, honest
+list (with the reasoning behind each gap) is in
+[docs/roadmap.md](./docs/roadmap.md). If one of these is a
+dealbreaker for your use case, that's useful to know up front, and
+also exactly the kind of thing a PR is welcome for.
 
 ## Contributing
 
