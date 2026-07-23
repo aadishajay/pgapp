@@ -152,18 +152,38 @@ columns, nav menus, and every component kind.
 <tr>
 <td width="50%">
 
-**Interactive Report** — search, filters, saved views, sortable
-columns, all declarative.
+**Interactive Report** — faceted search, sortable columns, and a
+visible cue (that `→`) telling you a row is clickable before you ever
+touch the mouse.
 
-<img src="marketing/shots/report.png" alt="pgapp Interactive Report: a filterable, sortable ticket list" width="100%">
+<img src="marketing/shots/2026-tasks-report.png" alt="pgapp Interactive Report: a faceted, sortable task list with a clickable row cue" width="100%">
 
 </td>
 <td width="50%">
 
-**A generated Form** — radio groups, a popup LOV, a slider, all from
-one `item ... as <kind>` line each.
+**Charts from one line of SQL each** — bar, donut, pie, and more,
+every category getting its own consistent color automatically.
 
-<img src="marketing/shots/form-edit.png" alt="pgapp Form: create/edit with radio, popup, and slider fields" width="100%">
+<img src="marketing/shots/2026-dashboard-charts.png" alt="pgapp Dashboard: multiple chart types with per-category colors, generated from named queries" width="100%">
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+**The App Builder's entity editor** — pick a real table, and its
+columns, nullability, and primary key populate the field list for you.
+
+<img src="marketing/shots/2026-appbuilder-entity-editor.png" alt="pgapp App Builder: entity editor with a searchable table picker dialog open" width="100%">
+
+</td>
+<td width="50%">
+
+**The App Builder's page designer** — a component tree on the left,
+a live property panel on the right, changes saved straight to the
+`.pgapp` file.
+
+<img src="marketing/shots/2026-appbuilder-editpage.png" alt="pgapp App Builder: page designer with component tree and property panel" width="100%">
 
 </td>
 </tr>
