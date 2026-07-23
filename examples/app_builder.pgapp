@@ -67,6 +67,7 @@ app "App Builder" {
   nav {
     item "Apps" -> page Apps
     item "Workspaces" -> page Workspaces
+    item "Themes" -> page Themes
   }
 
   # Excludes itself (workspace slug "pgapp", app slug "builder") — the
@@ -210,6 +211,19 @@ app "App Builder" {
       link: slug -> page WorkspaceDetail (slug: target_workspace, any_app_slug: target_app)
       page_size: 50
     }
+  }
+
+  # Instance-wide theme management — unlike every other page below,
+  # themes aren't scoped to any one workspace or app (they're shared
+  # files under themes/, used by every app), so this page carries no
+  # target_workspace/target_app at all; its own JS (bindThemesPanel in
+  # runtime.js) talks to the Builder's own fixed
+  # /pgapp/builder/admin/themes/* routes directly (see
+  # theme_admin_guard in server.rs) rather than borrowing a target app
+  # the way WorkspaceDetail/SqlWorkshop do.
+  page "Themes" {
+    text "Clone an existing theme as a starting point, then hand-edit the copy's CSS. Saving takes effect immediately for every app using that theme — nothing here touches Postgres."
+    text "Themes" attrs (id: "pgapp-themes-panel-slot")
   }
 
   # Reached from the Workspaces page above — this workspace's own apps,

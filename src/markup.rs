@@ -2224,7 +2224,7 @@ app "Demo" {
         assert_eq!(app.name, "App Builder");
         assert_eq!(app.queries.len(), 7);
         assert_eq!(app.entities.len(), 6);
-        assert_eq!(app.pages.len(), 11);
+        assert_eq!(app.pages.len(), 12);
 
         let edit_page = app.pages.iter().find(|p| p.name == "EditPage").unwrap();
         assert_eq!(edit_page.components.len(), 7); // text (context), text (subnav), text (preview), text, region, text (properties), text (add-component)

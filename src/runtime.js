@@ -1586,9 +1586,16 @@ window.pgapp = (function () {
     var target = pgappEditTarget();
     if (!pgappEditTargetValid2(target)) return;
 
-    fetch(pgappAdminAppUrl(target, "/settings"))
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
+    Promise.all([
+      fetch(pgappAdminAppUrl(target, "/settings")).then(function (r) { return r.json(); }),
+      // Themes aren't scoped to any app (see theme_admin_guard in
+      // server.rs) — always fetched from the Builder's own fixed
+      // address, same as the "New Workspace" flow's action URL, not
+      // via pgappAdminAppUrl(target, ...) like the settings fetch above.
+      fetch("/pgapp/builder/admin/themes-list").then(function (r) { return r.json(); }),
+    ]).then(function (results) {
+        var data = results[0];
+        var themesData = results[1];
         if (!data.ok) {
           slot.textContent = "Couldn't load settings: " + data.error;
           return;
@@ -1601,7 +1608,8 @@ window.pgapp = (function () {
         title.textContent = "App Settings";
         slot.appendChild(title);
 
-        var themeSel = pgappSelect(["plain", "shadcn", "postgres", "vivid", "google_m3", "apex_universal"], s.theme);
+        var themeNames = themesData.ok ? themesData.themes.map(function (t) { return t.name; }) : [s.theme];
+        var themeSel = pgappSelect(themeNames, s.theme);
         pgappFieldRow(slot, "Theme", themeSel);
         var iconsSel = pgappSelect(["builtin"], s.icons);
         pgappFieldRow(slot, "Icons", iconsSel);
@@ -1649,6 +1657,170 @@ window.pgapp = (function () {
       .catch(function (e) {
         slot.textContent = "pgapp: " + e;
       });
+  }
+
+  // ---- App Builder: Themes (list, clone, edit) ----
+  //
+  // Themes aren't scoped to any one app or workspace — they're shared
+  // files under `themes/`, used by every app in every workspace — so
+  // this panel, unlike every other App-Builder panel above, never
+  // reads `pgappEditTarget()` at all; it talks straight to the
+  // Builder's own fixed `/pgapp/builder/admin/themes/*` routes (see
+  // `theme_admin_guard` in server.rs), and works the moment the
+  // Builder's own page loads, with no `?target_workspace=&target_app=`
+  // needed on the URL.
+  function bindThemesPanel() {
+    var slot = document.getElementById("pgapp-themes-panel-slot");
+    if (!slot) return;
+    pgappEnsureBuilderStyle();
+
+    function apiUrl(suffix) {
+      return "/pgapp/builder/admin/themes" + suffix;
+    }
+
+    function loadList() {
+      return fetch(apiUrl("-list"))
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (!data.ok) throw new Error(data.error);
+          return data.themes;
+        });
+    }
+
+    slot.textContent = "";
+    slot.classList.add("pgapp-panel-card");
+    var title = document.createElement("div");
+    title.className = "pgapp-panel-card-title";
+    title.textContent = "Themes";
+    slot.appendChild(title);
+
+    var listEl = document.createElement("ul");
+    listEl.className = "pgapp-theme-list";
+    slot.appendChild(listEl);
+
+    var cloneRow = document.createElement("div");
+    cloneRow.className = "pgapp-builder-two-col";
+    var sourceSel = document.createElement("select");
+    sourceSel.className = "pgapp-select";
+    var newNameInput = document.createElement("input");
+    newNameInput.className = "pgapp-input";
+    newNameInput.placeholder = "New theme name";
+    var cloneBtn = document.createElement("button");
+    cloneBtn.type = "button";
+    cloneBtn.className = "pgapp-btn pgapp-btn-secondary";
+    cloneBtn.textContent = "Clone";
+    cloneRow.appendChild(sourceSel);
+    cloneRow.appendChild(newNameInput);
+    cloneRow.appendChild(cloneBtn);
+    slot.appendChild(cloneRow);
+
+    var editorHost = document.createElement("div");
+    slot.appendChild(editorHost);
+
+    function renderEditor(name) {
+      editorHost.textContent = "Loading " + name + "…";
+      fetch(apiUrl("/" + encodeURIComponent(name) + "/css"))
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          editorHost.textContent = "";
+          if (!data.ok) {
+            editorHost.textContent = "Couldn't load '" + name + "': " + data.error;
+            return;
+          }
+          var editorTitle = document.createElement("div");
+          editorTitle.className = "pgapp-panel-card-title";
+          editorTitle.textContent = name + "/theme.css";
+          editorHost.appendChild(editorTitle);
+
+          var textarea = document.createElement("textarea");
+          textarea.className = "pgapp-theme-editor";
+          textarea.value = data.content;
+          editorHost.appendChild(textarea);
+
+          var saveBtn = document.createElement("button");
+          saveBtn.type = "button";
+          saveBtn.className = "pgapp-btn pgapp-btn-primary";
+          saveBtn.textContent = "Save";
+          saveBtn.addEventListener("click", function () {
+            pgappGuardedClick(saveBtn, function () {
+              return fetch(apiUrl("/" + encodeURIComponent(name) + "/css"), {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: "content=" + encodeURIComponent(textarea.value),
+              })
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                  if (!d.ok) pgappAlert("Couldn't save '" + name + "': " + d.error);
+                })
+                .catch(function (e) { pgappAlert("pgapp: " + e); });
+            });
+          });
+          editorHost.appendChild(saveBtn);
+        })
+        .catch(function (e) {
+          editorHost.textContent = "Couldn't load '" + name + "': " + e;
+        });
+    }
+
+    function refresh() {
+      loadList()
+        .then(function (themes) {
+          listEl.textContent = "";
+          sourceSel.textContent = "";
+          themes.forEach(function (t) {
+            var li = document.createElement("li");
+            li.className = "pgapp-theme-item";
+            var link = document.createElement("a");
+            link.href = "#";
+            link.textContent = t.label === t.name ? t.name : t.label + " (" + t.name + ")";
+            link.addEventListener("click", function (ev) {
+              ev.preventDefault();
+              renderEditor(t.name);
+            });
+            li.appendChild(link);
+            listEl.appendChild(li);
+
+            var opt = document.createElement("option");
+            opt.value = t.name;
+            opt.textContent = t.name;
+            sourceSel.appendChild(opt);
+          });
+        })
+        .catch(function (e) {
+          listEl.textContent = "";
+          var err = document.createElement("li");
+          err.textContent = "Couldn't load themes: " + e;
+          listEl.appendChild(err);
+        });
+    }
+
+    cloneBtn.addEventListener("click", function () {
+      var newName = newNameInput.value.trim();
+      if (!newName) {
+        pgappAlert("A new theme name is required.");
+        return;
+      }
+      pgappGuardedClick(cloneBtn, function () {
+        return fetch(apiUrl("/clone"), {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "source=" + encodeURIComponent(sourceSel.value) + "&new_name=" + encodeURIComponent(newName),
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (!d.ok) {
+              pgappAlert("Couldn't clone theme: " + d.error);
+              return;
+            }
+            newNameInput.value = "";
+            refresh();
+            renderEditor(d.name);
+          })
+          .catch(function (e) { pgappAlert("pgapp: " + e); });
+      });
+    });
+
+    refresh();
   }
 
   // The "Secrets" panel — a `text ... attrs (id: "pgapp-secrets-slot")`
@@ -2679,7 +2851,11 @@ window.pgapp = (function () {
       ".pgapp-sql-editor { border: 1px solid rgba(120, 120, 120, 0.3); border-radius: 0.375rem; overflow: hidden; margin-bottom: 0.75rem; }" +
       ".pgapp-sql-editor .CodeMirror { height: 16rem; font-size: 0.85rem; }" +
       ".pgapp-sql-results { max-height: 22rem; overflow-y: auto; }" +
-      ".pgapp-sql-error { color: #b91c1c; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; white-space: pre-wrap; }";
+      ".pgapp-sql-error { color: #b91c1c; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; white-space: pre-wrap; }" +
+      // Themes panel (bindThemesPanel).
+      ".pgapp-theme-list { list-style: none; margin: 0 0 0.75rem; padding: 0; }" +
+      ".pgapp-theme-item { padding: 0.3rem 0; }" +
+      ".pgapp-theme-editor { width: 100%; min-height: 24rem; box-sizing: border-box; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; padding: 0.6rem; border: 1px solid rgba(120, 120, 120, 0.3); border-radius: 0.375rem; margin-bottom: 0.5rem; }";
     document.head.appendChild(style);
   }
 
@@ -5375,6 +5551,7 @@ window.pgapp = (function () {
     document.addEventListener("DOMContentLoaded", bindQueriesPanel);
     document.addEventListener("DOMContentLoaded", bindNavPanel);
     document.addEventListener("DOMContentLoaded", bindAppSettingsForm);
+    document.addEventListener("DOMContentLoaded", bindThemesPanel);
     document.addEventListener("DOMContentLoaded", bindSecretsPanel);
     document.addEventListener("DOMContentLoaded", bindDestroyAppPanel);
     document.addEventListener("DOMContentLoaded", bindDestroyWorkspacePanel);
@@ -5401,6 +5578,7 @@ window.pgapp = (function () {
     bindQueriesPanel();
     bindNavPanel();
     bindAppSettingsForm();
+    bindThemesPanel();
     bindSecretsPanel();
     bindDestroyAppPanel();
     bindDestroyWorkspacePanel();
