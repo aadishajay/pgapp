@@ -4394,7 +4394,11 @@ async fn admin_sql_execute(
         Ok(SqlOutcome::Command { rows_affected }) => {
             Ok(axum::Json(json!({"ok": true, "kind": "command", "rows_affected": rows_affected})).into_response())
         }
-        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+        // `{e:#}` (not `e.to_string()`) — the whole point of SQL Commands
+        // is seeing exactly why a statement failed; anyhow's plain
+        // Display only shows the top-level "failed to run the query"
+        // context, not the real Postgres error underneath it.
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("{e:#}")})).into_response()),
     }
 }
 
@@ -4483,7 +4487,7 @@ async fn admin_sql_table_detail(
         Ok((columns, indexes, constraints, ddl)) => {
             Ok(axum::Json(json!({"ok": true, "columns": columns, "indexes": indexes, "constraints": constraints, "ddl": ddl})).into_response())
         }
-        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("{e:#}")})).into_response()),
     }
 }
 
@@ -4554,7 +4558,7 @@ async fn admin_sql_table_data(
         Ok((columns, rows, has_next)) => {
             Ok(axum::Json(json!({"ok": true, "columns": columns, "rows": rows, "has_next": has_next})).into_response())
         }
-        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("{e:#}")})).into_response()),
     }
 }
 
