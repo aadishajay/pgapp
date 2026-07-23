@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/pgapp-logo.svg" alt="pgapp logo: a blue elephant holding a pencil" width="120">
+
 # pgapp
 
 ### Postgres is the backend. This is everything else.
