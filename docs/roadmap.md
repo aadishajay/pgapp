@@ -60,5 +60,14 @@ pieces. Known gaps, honestly listed:
   differently enough to avoid the `pgapp_meta.apps.name` collision but
   whose slugs happen to match (e.g. "Reports" and "REPORTS") coexist
   fine, routed independently at `/<workspace>/reports/...` each.
+- [SQL Workshop](./app-builder.md#sql-workshop)'s SQL Commands has no
+  `:bind` variables — paste literal SQL only, one statement at a time
+  (no `;`-separated batches). The keyword sniff that decides
+  query-vs-command is a leading-word check, not a real parser — a
+  statement starting with a comment degrades to "treated as a command"
+  rather than crashing, but that's still a wrong guess. The Object
+  Browser's DDL pane is hand-assembled for a quick reference, not
+  pg_dump-exact (no partitioning, tablespaces, storage parameters, or
+  comments).
 
 Have an opinion on what should come first? Open an issue.

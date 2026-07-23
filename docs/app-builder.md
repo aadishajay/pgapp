@@ -7,6 +7,7 @@
 - [Creating a brand-new workspace](#creating-a-brand-new-workspace)
 - [Editing an app's data model, queries, navigation, and settings](#editing-an-apps-data-model-queries-navigation-and-settings)
 - [Deleting an app or its whole workspace](#deleting-an-app-or-its-whole-workspace)
+- [SQL Workshop](#sql-workshop)
 - [How it's built](#how-its-built)
 
 `examples/app_builder.pgapp` is a pgapp app, like any other, that lists
@@ -313,6 +314,49 @@ the workspace-destroy route's URL still names an `:app` even though the
 resolves every request's auth context from the `/{workspace}/{app}/...`
 shape before any route handler runs, so a workspace-wide action still
 needs *some* registered app in the URL to borrow that context from.
+
+## SQL Workshop
+
+A "SQL Workshop →" link on WorkspaceDetail (next to the Delete-Workspace
+panel) opens an Oracle-APEX-SQL-Workshop equivalent: ad hoc **SQL
+Commands** plus a read-only **Object Browser**, both scoped to that
+workspace's own `data_schema` — not a new trust boundary, since
+`pgapp_admin` already holds ALL PRIVILEGES on every table there (the
+same access the Data Model/Queries editors above already exercise).
+Like Delete Workspace, the URL's `:app` segment is only ever borrowed to
+resolve auth context; every app registered into one workspace shares
+that workspace's own schema, so it never changes which schema either
+panel runs against.
+
+- **SQL Commands** (`POST /:workspace/:app/admin/sql/execute`,
+  `admin_sql_execute` in `src/server.rs`): runs one statement at a time
+  against the workspace's schema. A simple keyword sniff on the
+  statement's leading word (`select`/`with`/`table`/`values`/`show`/
+  `explain`) decides whether to treat it as a result-returning query
+  (real column order via Postgres's own `Describe`, then rendered as a
+  grid) or a plain command (`rows_affected` only) — imperfect (a leading
+  comment defeats it) but degrades to a clear error rather than a wrong
+  answer. No `:bind` variables — paste literal SQL, the same way psql
+  would take it. The editor is vendored CodeMirror 5 (SQL mode, bracket
+  matching, Ctrl-Space autocomplete) plus `sql-formatter` for the
+  **Format** button — not Monaco, whose real footprint (~30MB, an AMD
+  loader, many chunk files) doesn't fit "lightweight" or this repo's
+  single-flat-`assets/`-directory, no-bundler asset model; see
+  `assets/VENDORED_LICENSES.md`. Ctrl/Cmd+Enter runs the current buffer.
+- **Object Browser** (`GET /:workspace/:app/admin/sql/table-detail`,
+  `GET /:workspace/:app/admin/sql/table-data`): a filterable list of
+  every table in the schema (the same `/admin/tables-list` the entity
+  editor's table picker already uses); picking one shows tabbed
+  Columns/Data/Indexes/Constraints/DDL panes. Data is paginated
+  (25 rows/page) through the same `run_named_query_page` machinery a
+  named query's own report pagination uses, via a synthetic
+  `select * from "table"` built once the table name has been checked
+  against `information_schema.tables` (the one place here that splices
+  an identifier into raw SQL rather than binding it, so it's validated
+  first). The DDL pane is hand-assembled from real column/index/
+  constraint metadata for a quick copy-paste reference — it is
+  *not* pg_dump-exact (no partitioning, no tablespace, no storage
+  parameters, no comments).
 
 ## How it's built
 

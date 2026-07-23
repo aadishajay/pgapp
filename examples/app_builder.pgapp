@@ -232,7 +232,30 @@ app "App Builder" {
       link: app_name -> page Pages (workspace_slug: target_workspace, app_slug: target_app, meta_app_id: meta_app_id)
       page_size: 50
     }
+    text "SQL Workshop" attrs (id: "pgapp-sql-workshop-link-slot")
     text "Danger zone" attrs (id: "pgapp-destroy-workspace-slot", class: "pgapp-danger-zone")
+  }
+
+  # Reached via the "SQL Workshop" link on WorkspaceDetail above — an
+  # APEX SQL Workshop equivalent (SQL Commands + Object Browser), scoped
+  # to this workspace's own data_schema. The `:app` path segment baked
+  # into that link (any_app_slug — whichever app happened to register
+  # first, same as the Delete-Workspace panel above) is exactly as valid
+  # a target here as any other app in the workspace: `register_in_
+  # workspace` always passes `ws.schema_name` as every app's own
+  # data_schema, so which app's slug ends up in the URL never changes
+  # which schema SQL Workshop runs against. Not a new trust boundary —
+  # pgapp_admin already holds ALL PRIVILEGES on every table in this
+  # schema (see `grant_admin_on_schema`), the same privileges the
+  # entity/query editors already exercise; this is only a new UI surface
+  # over them. Both panels below are pure JS (`bindSqlWorkshop` in
+  # runtime.js) against the `/:workspace/:app/admin/sql/*` routes — the
+  # two `text ... attrs (id: ...)` lines exist only as DOM anchors.
+  page "SqlWorkshop" {
+    text "Editing:" attrs (id: "pgapp-context-slot")
+    text "SQL Workshop — ad hoc SQL and a read-only table browser against this workspace's own schema. No new privileges: the same access the entity/query editors already use." attrs (id: "pgapp-sql-workshop-intro")
+    text "Object Browser" attrs (id: "pgapp-sql-object-browser-slot")
+    text "SQL Commands" attrs (id: "pgapp-sql-commands-slot")
   }
 
   page "Pages" {
