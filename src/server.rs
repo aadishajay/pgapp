@@ -35,7 +35,7 @@ use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Router};
 use serde_json::json;
-use sqlx::{PgPool, Row};
+use sqlx::{Executor, PgPool, Row};
 use tower::limit::ConcurrencyLimitLayer;
 
 use auth::AuthCtx;
@@ -294,6 +294,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/:workspace/:app/admin/tables-list", get(admin_tables_list))
         .route("/:workspace/:app/admin/table-columns", get(admin_table_columns))
         .route("/:workspace/:app/admin/queries/test", post(admin_test_query))
+        .route("/:workspace/:app/admin/sql/execute", post(admin_sql_execute))
+        .route("/:workspace/:app/admin/sql/table-detail", get(admin_sql_table_detail))
+        .route("/:workspace/:app/admin/sql/table-data", get(admin_sql_table_data))
         .route("/:workspace/:app/admin/secrets-list", get(admin_secrets_list))
         .route("/:workspace/:app/admin/secrets/set", post(admin_secrets_set))
         .route("/:workspace/:app/admin/secrets/:name/delete", post(admin_secrets_delete))
@@ -4169,6 +4172,56 @@ async fn admin_tables_list(
 /// `/admin/tables-list`, so the App Builder can auto-populate a new
 /// entity's Fields list the moment a table is picked, without the
 /// author re-typing anything by hand.
+/// One real Postgres column's shape, shared by `admin_table_columns`
+/// (the entity editor's table picker) and the SQL Workshop's Object
+/// Browser (`admin_sql_table_detail`) — both need the same
+/// `information_schema`/primary-key lookup, just presented differently
+/// (a `required`-flagged datalist entry vs. a DDL/detail view).
+struct ColumnInfo {
+    name: String,
+    udt: String,
+    not_null: bool,
+    default: Option<String>,
+    is_primary_key: bool,
+}
+
+/// The real columns of one table in `data_schema`, straight from
+/// `information_schema` plus a primary-key lookup — not scoped to
+/// whether any entity has claimed the table, so it works for a table an
+/// author is only just now picking (the entity editor's table picker)
+/// or browsing ad hoc (the SQL Workshop's Object Browser).
+async fn fetch_table_columns(pool: &PgPool, data_schema: &str, table: &str) -> anyhow::Result<Vec<ColumnInfo>> {
+    let rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        "select column_name, udt_name, is_nullable, column_default from information_schema.columns
+          where table_schema = $1 and table_name = $2
+          order by ordinal_position",
+    )
+    .bind(data_schema)
+    .bind(table)
+    .fetch_all(pool)
+    .await
+    .context("failed to read column metadata")?;
+    let pk_columns: Vec<String> = sqlx::query_scalar(
+        "select kcu.column_name
+           from information_schema.table_constraints tc
+           join information_schema.key_column_usage kcu
+             on kcu.constraint_name = tc.constraint_name and kcu.table_schema = tc.table_schema
+          where tc.table_schema = $1 and tc.table_name = $2 and tc.constraint_type = 'PRIMARY KEY'",
+    )
+    .bind(data_schema)
+    .bind(table)
+    .fetch_all(pool)
+    .await
+    .context("failed to read primary key metadata")?;
+    Ok(rows
+        .into_iter()
+        .map(|(name, udt, is_nullable, default)| {
+            let is_primary_key = pk_columns.contains(&name);
+            ColumnInfo { name, udt, not_null: is_nullable == "NO", default, is_primary_key }
+        })
+        .collect())
+}
+
 async fn admin_table_columns(
     State(state): State<Arc<AppState>>,
     Extension(auth_ctx): Extension<AuthCtx>,
@@ -4182,37 +4235,15 @@ async fn admin_table_columns(
         if table.trim().is_empty() {
             anyhow::bail!("no table name given");
         }
-        let rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-            "select column_name, udt_name, is_nullable, column_default from information_schema.columns
-              where table_schema = $1 and table_name = $2
-              order by ordinal_position",
-        )
-        .bind(&data_schema)
-        .bind(&table)
-        .fetch_all(&state.pool)
-        .await
-        .context("failed to read column metadata")?;
-        let pk_columns: Vec<String> = sqlx::query_scalar(
-            "select kcu.column_name
-               from information_schema.table_constraints tc
-               join information_schema.key_column_usage kcu
-                 on kcu.constraint_name = tc.constraint_name and kcu.table_schema = tc.table_schema
-              where tc.table_schema = $1 and tc.table_name = $2 and tc.constraint_type = 'PRIMARY KEY'",
-        )
-        .bind(&data_schema)
-        .bind(&table)
-        .fetch_all(&state.pool)
-        .await
-        .context("failed to read primary key metadata")?;
-        Ok(rows
+        let columns = fetch_table_columns(&state.pool, &data_schema, &table).await?;
+        Ok(columns
             .into_iter()
-            .map(|(name, udt, is_nullable, default)| {
-                let is_primary_key = pk_columns.contains(&name);
+            .map(|c| {
                 json!({
-                    "name": name,
-                    "type": udt,
-                    "required": is_nullable == "NO" && default.is_none() && !is_primary_key,
-                    "is_primary_key": is_primary_key,
+                    "name": c.name,
+                    "type": c.udt,
+                    "required": c.not_null && c.default.is_none() && !c.is_primary_key,
+                    "is_primary_key": c.is_primary_key,
                 })
             })
             .collect())
@@ -4258,6 +4289,250 @@ async fn admin_test_query(
         Ok((binds, columns)) => {
             let columns: Vec<serde_json::Value> = columns.into_iter().map(|(name, ty)| json!({"name": name, "type": ty})).collect();
             Ok(axum::Json(json!({"ok": true, "binds": binds, "columns": columns})).into_response())
+        }
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// Outcome of one ad-hoc SQL Workshop statement — either a real result
+/// set (with the query's true left-to-right column order, which
+/// `to_jsonb` decoding alone would lose) or the row count of a
+/// statement that returned none.
+enum SqlOutcome {
+    Rows { columns: Vec<String>, rows: Vec<Vec<Option<String>>> },
+    Command { rows_affected: u64 },
+}
+
+/// POST /:workspace/:app/admin/sql/execute — runs one ad-hoc SQL
+/// statement typed directly into the SQL Workshop's SQL Commands
+/// editor, scoped to this app's own `data_schema` the same way every
+/// named query already is (`meta::scoped_conn`). Unlike a named query,
+/// there are no `:bind` markers to compile here — it's exactly the SQL
+/// the author typed, run as-is. That's not a new trust boundary:
+/// `pgapp_admin` already holds ALL PRIVILEGES on every table/sequence in
+/// a workspace's own schema (see `control::grant_admin_on_schema`), the
+/// same privilege level the entity/query editors already operate
+/// through — this endpoint doesn't grant anything new, it just exposes
+/// a raw SQL prompt over privileges the App Builder already had.
+///
+/// A leading `select`/`with`/`table`/`values`/`show`/`explain` keyword
+/// is treated as a query — `.describe()`'d first for its real column
+/// order, then wrapped in `to_jsonb` and fetched, the same two-step
+/// `compile_named_query`/`run_named_query` already use, just skipping
+/// the bind-compilation step since there are no `:name` markers to
+/// resolve. Anything else runs directly via `.execute()`, reporting
+/// rows affected — the same shape `actions::run_query` already returns
+/// for a named DML query, just for literal, unparsed SQL. This is a
+/// simple keyword sniff, not a real SQL parser: a statement preceded by
+/// a comment or extra whitespace before the keyword falls through to
+/// the `.execute()` branch instead of the query branch — harmless for a
+/// SELECT (still runs, just reports a row count instead of a grid), but
+/// worth knowing. Bind variables (APEX's `:P1_ITEM` style) aren't
+/// supported — this is literal SQL only, same as a `psql` prompt.
+async fn admin_sql_execute(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let sql = values.get("sql").cloned().unwrap_or_default();
+    let data_schema = entry.data().app.data_schema.clone();
+
+    let result: anyhow::Result<SqlOutcome> = async {
+        let trimmed = sql.trim();
+        if trimmed.is_empty() {
+            anyhow::bail!("no SQL to run");
+        }
+        const QUERY_KEYWORDS: [&str; 6] = ["select", "with", "table", "values", "show", "explain"];
+        let first_word = trimmed.chars().take_while(|c| c.is_alphabetic()).collect::<String>().to_lowercase();
+        let is_query = QUERY_KEYWORDS.contains(&first_word.as_str());
+
+        let mut conn = meta::scoped_conn(&state.pool, &data_schema).await?;
+        if is_query {
+            let described = (&mut *conn).describe(trimmed).await.context("failed to run the query")?;
+            let column_names: Vec<String> = described.columns().iter().map(|c| sqlx::Column::name(c).to_string()).collect();
+            let wrapped = meta::wrap_to_jsonb(trimmed);
+            let json_rows: Vec<serde_json::Value> = sqlx::query_scalar(&wrapped).fetch_all(&mut *conn).await.context("query failed")?;
+            let rows: Vec<_> = json_rows.into_iter().map(query_engine::json_row_to_map).collect();
+            let ordered: Vec<Vec<Option<String>>> = rows
+                .iter()
+                .map(|row| column_names.iter().map(|c| row.get(c).cloned().flatten()).collect())
+                .collect();
+            Ok(SqlOutcome::Rows { columns: column_names, rows: ordered })
+        } else {
+            let affected = sqlx::query(trimmed).execute(&mut *conn).await.context("statement failed")?.rows_affected();
+            Ok(SqlOutcome::Command { rows_affected: affected })
+        }
+    }
+    .await;
+
+    match result {
+        Ok(SqlOutcome::Rows { columns, rows }) => {
+            Ok(axum::Json(json!({"ok": true, "kind": "rows", "columns": columns, "rows": rows})).into_response())
+        }
+        Ok(SqlOutcome::Command { rows_affected }) => {
+            Ok(axum::Json(json!({"ok": true, "kind": "command", "rows_affected": rows_affected})).into_response())
+        }
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// GET /:workspace/:app/admin/sql/table-detail?table=NAME — the Object
+/// Browser's per-table view: real columns (via `fetch_table_columns`,
+/// shared with `admin_table_columns`), indexes straight from
+/// `pg_indexes.indexdef`, and constraints via `pg_get_constraintdef` —
+/// both already exact, complete DDL text Postgres itself generates, not
+/// an approximation. The `CREATE TABLE` column list underneath them
+/// *is* assembled by hand from `information_schema` data, so the
+/// overall DDL is readable and accurate but not byte-for-byte what
+/// `pg_dump` would produce (no storage parameters, tablespace, etc).
+async fn admin_sql_table_detail(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let data_schema = entry.data().app.data_schema.clone();
+    let table = params.get("table").cloned().unwrap_or_default();
+
+    let result: anyhow::Result<(Vec<serde_json::Value>, Vec<serde_json::Value>, Vec<serde_json::Value>, String)> = async {
+        if table.trim().is_empty() {
+            anyhow::bail!("no table name given");
+        }
+        let columns = fetch_table_columns(&state.pool, &data_schema, &table).await?;
+
+        let indexes: Vec<(String, String)> = sqlx::query_as(
+            "select indexname, indexdef from pg_indexes where schemaname = $1 and tablename = $2 order by indexname",
+        )
+        .bind(&data_schema)
+        .bind(&table)
+        .fetch_all(&state.pool)
+        .await
+        .context("failed to read indexes")?;
+
+        let constraints: Vec<(String, String)> = sqlx::query_as(
+            "select con.conname, pg_get_constraintdef(con.oid) as definition
+               from pg_constraint con
+               join pg_class rel on rel.oid = con.conrelid
+               join pg_namespace ns on ns.oid = rel.relnamespace
+              where ns.nspname = $1 and rel.relname = $2
+              order by con.conname",
+        )
+        .bind(&data_schema)
+        .bind(&table)
+        .fetch_all(&state.pool)
+        .await
+        .context("failed to read constraints")?;
+
+        let mut ddl = format!("CREATE TABLE {data_schema}.{table} (\n");
+        let col_lines: Vec<String> = columns
+            .iter()
+            .map(|c| {
+                let mut line = format!("    {} {}", c.name, c.udt);
+                if c.not_null {
+                    line.push_str(" NOT NULL");
+                }
+                if let Some(default) = &c.default {
+                    line.push_str(&format!(" DEFAULT {default}"));
+                }
+                line
+            })
+            .collect();
+        ddl.push_str(&col_lines.join(",\n"));
+        ddl.push_str("\n);");
+        for (_, def) in &indexes {
+            ddl.push_str(&format!("\n{def};"));
+        }
+        for (name, def) in &constraints {
+            ddl.push_str(&format!("\nALTER TABLE {data_schema}.{table} ADD CONSTRAINT {name} {def};"));
+        }
+
+        let columns_json: Vec<serde_json::Value> = columns
+            .iter()
+            .map(|c| json!({"name": c.name, "type": c.udt, "not_null": c.not_null, "default": c.default, "is_primary_key": c.is_primary_key}))
+            .collect();
+        let indexes_json: Vec<serde_json::Value> = indexes.iter().map(|(name, def)| json!({"name": name, "definition": def})).collect();
+        let constraints_json: Vec<serde_json::Value> = constraints.iter().map(|(name, def)| json!({"name": name, "definition": def})).collect();
+        Ok((columns_json, indexes_json, constraints_json, ddl))
+    }
+    .await;
+
+    match result {
+        Ok((columns, indexes, constraints, ddl)) => {
+            Ok(axum::Json(json!({"ok": true, "columns": columns, "indexes": indexes, "constraints": constraints, "ddl": ddl})).into_response())
+        }
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// GET /:workspace/:app/admin/sql/table-data?table=NAME&page=N — a
+/// read-only paginated preview of a table's actual rows, reusing
+/// `query_engine::run_named_query_page` against a synthetic
+/// `select * from "table"` — the exact same pagination/decoding path
+/// every query-backed Report already runs through, just fed a table
+/// name instead of a markup-declared query. `table` is checked against
+/// `information_schema.tables` before being spliced into that SQL (the
+/// one place in the SQL Workshop where an identifier, not just a bind
+/// value, is built from request input) — every other query here either
+/// binds `table` as a parameter or only ever runs it after this check
+/// confirms it's a real table in this exact schema.
+async fn admin_sql_table_data(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let data_schema = entry.data().app.data_schema.clone();
+    let table = params.get("table").cloned().unwrap_or_default();
+    let page_num: i64 = params.get("page").and_then(|s| s.parse().ok()).unwrap_or(1);
+
+    let result: anyhow::Result<(Vec<String>, Vec<Vec<Option<String>>>, bool)> = async {
+        if table.trim().is_empty() {
+            anyhow::bail!("no table name given");
+        }
+        let exists: bool = sqlx::query_scalar(
+            "select exists(select 1 from information_schema.tables
+              where table_schema = $1 and table_name = $2 and table_type = 'BASE TABLE')",
+        )
+        .bind(&data_schema)
+        .bind(&table)
+        .fetch_one(&state.pool)
+        .await
+        .context("failed to verify the table exists")?;
+        if !exists {
+            anyhow::bail!("no such table '{table}' in this schema");
+        }
+
+        let rq = meta::RuntimeQuery { sql: format!(r#"select * from "{table}""#), bind_names: vec![] };
+        let column_names: Vec<String> = {
+            let mut conn = meta::scoped_conn(&state.pool, &data_schema).await?;
+            (&mut *conn)
+                .describe(rq.sql.as_str())
+                .await
+                .context("failed to read the table's shape")?
+                .columns()
+                .iter()
+                .map(|c| sqlx::Column::name(c).to_string())
+                .collect()
+        };
+        let ctx = HashMap::new();
+        let (json_rows, has_next) =
+            query_engine::run_named_query_page(&state.pool, &data_schema, &rq, &ctx, "", &[], 25, page_num, None).await?;
+        let rows: Vec<_> = json_rows.into_iter().map(query_engine::json_row_to_map).collect();
+        let ordered: Vec<Vec<Option<String>>> = rows
+            .iter()
+            .map(|row| column_names.iter().map(|c| row.get(c).cloned().flatten()).collect())
+            .collect();
+        Ok((column_names, ordered, has_next))
+    }
+    .await;
+
+    match result {
+        Ok((columns, rows, has_next)) => {
+            Ok(axum::Json(json!({"ok": true, "columns": columns, "rows": rows, "has_next": has_next})).into_response())
         }
         Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
     }
