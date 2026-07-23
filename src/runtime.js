@@ -2005,6 +2005,20 @@ window.pgapp = (function () {
     if (!browserSlot || !commandsSlot) return;
     var target = pgappEditTarget();
     if (!pgappEditTargetValid2(target)) return;
+    pgappEnsureBuilderStyle();
+
+    // Re-parent the two slots (two separate top-level page components,
+    // each in its own numbered `#pgapp-cN` wrapper) into one flex
+    // layout, side by side — same re-parenting trick EditPage's
+    // tree+properties split uses, reusing its `.pgapp-designer-layout`
+    // class rather than inventing an identical one.
+    var browserWrap = browserSlot.closest('[id^="pgapp-c"]') || browserSlot;
+    var commandsWrap = commandsSlot.closest('[id^="pgapp-c"]') || commandsSlot;
+    var layout = document.createElement("div");
+    layout.className = "pgapp-designer-layout";
+    browserWrap.parentNode.insertBefore(layout, browserWrap);
+    layout.appendChild(browserWrap);
+    layout.appendChild(commandsWrap);
 
     // Table name -> [column name, ...], filled in lazily as the Object
     // Browser is used to inspect a table — feeds CodeMirror's SQL-hint
@@ -2018,9 +2032,9 @@ window.pgapp = (function () {
 
     function renderRowsTable(columns, rows) {
       var wrap = document.createElement("div");
-      wrap.className = "pgapp-sql-results-wrap";
+      wrap.className = "pgapp-table-wrap";
       var table = document.createElement("table");
-      table.className = "pgapp-sql-results-table";
+      table.className = "pgapp-table";
       var thead = document.createElement("thead");
       var headRow = document.createElement("tr");
       columns.forEach(function (c) {
@@ -2646,7 +2660,26 @@ window.pgapp = (function () {
       ".pgapp-picker-box { max-width: 26rem; } " +
       ".pgapp-picker-list { list-style: none; margin: 0.5rem 0 0; padding: 0; max-height: 16rem; overflow-y: auto; border: 1px solid rgba(120, 120, 120, 0.3); border-radius: 0.375rem; } " +
       ".pgapp-picker-item { display: block; width: 100%; text-align: left; padding: 0.5rem 0.75rem; border: none; background: none; cursor: pointer; font: inherit; } " +
-      ".pgapp-picker-item:hover, .pgapp-picker-item:focus { background: rgba(99, 102, 241, 0.12); }";
+      ".pgapp-picker-item:hover, .pgapp-picker-item:focus { background: rgba(99, 102, 241, 0.12); }" +
+      // SQL Workshop (bindSqlWorkshop) — Object Browser (left) + SQL
+      // Commands (right), re-parented into the shared
+      // `.pgapp-designer-layout` split above.
+      ".pgapp-sql-object-search { width: 100%; margin-bottom: 0.5rem; box-sizing: border-box; }" +
+      ".pgapp-sql-object-list { list-style: none; margin: 0 0 0.75rem; padding: 0; max-height: 12rem; overflow-y: auto; border: 1px solid rgba(120, 120, 120, 0.3); border-radius: 0.375rem; }" +
+      ".pgapp-sql-object-item { padding: 0.4rem 0.65rem; cursor: pointer; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; }" +
+      ".pgapp-sql-object-item:hover { background: rgba(99, 102, 241, 0.08); }" +
+      ".pgapp-sql-object-item-active { background: rgba(99, 102, 241, 0.14); font-weight: 600; }" +
+      ".pgapp-sql-object-detail { border-top: 1px solid rgba(120, 120, 120, 0.3); padding-top: 0.75rem; }" +
+      ".pgapp-sql-object-tabs { display: flex; gap: 0.35rem; flex-wrap: wrap; margin-bottom: 0.6rem; }" +
+      ".pgapp-sql-object-tab { padding: 0.3rem 0.65rem; border: 1px solid rgba(120, 120, 120, 0.3); border-radius: 0.375rem; background: none; cursor: pointer; font: inherit; font-size: 0.85rem; }" +
+      ".pgapp-sql-object-tab-active { background: rgba(99, 102, 241, 0.14); font-weight: 600; }" +
+      ".pgapp-sql-ddl { white-space: pre-wrap; font-size: 0.82rem; max-height: 20rem; overflow-y: auto; border: 1px solid rgba(120, 120, 120, 0.3); border-radius: 0.375rem; padding: 0.6rem; }" +
+      ".pgapp-sql-data-pager { display: flex; gap: 0.5rem; margin-top: 0.5rem; }" +
+      ".pgapp-sql-toolbar { display: flex; gap: 0.5rem; margin-bottom: 0.5rem; }" +
+      ".pgapp-sql-editor { border: 1px solid rgba(120, 120, 120, 0.3); border-radius: 0.375rem; overflow: hidden; margin-bottom: 0.75rem; }" +
+      ".pgapp-sql-editor .CodeMirror { height: 16rem; font-size: 0.85rem; }" +
+      ".pgapp-sql-results { max-height: 22rem; overflow-y: auto; }" +
+      ".pgapp-sql-error { color: #b91c1c; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85rem; white-space: pre-wrap; }";
     document.head.appendChild(style);
   }
 
