@@ -821,60 +821,243 @@ window.pgapp = (function () {
 
   var ENTITY_FIELD_TYPES = ["id", "text", "boolean", "integer", "timestamp"];
 
+  // JS mirror of html::humanize_label (Rust) — same transform, purely
+  // for *displaying* a suggested label next to an auto-populated Fields
+  // row here in the picker; the field's own stored name is untouched.
+  function pgappHumanizeLabel(name) {
+    return String(name || "")
+      .split("_")
+      .filter(function (w) { return w.length > 0; })
+      .map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1); })
+      .join(" ");
+  }
+
+  // Maps a real Postgres udt_name to one of pgapp's own field types —
+  // best-effort, since a hand-created table can use any Postgres type;
+  // anything not recognized falls back to "text" rather than blocking
+  // the pick (the author can still fix it up in the Fields list below).
+  function pgappUdtToFieldType(udt) {
+    if (/^int/.test(udt || "") || udt === "serial" || udt === "bigserial") return "integer";
+    if (udt === "bool") return "boolean";
+    if (/^timestamp/.test(udt || "") || udt === "date") return "timestamp";
+    return "text";
+  }
+
+  // A searchable single-pick modal: `items` is a flat list of strings,
+  // `onPick(item)` fires the moment one is clicked (no separate Save
+  // step — picking *is* the action). Shares the same `.pgapp-dialog-*`
+  // chrome as `showDialog`/`pgappPrompt` so it looks like part of the
+  // same editor, not a bolted-on widget. Used by the entity editor's
+  // Table/Query picker below.
+  function pgappPickerDialog(title, items, onPick) {
+    pgappEnsureBuilderStyle();
+    var overlay = document.createElement("div");
+    overlay.className = "pgapp-dialog-overlay";
+    var box = document.createElement("div");
+    box.className = "pgapp-dialog-box pgapp-picker-box";
+    box.setAttribute("role", "dialog");
+    box.setAttribute("aria-modal", "true");
+    var p = document.createElement("p");
+    p.className = "pgapp-dialog-message";
+    p.textContent = title;
+    box.appendChild(p);
+
+    var search = document.createElement("input");
+    search.type = "text";
+    search.className = "pgapp-input";
+    search.placeholder = "Search…";
+    box.appendChild(search);
+
+    var list = document.createElement("ul");
+    list.className = "pgapp-picker-list";
+    box.appendChild(list);
+
+    function cleanup() {
+      document.removeEventListener("keydown", onKey);
+      overlay.remove();
+    }
+    function onKey(ev) {
+      if (ev.key === "Escape") {
+        cleanup();
+      } else {
+        pgappTrapTab(box, ev);
+      }
+    }
+
+    function renderList(filter) {
+      list.textContent = "";
+      var f = (filter || "").toLowerCase();
+      var matches = (items || []).filter(function (it) { return it.toLowerCase().indexOf(f) !== -1; });
+      matches.forEach(function (it) {
+        var li = document.createElement("li");
+        var btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "pgapp-picker-item";
+        btn.textContent = it;
+        btn.addEventListener("click", function () {
+          cleanup();
+          onPick(it);
+        });
+        li.appendChild(btn);
+        list.appendChild(li);
+      });
+      if (!matches.length) {
+        var empty = document.createElement("li");
+        empty.className = "pgapp-designer-properties-empty";
+        empty.textContent = "No matches.";
+        list.appendChild(empty);
+      }
+    }
+    search.addEventListener("input", function () { renderList(search.value); });
+    renderList("");
+
+    var actions = document.createElement("div");
+    actions.className = "pgapp-dialog-actions";
+    var cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "pgapp-btn pgapp-btn-secondary";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.addEventListener("click", cleanup);
+    actions.appendChild(cancelBtn);
+    box.appendChild(actions);
+
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    document.addEventListener("keydown", onKey);
+    search.focus();
+  }
+
   // Renders the entity structured form into `container`; `data` is
   // `{name, source_query, source_collection, source_table, fields:
   // [{name, type, required, default}]}` (blank/absent for a brand-new
   // entity — see `admin_entities_list`'s JSON shape in server.rs).
-  // `queries` (from the same fetch) populates the "from query" dropdown.
-  // `columns` (from `/admin/schema-metadata`, only non-empty for an
-  // *existing* physical entity) suggests real Postgres column names for
-  // the field-name input — a datalist, not a hard dropdown, since
-  // adding a field that doesn't exist in the table yet is normal (the
-  // next sync creates it). `tables` (from `/admin/tables-list`) is
-  // every table actually in this app's schema, for the "bind to an
-  // existing table" option — unlike `columns`, this includes tables no
-  // entity has claimed yet, since that's the whole point of binding.
-  function renderEntityForm(container, data, queries, columns, tables) {
+  // `queries` is `[{name, sql}]` (from `/admin/queries-list`) — needed
+  // in full, not just names, since picking one re-tests its SQL for
+  // real output columns. `tables` (from `/admin/tables-list`) is every
+  // table actually in this app's schema, offered by the Table picker
+  // alongside a "+ Create new table" entry that preserves the old
+  // "physical table" (pgapp creates/manages it) behavior. `target` is
+  // this page's own `pgappEditTarget()`, needed to reach
+  // `/admin/table-columns` and `/admin/queries/test`.
+  function renderEntityForm(container, data, queries, tables, target) {
     var nameInput = pgappTextInput(data.name);
     if (data.name) nameInput.disabled = true; // renaming isn't supported here — delete + recreate, or the Advanced editor
     pgappFieldRow(container, "Name", nameInput);
 
-    var sourceOptions = ["physical table", "existing table"].concat(
-      (queries || []).map(function (q) { return "from query " + q; })
-    );
-    var sourceValue = data.source_table
-      ? "existing table"
-      : data.source_query
-        ? "from query " + data.source_query
-        : "physical table";
-    var sourceSel = pgappSelect(sourceOptions, sourceValue);
-    pgappFieldRow(container, "Source", sourceSel);
+    var isQuery = !!data.source_query;
+    var typeSel = pgappSelect(["Table", "Query"], isQuery ? "Query" : "Table");
+    pgappFieldRow(container, "Type", typeSel);
+
+    // Table state: `pickedTable` is the real table name once bound to
+    // one (mirrors `data.source_table`); null means "physical table" —
+    // pgapp creates/manages its own table for this entity, exactly like
+    // today's default when nothing is picked at all.
+    var pickedTable = data.source_table || null;
+    var pickedQuery = data.source_query || null;
 
     var tableWrap = document.createElement("div");
-    var tableInput = pgappDatalistInput(data.source_table || "", tables || []);
-    pgappFieldRow(tableWrap, "Existing table name", tableInput);
-    if (tableInput.__pgappDatalist) tableWrap.appendChild(tableInput.__pgappDatalist);
-    var tableHint = document.createElement("p");
-    tableHint.className = "pgapp-designer-properties-empty";
-    tableHint.textContent = "pgapp never creates or alters this table — it must already exist, with columns matching the fields below.";
-    tableWrap.appendChild(tableHint);
-    container.appendChild(tableWrap);
-    function syncSourceVisibility() {
-      tableWrap.style.display = sourceSel.value === "existing table" ? "" : "none";
+    var tableStatus = document.createElement("p");
+    tableStatus.className = "pgapp-designer-properties-empty";
+    var tablePickBtn = document.createElement("button");
+    tablePickBtn.type = "button";
+    tablePickBtn.className = "pgapp-btn pgapp-btn-secondary";
+    function refreshTableStatus() {
+      tableStatus.textContent = pickedTable
+        ? "Bound to existing table: " + pickedTable
+        : "Physical table — pgapp creates and manages its own table for this entity.";
+      tablePickBtn.textContent = pickedTable ? "Change table…" : "Bind to an existing table…";
     }
-    sourceSel.addEventListener("change", syncSourceVisibility);
-    syncSourceVisibility();
+    refreshTableStatus();
+    tablePickBtn.addEventListener("click", function () {
+      var items = ["+ Create new table (pgapp-managed)"].concat(tables || []);
+      pgappPickerDialog("Pick a table", items, function (picked) {
+        if (picked === "+ Create new table (pgapp-managed)") {
+          pickedTable = null;
+          refreshTableStatus();
+          return;
+        }
+        pickedTable = picked;
+        refreshTableStatus();
+        fetch(pgappAdminAppUrl(target, "/table-columns?table=" + encodeURIComponent(picked)))
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (!d.ok) {
+              pgappAlert("Couldn't read that table's columns: " + d.error);
+              return;
+            }
+            fieldsList.clear();
+            d.columns.forEach(function (c) {
+              fieldsList.addRow({
+                name: c.name,
+                type: c.is_primary_key ? "id" : pgappUdtToFieldType(c.type),
+                required: !!c.required,
+                default: "",
+              });
+            });
+          })
+          .catch(function (e) { pgappAlert("pgapp: " + e); });
+      });
+    });
+    tableWrap.appendChild(tableStatus);
+    tableWrap.appendChild(tablePickBtn);
+    container.appendChild(tableWrap);
+
+    var queryWrap = document.createElement("div");
+    var queryStatus = document.createElement("p");
+    queryStatus.className = "pgapp-designer-properties-empty";
+    var queryPickBtn = document.createElement("button");
+    queryPickBtn.type = "button";
+    queryPickBtn.className = "pgapp-btn pgapp-btn-secondary";
+    function refreshQueryStatus() {
+      queryStatus.textContent = pickedQuery ? "Reading columns from query: " + pickedQuery : "Pick a query to read its output columns from.";
+      queryPickBtn.textContent = pickedQuery ? "Change query…" : "Pick a query…";
+    }
+    refreshQueryStatus();
+    var queryNames = (queries || []).map(function (q) { return q.name; });
+    queryPickBtn.addEventListener("click", function () {
+      pgappPickerDialog("Pick a query", queryNames, function (picked) {
+        pickedQuery = picked;
+        refreshQueryStatus();
+        var q = (queries || []).filter(function (item) { return item.name === picked; })[0];
+        if (!q) return;
+        fetch(pgappAdminAppUrl(target, "/queries/test"), {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "sql=" + encodeURIComponent(q.sql),
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            if (!d.ok) {
+              pgappAlert("Couldn't read that query's columns: " + d.error);
+              return;
+            }
+            fieldsList.clear();
+            d.columns.forEach(function (c) {
+              fieldsList.addRow({ name: c.name, type: "text", required: false, default: "" });
+            });
+          })
+          .catch(function (e) { pgappAlert("pgapp: " + e); });
+      });
+    });
+    queryWrap.appendChild(queryStatus);
+    queryWrap.appendChild(queryPickBtn);
+    container.appendChild(queryWrap);
+
+    function syncTypeVisibility() {
+      tableWrap.style.display = typeSel.value === "Table" ? "" : "none";
+      queryWrap.style.display = typeSel.value === "Query" ? "" : "none";
+    }
+    typeSel.addEventListener("change", syncTypeVisibility);
+    syncTypeVisibility();
 
     pgappSectionTitle(container, "Fields");
-    if (columns && columns.length) {
-      var hint = document.createElement("p");
-      hint.className = "pgapp-designer-properties-empty";
-      hint.textContent = "Name suggestions come from the table's real columns.";
-      container.appendChild(hint);
-    }
+    var fieldsHint = document.createElement("p");
+    fieldsHint.className = "pgapp-designer-properties-empty";
+    fieldsHint.textContent = "Auto-filled from the picked table/query above — Name/Type/Required/Default can still be adjusted or added to by hand.";
+    container.appendChild(fieldsHint);
     var fieldsList = pgappRowList(
       [
-        { key: "name", label: "Name", type: "datalist", options: columns || [] },
+        { key: "name", label: "Name", type: "text" },
         { key: "type", label: "Type", type: "select", options: ENTITY_FIELD_TYPES },
         { key: "required", label: "Required", type: "checkbox" },
         { key: "default", label: "Default", type: "text" },
@@ -890,12 +1073,11 @@ window.pgapp = (function () {
         var name = nameInput.value.trim();
         if (!name) throw "an entity needs a name";
         var fromClause = "";
-        if (sourceSel.value === "existing table") {
-          var tableName = tableInput.value.trim();
-          if (!tableName) throw "pick or type the existing table's name";
-          fromClause = " from table " + pgappMarkupStr(tableName);
-        } else if (sourceSel.value !== "physical table") {
-          fromClause = " from query " + sourceSel.value.replace(/^from query /, "");
+        if (typeSel.value === "Table" && pickedTable) {
+          fromClause = " from table " + pgappMarkupStr(pickedTable);
+        } else if (typeSel.value === "Query") {
+          if (!pickedQuery) throw "pick a query for this entity to read from";
+          fromClause = " from query " + pickedQuery;
         }
         var rows = fieldsList.getRows().filter(function (r) { return r.name && r.name.trim(); });
         // Each "id"-typed field compiles to its own `serial primary
@@ -944,21 +1126,15 @@ window.pgapp = (function () {
 
     function openEditor(title, existing) {
       Promise.all([
-        fetch(pgappAdminAppUrl(target, "/entities-list")).then(function (r) { return r.json(); }),
-        fetch(pgappAdminAppUrl(target, "/schema-metadata")).then(function (r) { return r.json(); }),
+        fetch(pgappAdminAppUrl(target, "/queries-list")).then(function (r) { return r.json(); }),
         fetch(pgappAdminAppUrl(target, "/tables-list")).then(function (r) { return r.json(); }),
       ]).then(function (results) {
-          var data = results[0];
-          var schema = results[1];
-          var tablesResp = results[2];
-          var queries = data.ok ? data.meta.queries : [];
-          var columns = [];
-          if (existing && existing.name && schema.ok && schema.entities[existing.name]) {
-            columns = schema.entities[existing.name].columns.map(function (c) { return c.name; });
-          }
+          var queriesResp = results[0];
+          var tablesResp = results[1];
+          var queries = queriesResp.ok ? queriesResp.meta.queries : [];
           var tables = tablesResp.ok ? tablesResp.tables : [];
           pgappGenericEditor(title, function (body) {
-            return renderEntityForm(body, existing || {}, queries, columns, tables);
+            return renderEntityForm(body, existing || {}, queries, tables, target);
           }).then(function (generated) {
             if (generated === null) return;
             var isNew = !existing || !existing.name;
@@ -1968,7 +2144,12 @@ window.pgapp = (function () {
       ".pgapp-query-schema-ref { max-height: 8rem; overflow-y: auto; font-family: monospace; font-size: 0.85em; border: 1px solid rgba(120, 120, 120, 0.3); border-radius: 0.375rem; padding: 0.5rem; margin-bottom: 0.5rem; }" +
       ".pgapp-query-test-result { margin-left: 0.75rem; }" +
       ".pgapp-query-test-ok { color: #15803d; }" +
-      ".pgapp-query-test-error { color: #b91c1c; }";
+      ".pgapp-query-test-error { color: #b91c1c; }" +
+      // Entity editor's Table/Query searchable picker (pgappPickerDialog).
+      ".pgapp-picker-box { max-width: 26rem; } " +
+      ".pgapp-picker-list { list-style: none; margin: 0.5rem 0 0; padding: 0; max-height: 16rem; overflow-y: auto; border: 1px solid rgba(120, 120, 120, 0.3); border-radius: 0.375rem; } " +
+      ".pgapp-picker-item { display: block; width: 100%; text-align: left; padding: 0.5rem 0.75rem; border: none; background: none; cursor: pointer; font: inherit; } " +
+      ".pgapp-picker-item:hover, .pgapp-picker-item:focus { background: rgba(99, 102, 241, 0.12); }";
     document.head.appendChild(style);
   }
 
@@ -2253,7 +2434,17 @@ window.pgapp = (function () {
       return out;
     }
 
-    return { el: wrap, getRows: getRows };
+    return {
+      el: wrap,
+      getRows: getRows,
+      addRow: addRow,
+      // Wipes every row already in the list — used when a table/query
+      // pick auto-populates the field editor's Fields list, replacing
+      // whatever was there rather than appending to it.
+      clear: function () {
+        tbody.textContent = "";
+      },
+    };
   }
 
   // An ordered subset of an entity's own fields — what a Report's

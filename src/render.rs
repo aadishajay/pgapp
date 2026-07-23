@@ -17,7 +17,7 @@
 //! path takes `app` and prefixes it on every href/action/src it emits.
 
 use crate::chart_lib::ChartLib;
-use crate::html::{escape, url_encode};
+use crate::html::{escape, humanize_label, url_encode};
 use crate::icons::Icons;
 use crate::item_types::{self, RenderArgs};
 use crate::meta::{Chrome, LinkColumn, NavNode, RegionRows, RuntimeComponent, RuntimeEntity};
@@ -863,8 +863,8 @@ pub fn login_page(app: &str, app_name: &str, error: Option<&str>, setup: bool) -
     }
     body.push_str(&format!(
         r#"<form class="pgapp-form" method="post" action="{action}">
-<div class="pgapp-field"><label class="pgapp-label">username</label><input class="pgapp-input" type="text" name="username" required autofocus></div>
-<div class="pgapp-field"><label class="pgapp-label">password</label><input class="pgapp-input" type="password" name="password" required></div>
+<div class="pgapp-field"><label class="pgapp-label">Username</label><input class="pgapp-input" type="text" name="username" required autofocus></div>
+<div class="pgapp-field"><label class="pgapp-label">Password</label><input class="pgapp-input" type="password" name="password" required></div>
 <button class="pgapp-btn pgapp-btn-primary" type="submit">{button}</button>
 </form></div>"#
     ));
@@ -917,9 +917,9 @@ pub fn users_page(
     body.push_str(&format!(
         r#"<div class="pgapp-form-panel"><h2 class="pgapp-subtitle">Add user</h2>
 <form class="pgapp-form" method="post" action="/{app}/users">
-<div class="pgapp-field"><label class="pgapp-label">username</label><input class="pgapp-input" type="text" name="username" required></div>
-<div class="pgapp-field"><label class="pgapp-label">password (min 8 chars)</label><input class="pgapp-input" type="password" name="password" required></div>
-<div class="pgapp-field"><label class="pgapp-label">roles</label><input class="pgapp-input" type="text" name="roles" placeholder="comma-separated, e.g. admin, finance"></div>
+<div class="pgapp-field"><label class="pgapp-label">Username</label><input class="pgapp-input" type="text" name="username" required></div>
+<div class="pgapp-field"><label class="pgapp-label">Password (min 8 chars)</label><input class="pgapp-input" type="password" name="password" required></div>
+<div class="pgapp-field"><label class="pgapp-label">Roles</label><input class="pgapp-input" type="text" name="roles" placeholder="comma-separated, e.g. admin, finance"></div>
 <button class="pgapp-btn pgapp-btn-primary" type="submit">Create user</button>
 </form></div>"#,
         app = escape(app),
@@ -1044,7 +1044,7 @@ fn input_for_field(
     // for an EditableTable cell — the grid's own header row already
     // names the column, so repeating it per row would be redundant.
     let label_html = if show_label {
-        format!(r#"<label class="pgapp-label">{label}</label>"#, label = escape(field_name))
+        format!(r#"<label class="pgapp-label">{label}</label>"#, label = escape(&humanize_label(field_name)))
     } else {
         String::new()
     };

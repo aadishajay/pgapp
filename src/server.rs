@@ -292,6 +292,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/:workspace/:app/admin/settings", get(admin_settings_get).post(admin_settings_set))
         .route("/:workspace/:app/admin/schema-metadata", get(admin_schema_metadata))
         .route("/:workspace/:app/admin/tables-list", get(admin_tables_list))
+        .route("/:workspace/:app/admin/table-columns", get(admin_table_columns))
         .route("/:workspace/:app/admin/queries/test", post(admin_test_query))
         .route("/:workspace/:app/admin/secrets-list", get(admin_secrets_list))
         .route("/:workspace/:app/admin/secrets/set", post(admin_secrets_set))
@@ -4142,6 +4143,74 @@ async fn admin_tables_list(
 
     match result {
         Ok(tables) => Ok(axum::Json(json!({"ok": true, "tables": tables})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
+    }
+}
+
+/// GET /:workspace/:app/admin/table-columns?table=NAME — one *specific*
+/// table's real columns, each with its Postgres type, a pre-computed
+/// `required` (NOT NULL with no column default — a PK is never flagged
+/// required since its own `id` field type already implies that), and
+/// whether it's part of the primary key — for a table that may not be
+/// claimed by any entity yet (an author picking a table to bind a *new*
+/// entity to, via the entity editor's table picker). Unlike
+/// `admin_schema_metadata` (scoped to already-declared physical
+/// entities) this takes an arbitrary table name straight from
+/// `/admin/tables-list`, so the App Builder can auto-populate a new
+/// entity's Fields list the moment a table is picked, without the
+/// author re-typing anything by hand.
+async fn admin_table_columns(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    let entry = admin_edit_guard(&state, &auth_ctx, &workspace, &app)?;
+    let data_schema = entry.data().app.data_schema.clone();
+    let table = params.get("table").cloned().unwrap_or_default();
+    let result: anyhow::Result<Vec<serde_json::Value>> = async {
+        if table.trim().is_empty() {
+            anyhow::bail!("no table name given");
+        }
+        let rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+            "select column_name, udt_name, is_nullable, column_default from information_schema.columns
+              where table_schema = $1 and table_name = $2
+              order by ordinal_position",
+        )
+        .bind(&data_schema)
+        .bind(&table)
+        .fetch_all(&state.pool)
+        .await
+        .context("failed to read column metadata")?;
+        let pk_columns: Vec<String> = sqlx::query_scalar(
+            "select kcu.column_name
+               from information_schema.table_constraints tc
+               join information_schema.key_column_usage kcu
+                 on kcu.constraint_name = tc.constraint_name and kcu.table_schema = tc.table_schema
+              where tc.table_schema = $1 and tc.table_name = $2 and tc.constraint_type = 'PRIMARY KEY'",
+        )
+        .bind(&data_schema)
+        .bind(&table)
+        .fetch_all(&state.pool)
+        .await
+        .context("failed to read primary key metadata")?;
+        Ok(rows
+            .into_iter()
+            .map(|(name, udt, is_nullable, default)| {
+                let is_primary_key = pk_columns.contains(&name);
+                json!({
+                    "name": name,
+                    "type": udt,
+                    "required": is_nullable == "NO" && default.is_none() && !is_primary_key,
+                    "is_primary_key": is_primary_key,
+                })
+            })
+            .collect())
+    }
+    .await;
+
+    match result {
+        Ok(columns) => Ok(axum::Json(json!({"ok": true, "columns": columns})).into_response()),
         Err(e) => Ok(axum::Json(json!({"ok": false, "error": e.to_string()})).into_response()),
     }
 }
