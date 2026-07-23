@@ -5,7 +5,7 @@ use anyhow::Context;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 
-use pgapp::{actions, control, instance, item_types, meta, scaffold, secrets, server, source};
+use pgapp::{actions, control, instance, item_types, meta, scaffold, secrets, server, source, theme};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -813,7 +813,8 @@ async fn app_create(workspace_arg: Option<String>, slug_arg: Option<String>) -> 
 
     println!("Let's scaffold a new app in workspace '{}'.", ws.slug);
     let name = scaffold::prompt_required("App name")?;
-    let theme = scaffold::prompt("Theme (plain/shadcn/vivid/google_m3/apex_universal)", "shadcn")?;
+    let theme_names: Vec<String> = theme::list_themes().into_iter().map(|t| t.name).collect();
+    let theme = scaffold::prompt(&format!("Theme ({})", theme_names.join("/")), "shadcn")?;
     let as_dir = scaffold::prompt_yes_no("Scaffold as a directory of files instead of one?", false)?;
     let slug = match slug_arg {
         Some(s) => {

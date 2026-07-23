@@ -54,7 +54,7 @@ use crate::model::{AggregateFn, ComputedColumn, Facet, FieldItem, HtmlAttrs, Pre
 use crate::markup;
 use crate::page_reorder;
 use crate::render;
-use crate::theme::Theme;
+use crate::theme::{self, Theme};
 use query_engine::{bind_context, resolve_field_choices, resolve_regions, run_named_query_page, run_named_query_rows};
 
 /// Everything that comes from one app's markup file and `pgapp_meta` —
@@ -297,6 +297,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/:workspace/:app/admin/sql/execute", post(admin_sql_execute))
         .route("/:workspace/:app/admin/sql/table-detail", get(admin_sql_table_detail))
         .route("/:workspace/:app/admin/sql/table-data", get(admin_sql_table_data))
+        .route("/:workspace/:app/admin/themes-list", get(admin_themes_list))
+        .route("/:workspace/:app/admin/themes/clone", post(admin_theme_clone))
+        .route("/:workspace/:app/admin/themes/:name/css", get(admin_theme_get_css).post(admin_theme_save_css))
         .route("/:workspace/:app/admin/secrets-list", get(admin_secrets_list))
         .route("/:workspace/:app/admin/secrets/set", post(admin_secrets_set))
         .route("/:workspace/:app/admin/secrets/:name/delete", post(admin_secrets_delete))
@@ -3075,6 +3078,22 @@ fn admin_edit_guard(
     Ok(entry)
 }
 
+/// The opposite check from `admin_edit_guard`: theme files aren't
+/// scoped to any one app — they're shared, process-wide state under
+/// `themes/`, used by every app in every workspace — so these routes
+/// only ever make sense reached via the App Builder's own fixed
+/// address, unlike the target-app-borrowing routes above. Refuses
+/// every *other* app's attempt to reach them instead of refusing the
+/// Builder.
+fn theme_admin_guard(state: &AppState, auth_ctx: &AuthCtx, workspace: &str, app: &str) -> Result<(), AppError> {
+    if workspace != instance::APP_BUILDER_WORKSPACE_SLUG || app != instance::APP_BUILDER_APP_SLUG {
+        return Err((StatusCode::FORBIDDEN, "theme management is only reachable via the App Builder".to_string()));
+    }
+    let entry = state.app_or_404(&format!("{workspace}/{app}"))?;
+    require_reload_access(&entry.data(), auth_ctx)?;
+    Ok(())
+}
+
 /// Parses `text` as a whole app and discards the result — used to
 /// reject a hand-edited component/page block *before* it's written to
 /// disk, so a typo can never leave the file in a broken state (unlike
@@ -4558,6 +4577,119 @@ async fn admin_sql_table_data(
         Ok((columns, rows, has_next)) => {
             Ok(axum::Json(json!({"ok": true, "columns": columns, "rows": rows, "has_next": has_next})).into_response())
         }
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("{e:#}")})).into_response()),
+    }
+}
+
+/// GET /:workspace/:app/admin/themes-list — every theme actually on
+/// disk (see `theme::list_themes`), for the App Builder's Themes page:
+/// the theme list itself, and the clone-source picker. Builder-only
+/// (see `theme_admin_guard`) — themes aren't scoped to any one app.
+async fn admin_themes_list(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+) -> Result<Response, AppError> {
+    theme_admin_guard(&state, &auth_ctx, &workspace, &app)?;
+    let themes: Vec<_> = theme::list_themes().into_iter().map(|t| json!({"name": t.name, "label": t.label})).collect();
+    Ok(axum::Json(json!({"ok": true, "themes": themes})).into_response())
+}
+
+/// GET /:workspace/:app/admin/themes/:name/css — one theme's raw
+/// `theme.css` text, for the Themes page's editor.
+async fn admin_theme_get_css(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, name)): Path<(String, String, String)>,
+) -> Result<Response, AppError> {
+    theme_admin_guard(&state, &auth_ctx, &workspace, &app)?;
+    let result: anyhow::Result<String> = async {
+        if !instance::valid_identifier(&name) {
+            anyhow::bail!("'{name}' isn't a valid theme name");
+        }
+        tokio::fs::read_to_string(format!("themes/{name}/theme.css"))
+            .await
+            .with_context(|| format!("failed to read theme '{name}'"))
+    }
+    .await;
+    match result {
+        Ok(content) => Ok(axum::Json(json!({"ok": true, "content": content})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("{e:#}")})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/themes/:name/css — overwrites that
+/// theme's `theme.css` with `content` (form-encoded). Takes effect
+/// immediately for every app using this theme — `theme_css` (the
+/// route every rendered page's own `<link rel="stylesheet">` points
+/// at) reads the file straight off disk on every request, so there's
+/// no cache to invalidate and no reload step, unlike a markup edit.
+async fn admin_theme_save_css(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app, name)): Path<(String, String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    theme_admin_guard(&state, &auth_ctx, &workspace, &app)?;
+    let content = values.get("content").cloned().unwrap_or_default();
+    let result: anyhow::Result<()> = async {
+        if !instance::valid_identifier(&name) {
+            anyhow::bail!("'{name}' isn't a valid theme name");
+        }
+        let path = format!("themes/{name}/theme.css");
+        if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            anyhow::bail!("no such theme '{name}'");
+        }
+        tokio::fs::write(&path, &content).await.with_context(|| format!("failed to save theme '{name}'"))
+    }
+    .await;
+    match result {
+        Ok(()) => Ok(axum::Json(json!({"ok": true})).into_response()),
+        Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("{e:#}")})).into_response()),
+    }
+}
+
+/// POST /:workspace/:app/admin/themes/clone — copies an existing
+/// theme's `theme.css` to a new theme directory under a new name (the
+/// starting point for hand-editing a variant without touching the
+/// original), and writes a fresh `theme.json` there labeling it after
+/// the new name — not a copy of the source's own label, which would
+/// otherwise confusingly describe the clone as e.g. "shadcn/ui" too.
+/// `list_themes` picks up the new name immediately; no registration
+/// step, no database row.
+async fn admin_theme_clone(
+    State(state): State<Arc<AppState>>,
+    Extension(auth_ctx): Extension<AuthCtx>,
+    Path((workspace, app)): Path<(String, String)>,
+    Form(values): Form<HashMap<String, String>>,
+) -> Result<Response, AppError> {
+    theme_admin_guard(&state, &auth_ctx, &workspace, &app)?;
+    let source = values.get("source").cloned().unwrap_or_default();
+    let new_name = values.get("new_name").cloned().unwrap_or_default();
+    let result: anyhow::Result<()> = async {
+        if !instance::valid_identifier(&source) {
+            anyhow::bail!("'{source}' isn't a valid theme name");
+        }
+        if !instance::valid_identifier(&new_name) {
+            anyhow::bail!("'{new_name}' must start with a letter/underscore and contain only letters, digits, underscores");
+        }
+        let source_css = format!("themes/{source}/theme.css");
+        if !tokio::fs::try_exists(&source_css).await.unwrap_or(false) {
+            anyhow::bail!("no such theme '{source}'");
+        }
+        let new_dir = format!("themes/{new_name}");
+        if tokio::fs::try_exists(&new_dir).await.unwrap_or(false) {
+            anyhow::bail!("a theme named '{new_name}' already exists");
+        }
+        tokio::fs::create_dir(&new_dir).await.with_context(|| format!("failed to create '{new_dir}'"))?;
+        tokio::fs::copy(&source_css, format!("{new_dir}/theme.css")).await.context("failed to copy theme.css")?;
+        let meta = format!(r#"{{"label": "{new_name}", "description": "Cloned from '{source}'"}}"#);
+        tokio::fs::write(format!("{new_dir}/theme.json"), meta).await.context("failed to write theme.json")?;
+        Ok(())
+    }
+    .await;
+    match result {
+        Ok(()) => Ok(axum::Json(json!({"ok": true, "name": new_name})).into_response()),
         Err(e) => Ok(axum::Json(json!({"ok": false, "error": format!("{e:#}")})).into_response()),
     }
 }

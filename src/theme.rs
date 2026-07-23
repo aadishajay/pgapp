@@ -51,3 +51,39 @@ pub fn load(name: &str) -> Result<Theme> {
         meta,
     })
 }
+
+/// One entry in `list_themes()` — enough for a picker: the directory
+/// name (what `theme: <name>` in markup refers to) and a human label
+/// (from `theme.json`, falling back to the name itself).
+pub struct ThemeInfo {
+    pub name: String,
+    pub label: String,
+}
+
+/// Every theme actually on disk under `themes/` — the source of truth
+/// for every theme picker (the App Builder's own, `pgapp new`'s CLI
+/// prompt), replacing what used to be a hardcoded name list in each of
+/// those places. A hand-dropped or cloned theme directory shows up
+/// here (and so everywhere) the moment it exists, with no separate
+/// registration step — a subdirectory missing `theme.css` (not a real
+/// theme, or mid-clone) is silently skipped rather than erroring the
+/// whole list.
+pub fn list_themes() -> Vec<ThemeInfo> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir("themes") else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() || !path.join("theme.css").exists() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let label = load(name).ok().map(|t| t.meta.label).filter(|l| !l.is_empty()).unwrap_or_else(|| name.to_string());
+        out.push(ThemeInfo { name: name.to_string(), label });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}

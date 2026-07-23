@@ -117,7 +117,10 @@ async fn run_interactive(parsed: ParsedArgs) -> Result<()> {
     };
     let theme = match parsed.theme {
         Some(t) => t,
-        None => prompt("Theme (plain/shadcn/vivid/google_m3/apex_universal)", "shadcn")?,
+        None => {
+            let theme_names: Vec<String> = crate::theme::list_themes().into_iter().map(|t| t.name).collect();
+            prompt(&format!("Theme ({})", theme_names.join("/")), "shadcn")?
+        }
     };
     let as_dir = if parsed.as_dir {
         true
@@ -222,9 +225,10 @@ mode" section):
                   shared_components/entities/items.pgapp — the same
                   split-by-kind shape a real Oracle APEX application
                   export uses (see README's "One file, or a directory")
-  --theme <name>  starting theme (default: shadcn) — see themes/ for
-                  what's shipped (plain, shadcn, vivid, google_m3,
-                  apex_universal)
+  --theme <name>  starting theme (default: shadcn) — any directory
+                  under themes/ (ships plain/shadcn/vivid/google_m3/
+                  apex_universal/postgres; clone one via the App
+                  Builder's Themes page to add your own)
   --create, -i    force the interactive prompts even when an <AppName>
                   is also given on the command line
 
