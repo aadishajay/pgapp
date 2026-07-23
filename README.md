@@ -11,7 +11,7 @@ web app — reports, forms, charts, auth, and a point-and-click admin
 builder — served by a single Rust binary that talks straight to
 Postgres. No ORM. No separate API service. No JS build step.
 
-[![CI](https://github.com/aadishajay/pgapp/actions/workflows/ci.yml/badge.svg)](https://github.com/aadishajay/pgapp/actions/workflows/ci.yml)
+[![CI](https://github.com/aadishajay/pgapp/workflows/CI/badge.svg)](https://github.com/aadishajay/pgapp/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
 [![Postgres](https://img.shields.io/badge/database-PostgreSQL-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
