@@ -1164,7 +1164,7 @@ fn report_cell_html(
                 let pval = row.get(field).and_then(|v| v.as_deref()).unwrap_or("");
                 href.push_str(&format!("&{}={}", escape(param), url_encode(pval)));
             }
-            format!(r#"<a class="pgapp-link" href="{href}">{val}</a>"#, val = escape(&display))
+            format!(r#"<a class="pgapp-link pgapp-row-link" href="{href}">{val}</a>"#, val = escape(&display))
         }
         _ => escape(&display),
     }

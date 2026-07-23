@@ -137,12 +137,21 @@ body {
 }
 
 .pgapp-link {
-  color: hsl(var(--foreground));
+  color: hsl(var(--primary));
   text-decoration: none;
   font-weight: 500;
 }
 .pgapp-link:hover {
   text-decoration: underline;
+}
+
+/* A report's row-opening link (its `link:` column) — distinguished from
+   other .pgapp-link uses (nav items, action buttons) so a non-technical
+   user sees a chevron cue that a row leads somewhere, not just a colored
+   word. */
+.pgapp-row-link::after {
+  content: " \2192";
+  opacity: 0.6;
 }
 
 /* Multi-level nav bar: submenus are plain nested <ul>s, shown via

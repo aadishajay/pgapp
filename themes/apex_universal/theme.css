@@ -70,6 +70,7 @@ body {
 .pgapp-nav-toggle { display: none; border: none; background: transparent; cursor: pointer; font-size: 1.25rem; line-height: 1; padding: 0.1rem 0.35rem; color: var(--au-text); }
 .pgapp-link { color: var(--au-blue); text-decoration: none; }
 .pgapp-link:hover { text-decoration: underline; }
+.pgapp-row-link::after { content: " \2192"; opacity: 0.6; }
 .pgapp-title { margin: 1.5rem 0 1rem; font-size: 1.5rem; }
 .pgapp-subtitle {
   margin: 1.75rem 0 0.9rem;

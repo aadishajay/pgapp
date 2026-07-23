@@ -79,6 +79,7 @@ body {
 
 .pgapp-link { color: var(--v-indigo); text-decoration: none; font-weight: 600; }
 .pgapp-link:hover { color: var(--v-fuchsia); }
+.pgapp-row-link::after { content: " \2192"; opacity: 0.6; }
 
 /* Top nav: white pill bar. Wraps onto extra rows rather than forcing
    the whole page wider than its max-width — a flex row with many

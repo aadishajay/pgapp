@@ -150,6 +150,7 @@ body {
 
 .pgapp-link { color: var(--m3-primary); text-decoration: none; font-weight: 500; }
 .pgapp-link:hover { text-decoration: underline; }
+.pgapp-row-link::after { content: " \2192"; opacity: 0.6; }
 
 /* Top nav: an M3 "top app bar" — flat surface-container, no shadow, a
    hairline instead of elevation. Wraps onto extra rows rather than
