@@ -2122,10 +2122,20 @@ async fn run_action(
         })
         .await;
 
-    let anchor = redirect_anchor(page, idx);
+    // A non-empty result has something the user actually needs to read —
+    // anchor there instead of the button's own component, which can sit
+    // anywhere on the page (often at the bottom, below the fold) while
+    // the message itself always renders at the very top (see
+    // `render::page_layout`). An action with nothing to say (empty
+    // `msg`) still anchors on itself, so the page doesn't jump away from
+    // where the user was.
+    let component_anchor = format!("pgapp-c{}", redirect_anchor(page, idx));
     match outcome {
-        Ok(msg) => Ok(Redirect::to(&format!("/{app}/{page_name}?notice={}#pgapp-c{anchor}", url_encode(&msg))).into_response()),
-        Err(e) => Ok(Redirect::to(&format!("/{app}/{page_name}?error={}#pgapp-c{anchor}", url_encode(&e.to_string()))).into_response()),
+        Ok(msg) => {
+            let anchor = if msg.is_empty() { component_anchor } else { "pgapp-notice".to_string() };
+            Ok(Redirect::to(&format!("/{app}/{page_name}?notice={}#{anchor}", url_encode(&msg))).into_response())
+        }
+        Err(e) => Ok(Redirect::to(&format!("/{app}/{page_name}?error={}#pgapp-notice", url_encode(&e.to_string()))).into_response()),
     }
 }
 

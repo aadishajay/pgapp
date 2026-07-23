@@ -1838,13 +1838,13 @@ pub fn page_layout(
     let mut full = String::new();
     if let Some(err) = error {
         full.push_str(&format!(
-            r#"<div class="pgapp-alert pgapp-alert-error"><strong>Error:</strong> {}</div>"#,
+            r#"<div class="pgapp-alert pgapp-alert-error" id="pgapp-notice"><strong>Error:</strong> {}</div>"#,
             escape(err)
         ));
     }
     if let Some(msg) = notice {
         full.push_str(&format!(
-            r#"<div class="pgapp-alert pgapp-alert-success">{}</div>"#,
+            r#"<div class="pgapp-alert pgapp-alert-success" id="pgapp-notice">{}</div>"#,
             escape(msg)
         ));
     }
