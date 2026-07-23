@@ -1286,9 +1286,29 @@ async fn chart_lib_js(State(state): State<Arc<AppState>>, Path((workspace, app))
 /// reference it with a plain relative `url("assets/pgapp-logo.svg")` —
 /// see `themes/postgres/theme.css` — without needing to know its own
 /// workspace/app slug.
+///
+/// The `codemirror-*`/`sql-formatter.min.js` entries are vendored
+/// third-party files (MIT-licensed, see `assets/VENDORED_LICENSES.md`)
+/// backing the App Builder's SQL Workshop editor — added here rather
+/// than to a generic directory listing since this handler has no
+/// subdirectory support (every path is flattened to its basename).
+const ASSET_ALLOWLIST: &[&str] = &[
+    "app.css",
+    "app.js",
+    "pgapp-logo.svg",
+    "codemirror.min.js",
+    "codemirror.min.css",
+    "codemirror-sql.min.js",
+    "codemirror-show-hint.min.js",
+    "codemirror-show-hint.min.css",
+    "codemirror-sql-hint.min.js",
+    "codemirror-matchbrackets.min.js",
+    "sql-formatter.min.js",
+];
+
 async fn asset(Path((_workspace, _app, path)): Path<(String, String, String)>) -> Response {
     let safe = path.rsplit('/').next().unwrap_or("");
-    if safe != "app.css" && safe != "app.js" && safe != "pgapp-logo.svg" {
+    if !ASSET_ALLOWLIST.contains(&safe) {
         return StatusCode::NOT_FOUND.into_response();
     }
     let full = format!("assets/{safe}");
