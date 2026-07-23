@@ -620,24 +620,26 @@ window.pgapp = (function () {
 
     form.addEventListener("submit", function (ev) {
       ev.preventDefault();
-      fetch(
-        "/" + encodeURIComponent(target.workspace) + "/" + encodeURIComponent(target.app) + "/admin/pages/add",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: "name=" + encodeURIComponent(nameInput.value),
-        }
-      )
-        .then(function (r) {
-          return r.json();
-        })
-        .then(function (data) {
-          if (data.ok) location.reload();
-          else pgappAlert("Couldn't add page: " + data.error);
-        })
-        .catch(function (e) {
-          pgappAlert("pgapp: " + e);
-        });
+      pgappGuardedClick(addBtn, function () {
+        return fetch(
+          "/" + encodeURIComponent(target.workspace) + "/" + encodeURIComponent(target.app) + "/admin/pages/add",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: "name=" + encodeURIComponent(nameInput.value),
+          }
+        )
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (data) {
+            if (data.ok) location.reload();
+            else pgappAlert("Couldn't add page: " + data.error);
+          })
+          .catch(function (e) {
+            pgappAlert("pgapp: " + e);
+          });
+      });
     });
   }
 
@@ -680,21 +682,23 @@ window.pgapp = (function () {
           ev.stopPropagation();
           pgappPrompt("New name for this page:", pageName).then(function (newName) {
             if (newName === null || newName === "" || newName === pageName) return;
-            fetch(pageUrl + "/rename", {
-              method: "POST",
-              headers: { "Content-Type": "application/x-www-form-urlencoded" },
-              body: "new_name=" + encodeURIComponent(newName),
-            })
-              .then(function (r) {
-                return r.json();
+            pgappGuardedClick(renameBtn, function () {
+              return fetch(pageUrl + "/rename", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: "new_name=" + encodeURIComponent(newName),
               })
-              .then(function (data) {
-                if (data.ok) location.reload();
-                else pgappAlert("Couldn't rename page: " + data.error);
-              })
-              .catch(function (e) {
-                pgappAlert("pgapp: " + e);
-              });
+                .then(function (r) {
+                  return r.json();
+                })
+                .then(function (data) {
+                  if (data.ok) location.reload();
+                  else pgappAlert("Couldn't rename page: " + data.error);
+                })
+                .catch(function (e) {
+                  pgappAlert("pgapp: " + e);
+                });
+            });
           });
         });
         actionsTd.appendChild(renameBtn);
@@ -710,17 +714,19 @@ window.pgapp = (function () {
           ev.stopPropagation();
           pgappConfirm('Delete page "' + pageName + '" and all its components? This can\'t be undone.').then(function (ok) {
             if (!ok) return;
-            fetch(pageUrl + "/delete", { method: "POST" })
-              .then(function (r) {
-                return r.json();
-              })
-              .then(function (data) {
-                if (data.ok) location.reload();
-                else pgappAlert("Couldn't delete page: " + data.error);
-              })
-              .catch(function (e) {
-                pgappAlert("pgapp: " + e);
-              });
+            pgappGuardedClick(btn, function () {
+              return fetch(pageUrl + "/delete", { method: "POST" })
+                .then(function (r) {
+                  return r.json();
+                })
+                .then(function (data) {
+                  if (data.ok) location.reload();
+                  else pgappAlert("Couldn't delete page: " + data.error);
+                })
+                .catch(function (e) {
+                  pgappAlert("pgapp: " + e);
+                });
+            });
           });
         });
         actionsTd.appendChild(btn);
@@ -1197,13 +1203,15 @@ window.pgapp = (function () {
         delBtn.addEventListener("click", function () {
           pgappConfirm('Delete entity "' + e.name + '"? Its physical table (if any) is left in place.').then(function (ok) {
             if (!ok) return;
-            fetch(pgappAdminAppUrl(target, "/entities/" + encodeURIComponent(e.name) + "/delete"), { method: "POST" })
-              .then(function (r) { return r.json(); })
-              .then(function (d) {
-                if (d.ok) location.reload();
-                else pgappAlert("Couldn't delete entity: " + d.error);
-              })
-              .catch(function (err) { pgappAlert("pgapp: " + err); });
+            pgappGuardedClick(delBtn, function () {
+              return fetch(pgappAdminAppUrl(target, "/entities/" + encodeURIComponent(e.name) + "/delete"), { method: "POST" })
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                  if (d.ok) location.reload();
+                  else pgappAlert("Couldn't delete entity: " + d.error);
+                })
+                .catch(function (err) { pgappAlert("pgapp: " + err); });
+            });
           });
         });
         btns.appendChild(editBtn);
@@ -1374,13 +1382,15 @@ window.pgapp = (function () {
           delBtn.addEventListener("click", function () {
             pgappConfirm('Delete query "' + q.name + '"?').then(function (ok) {
               if (!ok) return;
-              fetch(pgappAdminAppUrl(target, "/queries/" + encodeURIComponent(q.name) + "/delete"), { method: "POST" })
-                .then(function (r) { return r.json(); })
-                .then(function (d) {
-                  if (d.ok) location.reload();
-                  else pgappAlert("Couldn't delete query: " + d.error);
-                })
-                .catch(function (err) { pgappAlert("pgapp: " + err); });
+              pgappGuardedClick(delBtn, function () {
+                return fetch(pgappAdminAppUrl(target, "/queries/" + encodeURIComponent(q.name) + "/delete"), { method: "POST" })
+                  .then(function (r) { return r.json(); })
+                  .then(function (d) {
+                    if (d.ok) location.reload();
+                    else pgappAlert("Couldn't delete query: " + d.error);
+                  })
+                  .catch(function (err) { pgappAlert("pgapp: " + err); });
+              });
             });
           });
           btns.appendChild(editBtn);
@@ -1535,13 +1545,15 @@ window.pgapp = (function () {
           delBtn.addEventListener("click", function () {
             pgappConfirm('Delete nav item "' + item.label + '"?').then(function (ok) {
               if (!ok) return;
-              fetch(pgappAdminAppUrl(target, "/nav/" + idx + "/delete"), { method: "POST" })
-                .then(function (r) { return r.json(); })
-                .then(function (d) {
-                  if (d.ok) location.reload();
-                  else pgappAlert("Couldn't delete nav item: " + d.error);
-                })
-                .catch(function (err) { pgappAlert("pgapp: " + err); });
+              pgappGuardedClick(delBtn, function () {
+                return fetch(pgappAdminAppUrl(target, "/nav/" + idx + "/delete"), { method: "POST" })
+                  .then(function (r) { return r.json(); })
+                  .then(function (d) {
+                    if (d.ok) location.reload();
+                    else pgappAlert("Couldn't delete nav item: " + d.error);
+                  })
+                  .catch(function (err) { pgappAlert("pgapp: " + err); });
+              });
             });
           });
           btns.appendChild(delBtn);
@@ -1618,17 +1630,19 @@ window.pgapp = (function () {
             "&icons=" + encodeURIComponent(iconsSel.value) +
             "&chart_lib=" + encodeURIComponent(chartSel.value) +
             "&auth_enabled=" + (authCheck.checked ? "true" : "false");
-          fetch(pgappAdminAppUrl(target, "/settings"), {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: body,
-          })
-            .then(function (r) { return r.json(); })
-            .then(function (d) {
-              if (d.ok) location.reload();
-              else pgappAlert("Couldn't save settings: " + d.error);
+          pgappGuardedClick(saveBtn, function () {
+            return fetch(pgappAdminAppUrl(target, "/settings"), {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: body,
             })
-            .catch(function (e) { pgappAlert("pgapp: " + e); });
+              .then(function (r) { return r.json(); })
+              .then(function (d) {
+                if (d.ok) location.reload();
+                else pgappAlert("Couldn't save settings: " + d.error);
+              })
+              .catch(function (e) { pgappAlert("pgapp: " + e); });
+          });
         });
         slot.appendChild(saveBtn);
       })
@@ -1683,13 +1697,15 @@ window.pgapp = (function () {
                 'Delete secret "' + name + '"? Anything using {{secret.' + name + "}} will fail until it's replaced."
               ).then(function (ok) {
                 if (!ok) return;
-                fetch(pgappAdminAppUrl(target, "/secrets/" + encodeURIComponent(name) + "/delete"), { method: "POST" })
-                  .then(function (r) { return r.json(); })
-                  .then(function (d) {
-                    if (d.ok) render();
-                    else pgappAlert("Couldn't delete secret: " + d.error);
-                  })
-                  .catch(function (e) { pgappAlert("pgapp: " + e); });
+                pgappGuardedClick(delBtn, function () {
+                  return fetch(pgappAdminAppUrl(target, "/secrets/" + encodeURIComponent(name) + "/delete"), { method: "POST" })
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) {
+                      if (d.ok) render();
+                      else pgappAlert("Couldn't delete secret: " + d.error);
+                    })
+                    .catch(function (e) { pgappAlert("pgapp: " + e); });
+                });
               });
             });
             row.appendChild(delBtn);
@@ -1718,17 +1734,19 @@ window.pgapp = (function () {
               pgappAlert("A secret needs a name.");
               return;
             }
-            fetch(pgappAdminAppUrl(target, "/secrets/set"), {
-              method: "POST",
-              headers: { "Content-Type": "application/x-www-form-urlencoded" },
-              body: "name=" + encodeURIComponent(name) + "&value=" + encodeURIComponent(valueInput.value),
-            })
-              .then(function (r) { return r.json(); })
-              .then(function (d) {
-                if (d.ok) render();
-                else pgappAlert("Couldn't save secret: " + d.error);
+            pgappGuardedClick(addBtn, function () {
+              return fetch(pgappAdminAppUrl(target, "/secrets/set"), {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: "name=" + encodeURIComponent(name) + "&value=" + encodeURIComponent(valueInput.value),
               })
-              .catch(function (e) { pgappAlert("pgapp: " + e); });
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                  if (d.ok) render();
+                  else pgappAlert("Couldn't save secret: " + d.error);
+                })
+                .catch(function (e) { pgappAlert("pgapp: " + e); });
+            });
           });
           slot.appendChild(addBtn);
         })
@@ -1758,8 +1776,8 @@ window.pgapp = (function () {
     title.textContent = "Delete This App";
     slot.appendChild(title);
 
-    function post(mode, confirm) {
-      fetch(pgappAdminAppUrl(target, "/destroy"), {
+    function post(btn, mode, confirm) {
+      return fetch(pgappAdminAppUrl(target, "/destroy"), {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: "mode=" + mode + "&confirm=" + encodeURIComponent(confirm || ""),
@@ -1783,7 +1801,7 @@ window.pgapp = (function () {
     disableBtn.textContent = "Disable (soft)";
     disableBtn.addEventListener("click", function () {
       pgappConfirm("Disable this app? Its data is untouched; re-registering it later reactivates it.").then(function (ok) {
-        if (ok) post("soft", "");
+        if (ok) pgappGuardedClick(disableBtn, function () { return post(disableBtn, "soft", ""); });
       });
     });
     slot.appendChild(disableBtn);
@@ -1799,7 +1817,7 @@ window.pgapp = (function () {
           pgappAlert("That didn't match — nothing was deleted.");
           return;
         }
-        post("hard", typed);
+        pgappGuardedClick(deleteBtn, function () { return post(deleteBtn, "hard", typed); });
       });
     });
     slot.appendChild(deleteBtn);
@@ -1826,7 +1844,7 @@ window.pgapp = (function () {
     var url = pgappAdminAppUrl(target, "/destroy-workspace");
 
     function post(body) {
-      fetch(url, {
+      return fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: body,
@@ -1850,7 +1868,7 @@ window.pgapp = (function () {
     disableBtn.textContent = "Disable (soft)";
     disableBtn.addEventListener("click", function () {
       pgappConfirm("Disable this whole workspace? Its schema and data are untouched.").then(function (ok) {
-        if (ok) post("mode=soft");
+        if (ok) pgappGuardedClick(disableBtn, function () { return post("mode=soft"); });
       });
     });
     slot.appendChild(disableBtn);
@@ -1868,7 +1886,9 @@ window.pgapp = (function () {
         }
         pgappPrompt("Superuser-capable Postgres connection string (used once to drop the schema/role, never stored):", "").then(function (conn) {
           if (conn === null || !conn.trim()) return;
-          post("mode=hard&confirm=" + encodeURIComponent(typed) + "&grantor_conn=" + encodeURIComponent(conn.trim()));
+          pgappGuardedClick(deleteBtn, function () {
+            return post("mode=hard&confirm=" + encodeURIComponent(typed) + "&grantor_conn=" + encodeURIComponent(conn.trim()));
+          });
         });
       });
     });
@@ -1937,7 +1957,7 @@ window.pgapp = (function () {
   // POSTs the raw text to the target app's own
   // `/admin/pages/:page/components/add`.
   function submitNewComponent(target, sourceText) {
-    fetch(pgappAdminPagesUrl(target, "/components/add"), {
+    return fetch(pgappAdminPagesUrl(target, "/components/add"), {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: "source=" + encodeURIComponent(sourceText),
@@ -2061,7 +2081,9 @@ window.pgapp = (function () {
 
     rawForm.addEventListener("submit", function (ev) {
       ev.preventDefault();
-      submitNewComponent(target, sourceArea.value);
+      pgappGuardedClick(rawAddBtn, function () {
+        return submitNewComponent(target, sourceArea.value);
+      });
     });
   }
 
@@ -3628,17 +3650,19 @@ window.pgapp = (function () {
       deleteBtn.addEventListener("click", function () {
         pgappConfirm("Delete this component? This can't be undone.").then(function (ok) {
           if (!ok) return;
-          fetch(pgappAdminPagesUrl(target, "/components/" + encodeURIComponent(idx) + "/delete"), { method: "POST" })
-            .then(function (r) {
-              return r.json();
-            })
-            .then(function (data) {
-              if (data.ok) location.reload();
-              else pgappAlert("Couldn't delete component: " + data.error);
-            })
-            .catch(function (e) {
-              pgappAlert("pgapp: " + e);
-            });
+          pgappGuardedClick(deleteBtn, function () {
+            return fetch(pgappAdminPagesUrl(target, "/components/" + encodeURIComponent(idx) + "/delete"), { method: "POST" })
+              .then(function (r) {
+                return r.json();
+              })
+              .then(function (data) {
+                if (data.ok) location.reload();
+                else pgappAlert("Couldn't delete component: " + data.error);
+              })
+              .catch(function (e) {
+                pgappAlert("pgapp: " + e);
+              });
+          });
         });
       });
       actionsTd.appendChild(deleteBtn);
@@ -3739,7 +3763,9 @@ window.pgapp = (function () {
               pgappAlert("Couldn't build markup from the form: " + e);
               return;
             }
-            postComponentEdit(target, idx, "source=" + encodeURIComponent(text));
+            pgappGuardedClick(saveBtn, function () {
+              return postComponentEdit(target, idx, "source=" + encodeURIComponent(text));
+            });
           });
           actions.appendChild(saveBtn);
         }
@@ -3966,7 +3992,7 @@ window.pgapp = (function () {
   }
 
   function postComponentEdit(target, idx, body) {
-    fetch(pgappAdminPagesUrl(target, "/components/" + encodeURIComponent(idx) + "/edit"), {
+    return fetch(pgappAdminPagesUrl(target, "/components/" + encodeURIComponent(idx) + "/edit"), {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body,
@@ -4730,6 +4756,74 @@ window.pgapp = (function () {
       textarea.focus();
     });
   }
+
+  // Disables `btn` and swaps its label to a busy one for the duration of
+  // `asyncFn()` (which must return a Promise) — every fetch-driven Save/
+  // Add/Delete button in the App Builder that stays on-screen while its
+  // own request is in flight uses this, so a second click while one is
+  // already running is impossible instead of silently queuing/racing a
+  // duplicate request. Restores the button's original state in a
+  // `finally()` regardless of success/failure, and safely no-ops a
+  // second call while `btn` is already disabled.
+  function pgappGuardedClick(btn, asyncFn) {
+    if (btn.disabled) return;
+    // Icon buttons (✎/✕) are too small for a busy label — disabling
+    // alone (plus the themes' own `:disabled` opacity/cursor rule) is
+    // the whole cue there; only a full-text button gets its label
+    // swapped too.
+    var isIcon = btn.classList.contains("pgapp-icon-btn");
+    var original = btn.textContent;
+    var busyText = (original || "").toLowerCase().indexOf("delete") !== -1 ? "Deleting…" : "Saving…";
+    btn.disabled = true;
+    if (!isIcon) btn.textContent = busyText;
+    function restore() {
+      btn.disabled = false;
+      if (!isIcon) btn.textContent = original;
+    }
+    var result;
+    try {
+      result = asyncFn();
+    } catch (e) {
+      restore();
+      throw e;
+    }
+    if (result && typeof result.finally === "function") {
+      result.finally(restore);
+    } else {
+      restore();
+    }
+    return result;
+  }
+
+  // Site-wide (every pgapp app, not just the App Builder): the instant a
+  // real `<form>` submits, disable its submit button — covers every
+  // Form/EditableTable save, action component, and login/setup form
+  // without touching each component's own render code. Runs *after* the
+  // form's own listeners (bubble phase, so `bindConfirmForms`'s
+  // preventDefault on the *first* submit — before the user confirms —
+  // is already reflected in `ev.defaultPrevented` by the time this
+  // fires); the button is disabled only once the submit is actually
+  // going through, so a disabled button on an already-submitting form
+  // loses no data — the browser already queued the POST/navigation
+  // before this listener even runs.
+  document.addEventListener(
+    "submit",
+    function (ev) {
+      if (ev.defaultPrevented) return;
+      var form = ev.target;
+      var btn = form.querySelector('button[type="submit"], input[type="submit"]');
+      if (!btn || btn.disabled) return;
+      if (btn.tagName === "BUTTON") {
+        btn.dataset.pgappOrigText = btn.textContent;
+        btn.textContent = (btn.textContent || "").toLowerCase().indexOf("delete") !== -1 ? "Deleting…" : "Saving…";
+      } else {
+        btn.dataset.pgappOrigText = btn.value;
+        btn.value = "Saving…";
+      }
+      btn.disabled = true;
+    },
+    false
+  );
 
   // Delete/destructive forms carry `data-pgapp-confirm="<message>"`
   // instead of a native onsubmit="return confirm(...)" — this intercepts

@@ -323,6 +323,10 @@ body {
 .pgapp-btn-secondary:hover {
   opacity: 0.9;
 }
+.pgapp-btn:disabled, .pgapp-icon-btn:disabled, input[type="submit"]:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 
 .pgapp-inline-form {
   display: inline;

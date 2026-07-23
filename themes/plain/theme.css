@@ -86,6 +86,7 @@ body {
 .pgapp-btn-primary { background: #eee; border: 1px solid #999; }
 .pgapp-btn-destructive { background: #fee; border: 1px solid #a00; color: #a00; }
 .pgapp-btn-secondary { background: #f5f5f5; border: 1px solid #ccc; }
+.pgapp-btn:disabled, .pgapp-icon-btn:disabled, input[type="submit"]:disabled { opacity: 0.6; cursor: not-allowed; }
 
 /* Card panels the App Builder's own JS builds into `text` placeholder
    slots — the preview link, the persistent section subnav, and the
