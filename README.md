@@ -114,6 +114,30 @@ a live property panel on the right, changes saved straight to the
 More in [`marketing/`](./marketing/), including a full
 [feature-by-feature tutorial](./marketing/index.html).
 
+**See it in action:**
+
+<table>
+<tr>
+<td width="50%">
+
+**Creating a new app** — pick a workspace and a theme, and it's live
+at its own URL. No restart, no config file to hand-edit.
+
+<img src="marketing/shots/2026-appbuilder-newapp.gif" alt="Creating a new app in the pgapp App Builder: name it, pick a workspace and theme, and it's live" width="100%">
+
+</td>
+<td width="50%">
+
+**Editing raw markup in the file editor** — a VS-Code-style file tree
+for directory-based apps, syntax highlighting, saved straight back to
+disk.
+
+<img src="marketing/shots/2026-appbuilder-editor.gif" alt="Editing a multi-file pgapp app's markup in the built-in file tree editor" width="100%">
+
+</td>
+</tr>
+</table>
+
 ## Quick start
 
 **Prerequisites:** a reachable Postgres server and Rust installed.
