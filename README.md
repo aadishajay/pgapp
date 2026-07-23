@@ -4,11 +4,13 @@
 
 # pgapp
 
-### Postgres is the backend. This is everything else.
+### Your whole app is one text file. Postgres is the backend.
 
-**Describe a multi-user web app — reports, forms, charts, auth, and a
-point-and-click builder — in one plain-text file. A single Rust binary
-reads it and talks straight to Postgres.**
+**One file. One binary. Your database.**
+
+Reports, forms, charts, auth, and a point-and-click builder — described in
+plain text. A single Rust binary reads it, keeps the app's definition in
+Postgres, and serves the whole thing straight from the database.
 
 No ORM. No API layer. No JS build step. No second system to babysit.
 
