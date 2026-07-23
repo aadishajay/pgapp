@@ -30,6 +30,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Node.js (for JS syntax checks only — no build step)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Check JS syntax (src/runtime.js + chart-libs/*/chart.js)
+        # runtime.js is include_str!'d straight into the binary — cargo
+        # build happily compiles a syntax error in it, since it's just a
+        # string literal as far as Rust is concerned. node --check is a
+        # parse-only pass (doesn't execute the file), so this catches a
+        # typo before it ships, without needing a browser or a real JS
+        # test runner. Not run against assets/*.js — those are vendored,
+        # already-minified third-party files, never hand-edited here.
+        run: |
+          for f in src/runtime.js chart-libs/*/chart.js; do
+            echo "checking $f"
+            node --check "$f"
+          done
+
       - name: Install Rust (stable, with clippy)
         uses: dtolnay/rust-toolchain@stable
         with:
