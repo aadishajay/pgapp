@@ -1895,6 +1895,481 @@ window.pgapp = (function () {
     slot.appendChild(deleteBtn);
   }
 
+  // The "SQL Workshop" link on WorkspaceDetail — a `text ... attrs (id:
+  // "pgapp-sql-workshop-link-slot")` placeholder, filled with a plain
+  // link carrying this page's own ?target_workspace=&target_app= onward
+  // to SqlWorkshop. A bare `link` component in markup can't carry query
+  // params (only a report's `link:` column property can — see
+  // `parse_page_target`), so this is built client-side the same way
+  // every other cross-page admin link on this page already is.
+  function bindSqlWorkshopLink() {
+    var slot = document.getElementById("pgapp-sql-workshop-link-slot");
+    if (!slot) return;
+    var target = pgappEditTarget();
+    if (!pgappEditTargetValid2(target)) return;
+    slot.textContent = "";
+    var a = document.createElement("a");
+    a.className = "pgapp-btn pgapp-btn-secondary";
+    a.href = "SqlWorkshop?target_workspace=" + encodeURIComponent(target.workspace) + "&target_app=" + encodeURIComponent(target.app);
+    a.textContent = "SQL Workshop →";
+    slot.appendChild(a);
+  }
+
+  // ---- App Builder: SQL Workshop (SQL Commands + Object Browser) ----
+  //
+  // An APEX SQL Workshop equivalent: ad hoc SQL against a workspace's own
+  // schema (SQL Commands) plus a read-only table browser (Object
+  // Browser), both against the `/:workspace/:app/admin/sql/*` routes.
+  // The editor is vendored CodeMirror 5, not Monaco (~30MB with an AMD
+  // loader and many chunk files — see assets/VENDORED_LICENSES.md),
+  // loaded lazily only on this one page, from this app's own `assets/`
+  // directory — resolved relative to the current page's own URL so it
+  // works whatever workspace/app slug the App Builder happens to be
+  // deployed under, rather than hardcoding one.
+
+  function pgappSqlWorkshopAssetBase() {
+    return location.pathname.replace(/[^/]*$/, "") + "assets/";
+  }
+
+  function pgappLoadScript(src) {
+    return new Promise(function (resolve, reject) {
+      var s = document.createElement("script");
+      s.src = src;
+      s.onload = function () {
+        resolve();
+      };
+      s.onerror = function () {
+        reject(new Error("failed to load " + src));
+      };
+      document.head.appendChild(s);
+    });
+  }
+
+  function pgappLoadStylesheet(href) {
+    var l = document.createElement("link");
+    l.rel = "stylesheet";
+    l.href = href;
+    document.head.appendChild(l);
+  }
+
+  var pgappSqlWorkshopLibsPromise = null;
+  function pgappLoadSqlWorkshopLibs() {
+    if (pgappSqlWorkshopLibsPromise) return pgappSqlWorkshopLibsPromise;
+    var base = pgappSqlWorkshopAssetBase();
+    pgappLoadStylesheet(base + "codemirror.min.css");
+    pgappLoadStylesheet(base + "codemirror-show-hint.min.css");
+    pgappSqlWorkshopLibsPromise = pgappLoadScript(base + "codemirror.min.js")
+      .then(function () {
+        return pgappLoadScript(base + "codemirror-sql.min.js");
+      })
+      .then(function () {
+        return pgappLoadScript(base + "codemirror-matchbrackets.min.js");
+      })
+      .then(function () {
+        return pgappLoadScript(base + "codemirror-show-hint.min.js");
+      })
+      .then(function () {
+        return pgappLoadScript(base + "codemirror-sql-hint.min.js");
+      })
+      .then(function () {
+        return pgappLoadScript(base + "sql-formatter.min.js");
+      });
+    return pgappSqlWorkshopLibsPromise;
+  }
+
+  // A plain "disable + busy label" click guard, same spirit as
+  // `pgappGuardedClick` but for the Run/Format buttons here — those
+  // aren't Save/Delete actions, so `pgappGuardedClick`'s own busy-label
+  // heuristic ("Deleting…" vs "Saving…") doesn't fit.
+  function pgappSqlRunGuard(btn, asyncFn) {
+    if (btn.disabled) return;
+    var original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Running…";
+    function restore() {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+    var result = asyncFn();
+    if (result && typeof result.finally === "function") {
+      result.finally(restore);
+    } else {
+      restore();
+    }
+    return result;
+  }
+
+  function bindSqlWorkshop() {
+    var browserSlot = document.getElementById("pgapp-sql-object-browser-slot");
+    var commandsSlot = document.getElementById("pgapp-sql-commands-slot");
+    if (!browserSlot || !commandsSlot) return;
+    var target = pgappEditTarget();
+    if (!pgappEditTargetValid2(target)) return;
+
+    // Table name -> [column name, ...], filled in lazily as the Object
+    // Browser is used to inspect a table — feeds CodeMirror's SQL-hint
+    // autocomplete. A table never browsed this session just won't have
+    // column-level hints yet; its name alone still autocompletes.
+    var schemaHints = {};
+
+    function apiUrl(suffix) {
+      return pgappAdminAppUrl(target, suffix);
+    }
+
+    function renderRowsTable(columns, rows) {
+      var wrap = document.createElement("div");
+      wrap.className = "pgapp-sql-results-wrap";
+      var table = document.createElement("table");
+      table.className = "pgapp-sql-results-table";
+      var thead = document.createElement("thead");
+      var headRow = document.createElement("tr");
+      columns.forEach(function (c) {
+        var th = document.createElement("th");
+        th.textContent = c;
+        headRow.appendChild(th);
+      });
+      thead.appendChild(headRow);
+      table.appendChild(thead);
+      var tbody = document.createElement("tbody");
+      rows.forEach(function (row) {
+        var tr = document.createElement("tr");
+        row.forEach(function (val) {
+          var td = document.createElement("td");
+          td.textContent = val === null || val === undefined ? "∅" : val;
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+      return wrap;
+    }
+
+    // ---- Object Browser (left panel) ----
+    browserSlot.textContent = "";
+    browserSlot.classList.add("pgapp-sql-object-browser");
+    var browserTitle = document.createElement("div");
+    browserTitle.className = "pgapp-panel-card-title";
+    browserTitle.textContent = "Object Browser";
+    browserSlot.appendChild(browserTitle);
+
+    var searchInput = document.createElement("input");
+    searchInput.className = "pgapp-input pgapp-sql-object-search";
+    searchInput.placeholder = "Filter tables…";
+    browserSlot.appendChild(searchInput);
+
+    var tableList = document.createElement("ul");
+    tableList.className = "pgapp-sql-object-list";
+    browserSlot.appendChild(tableList);
+
+    var detailPanel = document.createElement("div");
+    detailPanel.className = "pgapp-sql-object-detail";
+    browserSlot.appendChild(detailPanel);
+
+    var allTables = [];
+
+    function renderTableList(filter) {
+      tableList.textContent = "";
+      var f = (filter || "").toLowerCase();
+      allTables
+        .filter(function (t) {
+          return t.toLowerCase().indexOf(f) !== -1;
+        })
+        .forEach(function (name) {
+          var li = document.createElement("li");
+          li.textContent = name;
+          li.className = "pgapp-sql-object-item";
+          li.addEventListener("click", function () {
+            var items = tableList.querySelectorAll(".pgapp-sql-object-item");
+            for (var i = 0; i < items.length; i++) items[i].classList.remove("pgapp-sql-object-item-active");
+            li.classList.add("pgapp-sql-object-item-active");
+            openTable(name);
+          });
+          tableList.appendChild(li);
+        });
+    }
+
+    searchInput.addEventListener("input", function () {
+      renderTableList(searchInput.value);
+    });
+
+    fetch(apiUrl("/tables-list"))
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        if (!data.ok) {
+          var err = document.createElement("li");
+          err.textContent = "Couldn't load tables: " + data.error;
+          tableList.appendChild(err);
+          return;
+        }
+        allTables = data.tables;
+        renderTableList("");
+      })
+      .catch(function (e) {
+        tableList.textContent = "Couldn't load tables: " + e;
+      });
+
+    function openTable(name) {
+      detailPanel.textContent = "Loading " + name + "…";
+      fetch(apiUrl("/sql/table-detail?table=" + encodeURIComponent(name)))
+        .then(function (r) {
+          return r.json();
+        })
+        .then(function (detail) {
+          detailPanel.textContent = "";
+          if (!detail.ok) {
+            detailPanel.textContent = "Couldn't load '" + name + "': " + detail.error;
+            return;
+          }
+          schemaHints[name] = detail.columns.map(function (c) {
+            return c.name;
+          });
+
+          var title = document.createElement("div");
+          title.className = "pgapp-panel-card-title";
+          title.textContent = name;
+          detailPanel.appendChild(title);
+
+          var tabs = document.createElement("div");
+          tabs.className = "pgapp-sql-object-tabs";
+          var tabNames = ["Columns", "Data", "Indexes", "Constraints", "DDL"];
+          var panes = {};
+          tabNames.forEach(function (tabName) {
+            var btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "pgapp-sql-object-tab";
+            btn.textContent = tabName;
+            btn.addEventListener("click", function () {
+              tabs.querySelectorAll(".pgapp-sql-object-tab").forEach(function (b) {
+                b.classList.remove("pgapp-sql-object-tab-active");
+              });
+              btn.classList.add("pgapp-sql-object-tab-active");
+              Object.keys(panes).forEach(function (k) {
+                panes[k].style.display = k === tabName ? "" : "none";
+              });
+            });
+            tabs.appendChild(btn);
+          });
+          detailPanel.appendChild(tabs);
+
+          var columnsPane = document.createElement("div");
+          columnsPane.appendChild(
+            renderRowsTable(
+              ["name", "type", "not_null", "default", "is_primary_key"],
+              detail.columns.map(function (c) {
+                return [c.name, c.type, c.not_null ? "yes" : "", c.default || "", c.is_primary_key ? "yes" : ""];
+              })
+            )
+          );
+          panes.Columns = columnsPane;
+          detailPanel.appendChild(columnsPane);
+
+          var dataPane = document.createElement("div");
+          var dataPage = 1;
+          function loadDataPage() {
+            dataPane.textContent = "Loading…";
+            fetch(apiUrl("/sql/table-data?table=" + encodeURIComponent(name) + "&page=" + dataPage))
+              .then(function (r) {
+                return r.json();
+              })
+              .then(function (d) {
+                dataPane.textContent = "";
+                if (!d.ok) {
+                  dataPane.textContent = "Couldn't load data: " + d.error;
+                  return;
+                }
+                if (d.rows.length === 0) {
+                  dataPane.textContent = "No rows.";
+                } else {
+                  dataPane.appendChild(renderRowsTable(d.columns, d.rows));
+                }
+                var pager = document.createElement("div");
+                pager.className = "pgapp-sql-data-pager";
+                var prevBtn = document.createElement("button");
+                prevBtn.type = "button";
+                prevBtn.className = "pgapp-btn pgapp-btn-secondary";
+                prevBtn.textContent = "← Prev";
+                prevBtn.disabled = dataPage <= 1;
+                prevBtn.addEventListener("click", function () {
+                  dataPage -= 1;
+                  loadDataPage();
+                });
+                var nextBtn = document.createElement("button");
+                nextBtn.type = "button";
+                nextBtn.className = "pgapp-btn pgapp-btn-secondary";
+                nextBtn.textContent = "Next →";
+                nextBtn.disabled = !d.has_next;
+                nextBtn.addEventListener("click", function () {
+                  dataPage += 1;
+                  loadDataPage();
+                });
+                pager.appendChild(prevBtn);
+                pager.appendChild(nextBtn);
+                dataPane.appendChild(pager);
+              })
+              .catch(function (e) {
+                dataPane.textContent = "Couldn't load data: " + e;
+              });
+          }
+          panes.Data = dataPane;
+          detailPanel.appendChild(dataPane);
+          loadDataPage();
+
+          var indexesPane = document.createElement("div");
+          indexesPane.appendChild(
+            renderRowsTable(
+              ["name", "definition"],
+              detail.indexes.map(function (i) {
+                return [i.name, i.definition];
+              })
+            )
+          );
+          panes.Indexes = indexesPane;
+          detailPanel.appendChild(indexesPane);
+
+          var constraintsPane = document.createElement("div");
+          constraintsPane.appendChild(
+            renderRowsTable(
+              ["name", "definition"],
+              detail.constraints.map(function (c) {
+                return [c.name, c.definition];
+              })
+            )
+          );
+          panes.Constraints = constraintsPane;
+          detailPanel.appendChild(constraintsPane);
+
+          var ddlPane = document.createElement("pre");
+          ddlPane.className = "pgapp-sql-ddl";
+          ddlPane.textContent = detail.ddl;
+          panes.DDL = ddlPane;
+          detailPanel.appendChild(ddlPane);
+
+          tabs.querySelector(".pgapp-sql-object-tab").classList.add("pgapp-sql-object-tab-active");
+          Object.keys(panes).forEach(function (k) {
+            panes[k].style.display = k === "Columns" ? "" : "none";
+          });
+        })
+        .catch(function (e) {
+          detailPanel.textContent = "Couldn't load '" + name + "': " + e;
+        });
+    }
+
+    // ---- SQL Commands (right panel) ----
+    commandsSlot.textContent = "";
+    commandsSlot.classList.add("pgapp-sql-commands");
+    var commandsTitle = document.createElement("div");
+    commandsTitle.className = "pgapp-panel-card-title";
+    commandsTitle.textContent = "SQL Commands";
+    commandsSlot.appendChild(commandsTitle);
+
+    var toolbar = document.createElement("div");
+    toolbar.className = "pgapp-sql-toolbar";
+    var runBtn = document.createElement("button");
+    runBtn.type = "button";
+    runBtn.className = "pgapp-btn pgapp-btn-primary";
+    runBtn.textContent = "Run";
+    runBtn.disabled = true;
+    runBtn.title = "Run (Ctrl/Cmd+Enter)";
+    var formatBtn = document.createElement("button");
+    formatBtn.type = "button";
+    formatBtn.className = "pgapp-btn pgapp-btn-secondary";
+    formatBtn.textContent = "Format";
+    formatBtn.disabled = true;
+    toolbar.appendChild(runBtn);
+    toolbar.appendChild(formatBtn);
+    commandsSlot.appendChild(toolbar);
+
+    var editorHost = document.createElement("div");
+    editorHost.className = "pgapp-sql-editor";
+    var textarea = document.createElement("textarea");
+    textarea.value = "select * from ";
+    editorHost.appendChild(textarea);
+    commandsSlot.appendChild(editorHost);
+
+    var resultsHost = document.createElement("div");
+    resultsHost.className = "pgapp-sql-results";
+    commandsSlot.appendChild(resultsHost);
+
+    var cm = null;
+
+    function showError(message) {
+      resultsHost.textContent = "";
+      var err = document.createElement("div");
+      err.className = "pgapp-sql-error";
+      err.textContent = message;
+      resultsHost.appendChild(err);
+    }
+
+    function runSql() {
+      var sql = cm ? cm.getValue() : textarea.value;
+      pgappSqlRunGuard(runBtn, function () {
+        return fetch(apiUrl("/sql/execute"), {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: "sql=" + encodeURIComponent(sql),
+        })
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (d) {
+            if (!d.ok) {
+              showError(d.error);
+              return;
+            }
+            resultsHost.textContent = "";
+            if (d.kind === "rows") {
+              if (d.rows.length === 0) {
+                resultsHost.textContent = "No rows.";
+              } else {
+                resultsHost.appendChild(renderRowsTable(d.columns, d.rows));
+              }
+            } else {
+              resultsHost.textContent = d.rows_affected + " row(s) affected.";
+            }
+          })
+          .catch(function (e) {
+            showError(String(e));
+          });
+      });
+    }
+
+    runBtn.addEventListener("click", runSql);
+
+    formatBtn.addEventListener("click", function () {
+      if (!cm || !window.sqlFormatter) return;
+      var formatted = window.sqlFormatter.format(cm.getValue(), { language: "postgresql" });
+      cm.setValue(formatted);
+    });
+
+    pgappLoadSqlWorkshopLibs()
+      .then(function () {
+        cm = window.CodeMirror.fromTextArea(textarea, {
+          mode: "text/x-pgsql",
+          lineNumbers: true,
+          matchBrackets: true,
+          extraKeys: {
+            "Ctrl-Enter": function () {
+              runSql();
+            },
+            "Cmd-Enter": function () {
+              runSql();
+            },
+            "Ctrl-Space": function (instance) {
+              instance.showHint({ hint: window.CodeMirror.hint.sql, tables: schemaHints });
+            },
+          },
+        });
+        runBtn.disabled = false;
+        formatBtn.disabled = false;
+      })
+      .catch(function (e) {
+        showError("Couldn't load the SQL editor: " + e);
+      });
+  }
+
   // The App Builder's "New App" processing: on every load of the
   // NewApp page (identified by the `pgapp-new-app-requests` id on its
   // history report — see examples/app_builder.pgapp), asks the server
@@ -4870,6 +5345,8 @@ window.pgapp = (function () {
     document.addEventListener("DOMContentLoaded", bindSecretsPanel);
     document.addEventListener("DOMContentLoaded", bindDestroyAppPanel);
     document.addEventListener("DOMContentLoaded", bindDestroyWorkspacePanel);
+    document.addEventListener("DOMContentLoaded", bindSqlWorkshopLink);
+    document.addEventListener("DOMContentLoaded", bindSqlWorkshop);
     document.addEventListener("DOMContentLoaded", wireFileBrowseLinks);
     document.addEventListener("DOMContentLoaded", bindCodeEditors);
     document.addEventListener("DOMContentLoaded", bindFileTree);
@@ -4894,6 +5371,8 @@ window.pgapp = (function () {
     bindSecretsPanel();
     bindDestroyAppPanel();
     bindDestroyWorkspacePanel();
+    bindSqlWorkshopLink();
+    bindSqlWorkshop();
     wireFileBrowseLinks();
     bindCodeEditors();
     bindFileTree();
