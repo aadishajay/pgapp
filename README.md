@@ -13,6 +13,7 @@ Postgres. No ORM. No separate API service. No JS build step.
 
 [![Rust](https://img.shields.io/badge/built%20with-Rust-orange?logo=rust)](https://www.rust-lang.org/)
 [![Postgres](https://img.shields.io/badge/database-PostgreSQL-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/aadishajay/pgapp?style=social)](https://github.com/aadishajay/pgapp/stargazers)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](./docs/roadmap.md)
 
@@ -28,9 +29,8 @@ Postgres. No ORM. No separate API service. No JS build step.
 ---
 
 > **Project status:** pre-1.0, actively developed, no stability
-> guarantees yet. No `LICENSE` file is in the repo as of this writing
-> — see [Roadmap](./docs/roadmap.md) before depending on this in
-> production.
+> guarantees yet — see [Roadmap](./docs/roadmap.md) before depending on
+> this in production.
 
 ## A full app in 30 lines
 
@@ -366,8 +366,4 @@ a PR and it'll get a response.
 
 ## License
 
-**No license file has been added to this repository yet.** Until one
-is, treat the code as all-rights-reserved for anything beyond reading
-it. Adding a permissive license (MIT is the common default for the
-Rust ecosystem) is tracked as an open item — see
-[docs/roadmap.md](./docs/roadmap.md).
+[MIT](./LICENSE).
