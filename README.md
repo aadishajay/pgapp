@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/pgapp-logo.svg" alt="pgapp logo: a blue elephant holding a pencil" width="120">
+<img src="assets/pgapp-logo.svg" alt="pgapp logo: a blue elephant holding a pencil" width="300">
 
 # pgapp
 
