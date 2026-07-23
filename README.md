@@ -26,9 +26,9 @@ No ORM. No API layer. No JS build step. No second system to babysit.
 
 <br>
 
-<img src="marketing/shots/2026-appbuilder-newapp.gif" alt="Creating a new app in the pgapp App Builder: name it, pick a workspace and theme, and it's instantly live at its own URL" width="90%">
+<img src="marketing/shots/pgapp-run-hero.gif" alt="A terminal running 'pgapp run todo.pgapp --workspace demo', the server printing the app's URL, and the live app appearing in the browser" width="90%">
 
-<sub>Name an app, pick a workspace and a theme — it's live at its own URL. No restart, no config file to hand-edit.</sub>
+<sub><code>pgapp run todo.pgapp</code> — the file syncs into Postgres and the app is live at its own URL. No restart, no API layer, no build step.</sub>
 
 </div>
 
@@ -305,6 +305,12 @@ theme editor, and live app/workspace scaffolding or teardown.
 The twist: **the App Builder is itself just a pgapp app** — not a bespoke
 panel bolted onto the framework — with one deliberate exception, a
 hardcoded guard that refuses to let it edit itself.
+
+<div align="center">
+<img src="marketing/shots/2026-appbuilder-newapp.gif" alt="Creating a new app in the pgapp App Builder: name it, pick a workspace and theme, and it's instantly live at its own URL" width="80%">
+<br>
+<sub>Scaffolding a brand-new app in the builder — name it, pick a workspace and theme, and it's live. Every click is a text splice into a real <code>.pgapp</code> file.</sub>
+</div>
 
 Full walkthrough: [App Builder](./docs/app-builder.md).
 
