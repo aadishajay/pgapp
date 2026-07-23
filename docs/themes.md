@@ -7,6 +7,7 @@
 - [Shipped themes](#shipped-themes)
 - [Header icon / assets](#header-icon--assets)
 - [Adding a theme](#adding-a-theme)
+- [Theme editor (App Builder)](#theme-editor-app-builder)
 - [Mobile](#mobile)
 
 ## The contract
@@ -66,7 +67,34 @@ another filename there (and its content-type) to serve more.
 ## Adding a theme
 
 `themes/<name>/theme.css` + `theme: <name>` in the app's markup — no
-Rust changes.
+Rust changes. Every theme picker (`pgapp new`'s CLI prompt, the App
+Builder's AppSettings dropdown) is generated from `theme::list_themes()`,
+a live scan of `themes/*/theme.css` — a hand-dropped directory shows up
+everywhere the moment it exists, no separate registration step.
+
+## Theme editor (App Builder)
+
+The App Builder's "Themes" page (its own nav item, not scoped to any
+workspace/app — see the page's own doc comment in
+`examples/app_builder.pgapp`) lists every theme on disk and lets you:
+
+- **Clone** an existing theme into a new one under a new name — copies
+  its `theme.css` and writes a fresh `theme.json` labeled after the new
+  name, so the clone doesn't confusingly inherit the source's own label.
+- **Edit** the clone's `theme.css` in a plain textarea and **Save** —
+  takes effect immediately for every app already using that theme, since
+  the route serving `theme.css` (`server::theme_css`) reads the file
+  straight off disk on every request; there's no cache to invalidate and
+  no reload step, unlike editing an app's own markup.
+
+Backed by four Builder-only admin routes (`GET /admin/themes-list`,
+`GET`/`POST /admin/themes/:name/css`, `POST /admin/themes/clone`),
+gated by `theme_admin_guard` — the inverse of `admin_edit_guard`: it
+*requires* the request be reaching the App Builder's own fixed
+workspace/app rather than refusing it, since theme files aren't scoped
+to any one app the way markup edits are. No database table backs any
+of this — a theme is, and stays, nothing more than a directory under
+`themes/`, the same as before this page existed.
 
 ## Mobile
 

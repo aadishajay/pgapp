@@ -8,6 +8,7 @@
 - [Editing an app's data model, queries, navigation, and settings](#editing-an-apps-data-model-queries-navigation-and-settings)
 - [Deleting an app or its whole workspace](#deleting-an-app-or-its-whole-workspace)
 - [SQL Workshop](#sql-workshop)
+- [Themes](#themes)
 - [How it's built](#how-its-built)
 
 `examples/app_builder.pgapp` is a pgapp app, like any other, that lists
@@ -357,6 +358,18 @@ panel runs against.
   constraint metadata for a quick copy-paste reference — it is
   *not* pg_dump-exact (no partitioning, no tablespace, no storage
   parameters, no comments).
+
+## Themes
+
+The Builder's own "Themes" nav item — unlike every page above, not
+scoped to any workspace/app at all, since themes are shared files
+under `themes/` used by every app. Lists every theme on disk, lets you
+**Clone** an existing one under a new name, and **Save** hand-edits to
+the clone's `theme.css` — takes effect immediately (no reload step,
+since the CSS route already reads straight off disk on every request).
+See [Theme editor](./themes.md#theme-editor-app-builder) for the full
+writeup, including the four backing admin routes and the
+`theme_admin_guard` that scopes them to the Builder itself.
 
 ## How it's built
 
