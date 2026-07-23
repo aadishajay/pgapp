@@ -9,25 +9,28 @@
 # dynamic-action ops/requires/attrs, as typed fields and add/remove/
 # reorder row lists, not a raw markup blob — see runtime.js's
 # `pgappStructuredEditor`), add/rename/delete whole pages, jump to a
-# live preview, scaffold brand-new apps with zero restart, stand up a
-# brand-new workspace from scratch (either a fresh schema+role or an
-# existing schema handed a grant via a one-time superuser connection
-# string — see actions/create_workspace.rs for why that's two action
-# modules, not an entity Form), and — via each app's own
-# "SharedComponents"/"AppSettings"/"Utilities" pages, APEX-style — edit
-# its data model (add/edit/delete entities and their fields), named
-# queries, and navigation menu (SharedComponents); theme/icons/
-# chart_lib/auth-on-off settings and secrets (AppSettings); and delete
-# the app or its whole workspace outright, soft-disable or a real hard
-# delete (Utilities) — an Oracle-APEX-App-Builder-flavored editor
-# covering entities/pages/nav/settings/teardown alike, without hand-
-# editing markup over SSH. A persistent subnav (see runtime.js's
-# `bindEditorSubnav`) ties Pages/EditPage/SharedComponents/AppSettings/
-# Utilities together so switching between them never means backtracking
-# to the Pages screen first. What's still Advanced-editor-only:
-# `header`/`footer` chrome, `auth_scheme` role groups, and a directory-
-# based (multi-file) app's structure — genuinely rarer edits that don't
-# earn a dedicated control yet.
+# live preview, scaffold brand-new apps ("+ New App" on the Apps page,
+# zero restart) and brand-new workspaces ("+ New Workspace" on the
+# Workspaces page — either a fresh schema+role or an existing schema
+# handed a grant via a one-time superuser connection string, see
+# actions/create_workspace.rs for why that's two action modules, not an
+# entity Form), and — via each app's own "SharedComponents"/
+# "AppSettings"/"Utilities" pages, APEX-style — edit its data model
+# (add/edit/delete entities and their fields), named queries, and
+# navigation menu (SharedComponents); theme/icons/chart_lib/auth-on-off
+# settings and secrets (AppSettings); and delete just that one app,
+# soft-disable or a real hard delete (Utilities) — an Oracle-APEX-App-
+# Builder-flavored editor covering entities/pages/nav/settings/teardown
+# alike, without hand-editing markup over SSH. Deleting a whole
+# *workspace* instead lives on that workspace's own "WorkspaceDetail"
+# page (reached from Workspaces), not on any individual app's Utilities
+# page, since it isn't really an app-scoped action. A persistent subnav
+# (see runtime.js's `bindEditorSubnav`) ties Pages/EditPage/
+# SharedComponents/AppSettings/Utilities together so switching between
+# them never means backtracking to the Pages screen first. What's still
+# Advanced-editor-only: `header`/`footer` chrome, `auth_scheme` role
+# groups, and a directory-based (multi-file) app's structure — genuinely
+# rarer edits that don't earn a dedicated control yet.
 #
 # Every entity here reading pgapp_control.*/pgapp_meta.* is
 # query-backed — no core framework changes were needed for that read
@@ -63,8 +66,7 @@ app "App Builder" {
 
   nav {
     item "Apps" -> page Apps
-    item "New App" -> page NewApp
-    item "New Workspace" -> page NewWorkspace
+    item "Workspaces" -> page Workspaces
   }
 
   # Excludes itself (workspace slug "pgapp", app slug "builder") — the
@@ -144,28 +146,93 @@ app "App Builder" {
   }
 
   # Excludes the App Builder's own reserved workspace, same rule as
-  # workspaces_lov above — read-only, just for at-a-glance confirmation
-  # after a create_workspace call.
+  # workspaces_lov above. any_app_slug: any one app registered in this
+  # workspace — needed only so WorkspaceDetail's Delete-Workspace panel
+  # has *some* app slug to build its target URL from (see that panel's
+  # own doc below); the destroy-workspace operation itself never
+  # touches that app.
   query workspaces_list {
-    sql: "select slug, schema_name, coalesce(owner_role, '(none)') as owner_role
-            from pgapp_control.workspaces
-           where enabled and slug <> 'pgapp'
-           order by slug"
+    sql: "select w.slug as slug, w.schema_name as schema_name,
+                 coalesce(w.owner_role, '(none)') as owner_role,
+                 (select ca.slug from pgapp_control.apps ca
+                   where ca.workspace_id = w.id and ca.enabled
+                   order by ca.slug limit 1) as any_app_slug
+            from pgapp_control.workspaces w
+           where w.enabled and w.slug <> 'pgapp'
+           order by w.slug"
   }
 
   entity "workspaces_list" from query workspaces_list {
     field slug: text
     field schema_name: text
     field owner_role: text
+    field any_app_slug: text
+  }
+
+  # :target_workspace arrives from the Workspaces page's link below —
+  # every app actually registered in that one workspace, same shape as
+  # apps_list above but scoped to a single workspace instead of every app
+  # in the instance.
+  query apps_in_workspace {
+    sql: "select ca.id as id, w.slug as workspace_slug, ca.slug as app_slug,
+                 ma.id as meta_app_id, ca.app_name as app_name
+            from pgapp_control.apps ca
+            join pgapp_control.workspaces w on w.id = ca.workspace_id
+            left join pgapp_meta.apps ma on ma.name = ca.app_name
+           where ca.enabled and w.slug = :target_workspace
+             and not (w.slug = 'pgapp' and ca.slug = 'builder')
+           order by ca.slug"
+  }
+
+  entity "apps_in_workspace" from query apps_in_workspace {
+    field id: integer
+    field workspace_slug: text
+    field app_slug: text
+    field meta_app_id: integer
+    field app_name: text
   }
 
   page "Apps" {
     text "Every app registered in this instance. Search/sort/filter like any other Interactive Report — pick one to edit its pages."
+    link "+ New App" -> page NewApp attrs (class: "pgapp-btn pgapp-btn-primary")
     report "Apps" of apps_list {
       columns: workspace_slug, app_slug, app_name
       link: app_name -> page Pages (workspace_slug: target_workspace, app_slug: target_app, meta_app_id: meta_app_id)
       page_size: 50
     }
+  }
+
+  page "Workspaces" {
+    text "Every workspace registered in this instance. Pick one to see its apps and manage it."
+    link "+ New Workspace" -> page NewWorkspace attrs (class: "pgapp-btn pgapp-btn-primary")
+    report "Workspaces" of workspaces_list {
+      columns: slug, schema_name, owner_role
+      link: slug -> page WorkspaceDetail (slug: target_workspace, any_app_slug: target_app)
+      page_size: 50
+    }
+  }
+
+  # Reached from the Workspaces page above — this workspace's own apps,
+  # plus the Delete-Workspace panel (moved off each app's own Utilities
+  # page, since deleting a *workspace* isn't really an *app*-scoped
+  # action). `pgapp-destroy-workspace-slot` is filled by
+  # `bindDestroyWorkspacePanel` in runtime.js exactly as it always was —
+  # that binder only ever reads `?target_workspace=&target_app=` off this
+  # page's own URL, so no JS changes were needed to move it here; `:app`
+  # in the underlying `/admin/destroy-workspace` route is only ever used
+  # to resolve *some* registered app's auth context, never the operation
+  # itself (see that route's own doc in server.rs), so `any_app_slug`
+  # (whichever app happened to be first) is exactly as valid a target as
+  # any other app in this workspace would have been.
+  page "WorkspaceDetail" {
+    text "Editing:" attrs (id: "pgapp-context-slot")
+    text "Apps registered in this workspace."
+    report "Apps" of apps_in_workspace {
+      columns: app_slug, app_name
+      link: app_name -> page Pages (workspace_slug: target_workspace, app_slug: target_app, meta_app_id: meta_app_id)
+      page_size: 50
+    }
+    text "Danger zone" attrs (id: "pgapp-destroy-workspace-slot", class: "pgapp-danger-zone")
   }
 
   page "Pages" {
@@ -238,9 +305,8 @@ app "App Builder" {
   page "Utilities" {
     text "Editing:" attrs (id: "pgapp-context-slot")
     text "Sections" attrs (id: "pgapp-editor-subnav-slot")
-    text "Ways to delete this app or its whole workspace outright."
+    text "Ways to delete this app outright. To delete its whole workspace instead, see that workspace's own page under Workspaces."
     text "Danger zone" attrs (id: "pgapp-destroy-app-slot", class: "pgapp-danger-zone")
-    text "Danger zone" attrs (id: "pgapp-destroy-workspace-slot", class: "pgapp-danger-zone")
   }
 
   # The history report below reads through a *separate*, query-backed
@@ -290,12 +356,8 @@ app "App Builder" {
   # field is used exactly once, in-memory, to run the grant, and is never
   # written to any row — see control.rs's create_workspace_existing_schema.
   page "NewWorkspace" {
-    text "Stand up a brand-new workspace: either provision a fresh schema and owning role, or attach to a schema that already exists elsewhere in this database. Attaching requires a superuser-capable Postgres connection string, used once to grant access and never stored. Submit and check Workspaces below to confirm."
+    text "Stand up a brand-new workspace: either provision a fresh schema and owning role, or attach to a schema that already exists elsewhere in this database. Attaching requires a superuser-capable Postgres connection string, used once to grant access and never stored. Submit and check the Workspaces page to confirm."
     dynamic_content "New Workspace" calls new_workspace_form (action_idx: 2)
     action "Create Workspace" calls create_workspace attrs (style: "display: none")
-    report "Workspaces" of workspaces_list {
-      columns: slug, schema_name, owner_role
-      page_size: 20
-    }
   }
 }

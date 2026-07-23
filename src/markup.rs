@@ -2222,9 +2222,9 @@ app "Demo" {
         let src = include_str!("../examples/app_builder.pgapp");
         let app = parse_app(src).unwrap();
         assert_eq!(app.name, "App Builder");
-        assert_eq!(app.queries.len(), 6);
-        assert_eq!(app.entities.len(), 5);
-        assert_eq!(app.pages.len(), 8);
+        assert_eq!(app.queries.len(), 7);
+        assert_eq!(app.entities.len(), 6);
+        assert_eq!(app.pages.len(), 10);
 
         let edit_page = app.pages.iter().find(|p| p.name == "EditPage").unwrap();
         assert_eq!(edit_page.components.len(), 7); // text (context), text (subnav), text (preview), text, region, text (properties), text (add-component)
