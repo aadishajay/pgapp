@@ -336,6 +336,22 @@ None of these is strictly "better." pgapp is for the case where Postgres
 answer. Need it DB-agnostic and team-oriented? Reach for an internal-tool
 builder.
 
+## From the community
+
+> The readable app definition is the interesting part here. Being able to
+> inspect a generated app without reverse-engineering a proprietary builder
+> removes a lot of the usual no-code anxiety.
+>
+> — [u/Qiiiian](https://reddit.com/u/Qiiiian), r/nocode
+
+> the "you can actually open and read it" part is the whole thing for me.
+> i built an app in a no-code tool and the ai kept inventing db columns
+> that were never there, so i wasted half my time opening the real db to
+> check what it actually did. a plain text file i could diff would've
+> saved me all of that.
+>
+> — [u/Infamous-River-4360](https://reddit.com/u/Infamous-River-4360), r/nocode
+
 ## Documentation
 
 The README is the pitch. The [docs](./docs/README.md) are the reference:
